@@ -13,6 +13,10 @@ ChronoForgeCoreTests.CTROMBuilderTests/testRefusals                             
 ChronoForgeCoreTests.CTSPCDriverTests/testBootBlocksMatchROMPayloadBeforeExecution              skip      # local ROM
 ChronoForgeCoreTests.CTSPCDriverTests/testBoundedExecutionAndIdentityRefusals                   skip      # local ROM
 ChronoForgeCoreTests.CTSPCDriverTests/testDriverBootAndCommands                                 skip      # local ROM
+ChronoForgeCoreTests.CTSPCTransferTests/testROMPlanMatchesTheBankC7Tables                       skip      # local ROM
+ChronoForgeCoreTests.CTSPCTransferTests/testRealDriverLoadsSongsAfterDirectBoot                 skip      # local ROM
+ChronoForgeCoreTests.CTSPCTransferTests/testRealDriverNeedsTheStepDelayAndRefusesBeforeExecution skip      # local ROM
+ChronoForgeCoreTests.CTSPCTransferTests/testRealIPLBootThenSongLoadMatchesDirectBoot            skip      # local S-SMP IPL image (CHRONOFORGE_IPL_ROM)
 ChronoForgeCoreTests.CTSongTests/testBuilderSongRefusals                                        skip      # local ROM
 ChronoForgeCoreTests.CTSongTests/testEditedSongIsPlacedAndPointedTo                             skip      # local ROM
 ChronoForgeCoreTests.CTSongTests/testEveryROMSongIsByteExactThroughItsListing                   skip      # local ROM

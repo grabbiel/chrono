@@ -8,25 +8,28 @@ usage: chronoforge music list <rom.sfc>
        chronoforge music verify-rom <rom.sfc>
        chronoforge music spc-info <snapshot.spc> [--out info.json]
        chronoforge music driver-check <rom.sfc> [--ipl ipl.rom] [--out report.json]
+       chronoforge music song-load <rom.sfc> <song> [--ipl ipl.rom] [--out report.json]
 
 driver-check --ipl uploads the boot blocks through the supplied 64-byte S-SMP
 IPL image instead of copying them into ARAM. No IPL image is bundled.
+song-load boots the driver the same way, then sends the song and its samples
+through the driver's transfer protocol and verifies ARAM against the ROM.
 """
 
 func cmdMusic(_ args: [String]) -> Int32 {
-    guard let operation = args.first, ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check"].contains(operation) else {
+    guard let operation = args.first, ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load"].contains(operation) else {
         print(musicUsage); return 2
     }
     var positional: [String] = [], out: String?, ipl: String?
     var i = 1
     while i < args.count {
-        if args[i] == "--out" || (args[i] == "--ipl" && operation == "driver-check") {
+        if args[i] == "--out" || (args[i] == "--ipl" && ["driver-check", "song-load"].contains(operation)) {
             guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
             if args[i] == "--out" { out = args[i + 1] } else { ipl = args[i + 1] }
             i += 2
         } else { positional.append(args[i]); i += 1 }
     }
-    guard positional.count == (operation == "disasm" ? 2 : 1) else { print(musicUsage); return 2 }
+    guard positional.count == (["disasm", "song-load"].contains(operation) ? 2 : 1) else { print(musicUsage); return 2 }
     if let out, ([positional[0]] + (ipl.map { [$0] } ?? [])).contains(where: {
         URL(fileURLWithPath: out).resolvingSymlinksInPath() == URL(fileURLWithPath: $0).resolvingSymlinksInPath()
     }) {
@@ -38,10 +41,16 @@ func cmdMusic(_ args: [String]) -> Int32 {
     }
     do {
         switch operation {
-        case "driver-check":
+        case "driver-check", "song-load":
             let iplROM = try ipl.map { [UInt8](try Data(contentsOf: URL(fileURLWithPath: $0))) }
             if let iplROM, iplROM.count != 64 {
                 print("IPL image must be exactly 64 bytes (got \(iplROM.count))"); return 2
+            }
+            if operation == "song-load" {
+                guard let song = songNumber(positional[1]) else { print("song must be a number (decimal or $hex)"); return 2 }
+                let report = try CTSPCTransfer.loadSong(rom: try readROM(positional[0]), song: song, iplROM: iplROM)
+                try emit(CTProject.jsonEncoder.encode(report))
+                return report.passed ? 0 : 1
             }
             let report = try CTSPCDriver.check(rom: try readROM(positional[0]), iplROM: iplROM)
             try emit(CTProject.jsonEncoder.encode(report))
@@ -68,8 +77,7 @@ func cmdMusic(_ args: [String]) -> Int32 {
         case "disasm":
             let rom = try readROM(positional[0])
             let songs = try CTSong.romSongs(rom)
-            guard let n = Int(positional[1].hasPrefix("$") ? String(positional[1].dropFirst()) : positional[1],
-                              radix: positional[1].hasPrefix("$") ? 16 : 10), songs.indices.contains(n) else {
+            guard let n = songNumber(positional[1]), songs.indices.contains(n) else {
                 print("song must be 0-\(songs.count - 1) (or $00-$\(String(format: "%02X", songs.count - 1)))"); return 2
             }
             let s = songs[n]
@@ -103,4 +111,9 @@ func cmdMusic(_ args: [String]) -> Int32 {
     } catch {
         print("music \(operation) failed: \(error)"); return 1
     }
+}
+
+/// A song number as `disasm` and `song-load` take it: decimal or `$` hex.
+private func songNumber(_ text: String) -> Int? {
+    text.hasPrefix("$") ? Int(text.dropFirst(), radix: 16) : Int(text)
 }

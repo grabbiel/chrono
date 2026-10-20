@@ -96,6 +96,12 @@ if [ -f macos_studio/Package.swift ]; then
   else
     note "S-SMP IPL upload + CT driver (local IPL)" "UNVERIFIED"
   fi
+  # Song + samples through the driver's own command protocol, checked against
+  # an independent Python transcription of the bank C7 sender; the lane adds an
+  # IPL-boot comparison when CHRONOFORGE_IPL_ROM is set.
+  $PY macos_studio/tools/verify_ssmp_driver.py --lane transfer >/tmp/verify_ssmp_transfer.log 2>&1
+  RC=$?
+  note "S-SMP song/sample transfer CLI$([ -n "${CHRONOFORGE_IPL_ROM:-}" ] && echo ' (direct + local IPL)')" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   # .sfc builder: CLI build of a lowered scene, an edited listing and songs, checked
   # by re_workspace/tools/ct_rom_check.py (ROM's own TextWin_Init, ChronoRET unpack/text).
   $PY macos_studio/tools/verify_rom_build.py >/tmp/verify_rom_build.log 2>&1

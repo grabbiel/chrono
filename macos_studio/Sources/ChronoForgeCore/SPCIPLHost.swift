@@ -194,7 +194,8 @@ public final class SPCIPLHost {
                      acknowledgementCount: acknowledgements, entry: entry, startToken: token, blocks: reports, payloadVerified: true)
     }
 
-    private final class Machine: SPCIPLTransport {
+    /// The real CPU and bus behind the transport; also used by `CTSPCTransfer`.
+    final class Machine: SPCIPLTransport {
         let cpu: SPC700
         let bus: SSMPBus
         init(cpu: SPC700, bus: SSMPBus) { self.cpu = cpu; self.bus = bus }
