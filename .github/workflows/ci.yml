@@ -1,0 +1,111 @@
+name: CI
+
+# Public, ROM-free verification. Tests that need the user's ROM, extracted
+# assets, reference checkouts or the S-SMP IPL image are listed in
+# scripts/ci/expected_skips.txt; any other skip, failure or missing test fails.
+# Full verification remains local: re_workspace/tools/verify_all.sh.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  audit:
+    name: Publication audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Source only (no ROM, firmware, extracted data, secrets or local state)
+        run: python3 scripts/ci/publication_audit.py
+      - name: Same check for every blob these commits introduce (history stays public)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            python3 scripts/ci/publication_audit.py --range "$BASE..HEAD"
+          else
+            python3 scripts/ci/publication_audit.py --range HEAD
+          fi
+      - name: Python sources compile
+        run: python3 -m compileall -q macos_studio/tools re_workspace/tools re_workspace/tests scripts/ci
+
+  macos:
+    name: Build and test (macOS arm64)
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      CI_LOG_DIR: ${{ runner.temp }}/ci-logs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          sw_vers
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          swift --version
+          python3 --version
+      - name: Test fixtures reproduce from their generator
+        run: |
+          python3 macos_studio/tools/gen_fixture_assets.py
+          git diff --exit-code -- macos_studio/Tests/ChronoForgeCoreTests/Resources
+          test -z "$(git status --porcelain -- macos_studio/Tests/ChronoForgeCoreTests/Resources)"
+      # Fetched fresh each run (not cached), so the corpus is never stored by this repository.
+      - name: Fetch pinned SPC700 corpus (test input only; never committed, cached or uploaded)
+        run: bash scripts/ci/fetch_spc700_corpus.sh "$RUNNER_TEMP/processor-tests"
+      - name: Prepare SPC700 sample and check its provenance
+        run: |
+          python3 macos_studio/tools/prepare_spc700_vectors.py "$RUNNER_TEMP/processor-tests/spc700/v1"
+          git diff --exit-code -- macos_studio/Tests/ChronoForgeCoreTests/Resources/SPC700/provenance.json
+      - name: Build and test
+        env:
+          CHRONOFORGE_SPC700_VECTORS: ${{ runner.temp }}/processor-tests/spc700/v1
+        run: bash scripts/ci/run_swift_tests.sh
+      - name: Note what public CI does not verify
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### Not verified by public CI
+          No ROM, extracted assets, ChronoRET checkout or S-SMP IPL image is available here.
+          ROM extraction, LZSS corpus, text/event/song round trips, ROM builds, the CT driver
+          and the real-IPL upload lane run only in the local gate (`re_workspace/tools/verify_all.sh`).
+          EOF
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-logs/
+          retention-days: 14
+          if-no-files-found: error
+
+  # The single required status check for branch protection.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [audit, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every CI job to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for result in $RESULTS; do [ "$result" = success ] || exit 1; done

@@ -1,0 +1,4 @@
+module CCodec {
+    header "ctcodec_umbrella.h"
+    export *
+}

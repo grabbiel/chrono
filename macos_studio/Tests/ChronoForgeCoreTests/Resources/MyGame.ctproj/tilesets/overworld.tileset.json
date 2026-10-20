@@ -1,0 +1,39 @@
+{
+  "blob": "tilesets/overworld.bin",
+  "bpp": 4,
+  "collision": [
+    {
+      "conveyor": "none",
+      "plane1": "walk",
+      "plane2": "walk",
+      "plane_swap": false,
+      "zmask": false
+    },
+    {
+      "conveyor": "none",
+      "plane1": "solid",
+      "plane_swap": false,
+      "zmask": true
+    }
+  ],
+  "id": "overworld",
+  "metatiles": [
+    {
+      "chips": [
+        { "tile": 0, "pal": 0, "hflip": false, "vflip": false, "priority": false },
+        { "tile": 1, "pal": 0, "hflip": false, "vflip": false, "priority": false },
+        { "tile": 2, "pal": 0, "hflip": false, "vflip": false, "priority": false },
+        { "tile": 3, "pal": 0, "hflip": false, "vflip": false, "priority": false }
+      ]
+    },
+    {
+      "chips": [
+        { "tile": 4, "pal": 1, "hflip": false, "vflip": false, "priority": true },
+        { "tile": 5, "pal": 1, "hflip": true, "vflip": false, "priority": true },
+        { "tile": 4, "pal": 1, "hflip": false, "vflip": true, "priority": false },
+        { "tile": 5, "pal": 1, "hflip": true, "vflip": true, "priority": false }
+      ]
+    }
+  ],
+  "tileCount": 16
+}

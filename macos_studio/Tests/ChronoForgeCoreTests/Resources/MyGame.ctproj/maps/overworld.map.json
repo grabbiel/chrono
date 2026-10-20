@@ -1,0 +1,27 @@
+{
+  "exits": [
+    { "map": "tyrano", "toX": 8, "toY": 8, "x": 0, "y": 3 }
+  ],
+  "height": 4,
+  "id": "overworld",
+  "layers": [
+    {
+      "bg": 1,
+      "metatiles": [0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+      "scrollX": 0,
+      "scrollY": 0
+    },
+    {
+      "bg": 2,
+      "metatiles": [1, 0, 0, 1],
+      "scrollX": 4,
+      "scrollY": 0
+    }
+  ],
+  "name": "Green Hill Zone",
+  "tileset": "overworld",
+  "triggers": [
+    { "scene": "intro", "x": 2, "y": 2 }
+  ],
+  "width": 4
+}

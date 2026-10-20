@@ -44,6 +44,7 @@
 
 # Kernel Module Compile Results
 *.mod*
+!module.modulemap
 *.cmd
 .tmp_versions/
 modules.order
@@ -53,3 +54,37 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# --- ChronoForge: source-only repository -------------------------------------
+# Never publish ROMs, firmware, extracted game data or local machine state.
+# scripts/ci/publication_audit.py enforces this in CI as well.
+*.sfc
+*.smc
+*.spc
+*.rom
+input/
+original/
+agentinstructions/
+.agents/
+skills-lock.json
+HANDOFF.md
+re_workspace/ct_clean.sfc
+re_workspace/assets/
+re_workspace/refs/
+re_workspace/manifests/
+re_workspace/reports/
+re_workspace/STATE.json
+re_workspace/ORCHESTRATION.md
+re_workspace/AGENT_CONTEXT*.md
+re_workspace/.venv/
+macos_studio/Tests/ChronoForgeCoreTests/Resources/SPC700/vectors.json
+
+# Build products, caches and editor state
+.build/
+build/
+.swiftpm/
+DerivedData/
+.ci-logs/
+__pycache__/
+.pytest_cache/
+.DS_Store

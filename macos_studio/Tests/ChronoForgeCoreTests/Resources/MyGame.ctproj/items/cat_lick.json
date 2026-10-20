@@ -1,0 +1,10 @@
+{
+  "effect": "revive",
+  "id": "cat_lick",
+  "kind": "consumable",
+  "name": "Cat-O-Tag",
+  "price": 30,
+  "stats": {
+    "heal": 120
+  }
+}

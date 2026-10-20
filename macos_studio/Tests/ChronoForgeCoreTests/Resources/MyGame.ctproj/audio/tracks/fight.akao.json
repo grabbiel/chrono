@@ -1,0 +1,33 @@
+{
+  "id": "fight",
+  "tempo": 150,
+  "tracks": [
+    {
+      "voice": 0,
+      "program": 12,
+      "pan": 3,
+      "adsr_override": [1, 5, 150, 180],
+      "events": [
+        { "t": 0, "dur": 4, "note": 60, "vel": 110 },
+        { "t": 4, "dur": 4, "note": 62, "vel": 100 },
+        { "t": 8, "dur": 4, "note": 64, "vel": 105 },
+        { "t": 12, "dur": 6, "note": 60, "vel": 115 }
+      ]
+    },
+    {
+      "voice": 1,
+      "program": 3,
+      "events": [
+        { "t": 0, "dur": 8, "note": 36 },
+        { "t": 8, "dur": 8, "note": 43 }
+      ]
+    }
+  ],
+  "echo": {
+    "edl": 10,
+    "efb": 60,
+    "evoll": 50,
+    "evolr": 50,
+    "fir": [127, 64, 32, 16, 8, 4, 2, 1]
+  }
+}

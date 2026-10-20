@@ -1,0 +1,25 @@
+{
+  "id": "robo",
+  "sheet": "sprites/robo.png",
+  "bpp": 4,
+  "frames": [
+    {
+      "tiles": [
+        { "x": 0, "y": 0, "tile": 0, "hflip": false, "vflip": false, "pal": 0, "size16": false, "anchor": true },
+        { "x": 8, "y": 0, "tile": 1, "hflip": false, "vflip": false, "pal": 0, "size16": false, "anchor": false },
+        { "x": 0, "y": 8, "tile": 2, "hflip": false, "vflip": false, "pal": 1, "size16": false, "anchor": false },
+        { "x": 8, "y": 8, "tile": 3, "hflip": true, "vflip": false, "pal": 1, "size16": false, "anchor": false }
+      ]
+    },
+    {
+      "tiles": [
+        { "x": 0, "y": 0, "tile": 1, "hflip": true, "vflip": true, "pal": 0, "size16": false, "anchor": true },
+        { "x": 8, "y": 0, "tile": 0, "hflip": false, "vflip": false, "pal": 2, "size16": false, "anchor": false }
+      ]
+    }
+  ],
+  "animations": [
+    { "id": "idle", "frames": [0, 1], "durations": [24, 24], "loop": true },
+    { "id": "wave", "frames": [1, 0], "durations": [12, 12], "loop": false }
+  ]
+}

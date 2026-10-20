@@ -1,0 +1,9 @@
+{
+  "description": "Robo spins his arms in a deadly cyclone.",
+  "element": "wind",
+  "id": "cyclone",
+  "kind": "single",
+  "name": "Cyclone",
+  "power": 30,
+  "users": ["robo"]
+}

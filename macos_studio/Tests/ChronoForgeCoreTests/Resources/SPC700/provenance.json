@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/SingleStepTests/ProcessorTests",
+  "commit": "bb11756436da8fd16cce86aef63dc6725f48836f",
+  "path": "spc700/v1",
+  "generator": "David Schneider / JSMoo",
+  "case_indices_per_opcode": [
+    0,
+    1,
+    127,
+    255,
+    511,
+    767,
+    998,
+    999
+  ],
+  "cases": 2048,
+  "sha256": "6de0928369b6c66e8cddc3083c24872b1a987998edb30da2c77b2323fb16ee9b"
+}

@@ -1,0 +1,5 @@
+# Review routing. Code-owner approval is not required while the project has a
+# single maintainer (see docs/github-workflow.md).
+*                 @grabbiel
+/.github/         @grabbiel
+/scripts/ci/      @grabbiel

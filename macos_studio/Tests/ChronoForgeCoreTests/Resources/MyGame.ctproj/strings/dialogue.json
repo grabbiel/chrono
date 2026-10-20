@@ -1,0 +1,7 @@
+{
+  "strings": {
+    "greeting": "Hello there!\\{wait}Welcome to the Trann Dome!\\{br}Everyone say hi to \\{name:robo}.\nLine two of the greeting.",
+    "intro": "A giant robot whirs quietly.\nHe seems friendly.",
+    "shop": "Welcome! Buy something!"
+  }
+}

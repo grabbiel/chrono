@@ -1,0 +1,33 @@
+# Tests allowed to skip in public CI, with the local-only input each one needs.
+# Format: <Module.Class/test> <policy> [# reason]
+#   skip      must skip in public CI; running would mean private data is present
+#   may-skip  may pass or skip, depending on the hosted runner
+# Every other test must run and pass. Run these locally with the ROM workspace
+# (re_workspace/tools/verify_all.sh) for full verification.
+ChronoForgeCoreTests.BRRTests/testAudioSample01ParityAgainstPythonWAV                           skip      # local ROM-extracted audio sample
+ChronoForgeCoreTests.CTEventTests/testEveryROMPackMatchesTheHandlerTracedManifest               skip      # local ROM
+ChronoForgeCoreTests.CTROMBuilderTests/testCleanChecksumIsReproduced                            skip      # local ROM
+ChronoForgeCoreTests.CTROMBuilderTests/testLoweredSceneWithMessagesIsWrittenAndPointedTo        skip      # local ROM
+ChronoForgeCoreTests.CTROMBuilderTests/testRebuildingEveryPackFromItsListingIsIdentical         skip      # local ROM
+ChronoForgeCoreTests.CTROMBuilderTests/testRefusals                                             skip      # local ROM
+ChronoForgeCoreTests.CTSPCDriverTests/testBootBlocksMatchROMPayloadBeforeExecution              skip      # local ROM
+ChronoForgeCoreTests.CTSPCDriverTests/testBoundedExecutionAndIdentityRefusals                   skip      # local ROM
+ChronoForgeCoreTests.CTSPCDriverTests/testDriverBootAndCommands                                 skip      # local ROM
+ChronoForgeCoreTests.CTSongTests/testBuilderSongRefusals                                        skip      # local ROM
+ChronoForgeCoreTests.CTSongTests/testEditedSongIsPlacedAndPointedTo                             skip      # local ROM
+ChronoForgeCoreTests.CTSongTests/testEveryROMSongIsByteExactThroughItsListing                   skip      # local ROM
+ChronoForgeCoreTests.CTSongTests/testRebuildingEverySongIsIdentical                             skip      # local ROM
+ChronoForgeCoreTests.CTTextCodecTests/testDialogueArchiveIsDeterministicAndRequiresProfile      skip      # local ROM
+ChronoForgeCoreTests.CTTextCodecTests/testEveryROMMessageRoundTripsByteExactly                  skip      # local ROM
+ChronoForgeCoreTests.CTTextCodecTests/testROMProfileAcceptsCopierHeaderAndMatchesGeneratedProfile skip      # local ROM
+ChronoForgeCoreTests.LZSSTests/testCInteropCorpus                                               skip      # local ROM
+ChronoForgeCoreTests.LZSSTests/testRomPacksRebuiltExactly                                       skip      # local ROM
+ChronoForgeCoreTests.LZSSTests/testRomSmokeFirstBlock                                           skip      # local ROM
+ChronoForgeCoreTests.LZSSTests/testSwiftDecompressCorpus                                        skip      # local ROM
+ChronoForgeCoreTests.SPCIPLHostTests/testRealIPLUploadMatchesProtocolModelAndStopsBeforeEntry   skip      # local S-SMP IPL image (CHRONOFORGE_IPL_ROM)
+ChronoForgeCoreTests.SPCIPLHostTests/testRealIPLUploadsCTBootBlocksBeforeDriverEntry            skip      # local S-SMP IPL image (CHRONOFORGE_IPL_ROM)
+ChronoForgeCoreTests.TileTests/testRealGraphicsAssetsIfPresent                                  skip      # local ROM-extracted graphics
+ChronoForgeMetalTests.PPURendererTests/testMTKViewFramePath                                     may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPURendererTests/testOffscreenFrameRenders                                may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPURendererTests/testShaderLibraryCompiles                                may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPURendererTests/testSNESPPUViewInits                                     may-skip  # Metal device availability on hosted runners
