@@ -260,7 +260,7 @@ default:
                        [--profile profile.json] [--out file]
       chronoforge event <list|disasm|asm|verify-rom|lower> ...   (CT event packs)
       chronoforge rom <build|info|locations> ...                 (.sfc builder)
-      chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check> ...
+      chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]
                         [--entry 0] [--flag symbol] [--steps 1000]
       chronoforge render-tileset <ctproj|rom> --out out.png [--tileset id]

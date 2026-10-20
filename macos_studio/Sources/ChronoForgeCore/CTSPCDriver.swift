@@ -34,7 +34,7 @@ public enum CTSPCDriver {
         public let passed: Bool
     }
 
-    private final class RegisterProbe: SSMPDSPPort {
+    final class RegisterProbe: SSMPDSPPort {
         var registers = [UInt8](repeating: 0, count: 128)
         var writes = 0
         var clocks = 0
@@ -45,13 +45,46 @@ public enum CTSPCDriver {
         func clock() { clocks += 1 }
     }
 
-    /// Execute the actual ROM payload with deterministic zero-filled unloaded
-    /// RAM, zero DSP registers and a fresh normal-speed timer phase. Without
-    /// `iplROM` the blocks are copied directly and IPL is off. With it, the six
-    /// blocks are uploaded through that image and verified before $0200 runs;
-    /// `cycleLimit` then bounds only post-entry execution.
+    /// The driver started by `boot`, stopped at its first `Spc_MainLoop` entry.
+    /// Single owner; `CTSPCTransfer` continues from it.
+    final class Session {
+        let bus: SSMPBus
+        let cpu: SPC700
+        let dsp: RegisterProbe
+        let blocks: [BootBlock]
+        let upload: SPCIPLHost.Report?
+        /// SMP clocks before the driver entry (the IPL upload) and the
+        /// post-entry budget `run` enforces.
+        let entryCycles, cycleLimit: Int
+
+        init(bus: SSMPBus, cpu: SPC700, dsp: RegisterProbe, blocks: [BootBlock],
+             upload: SPCIPLHost.Report?, cycleLimit: Int) {
+            self.bus = bus; self.cpu = cpu; self.dsp = dsp; self.blocks = blocks
+            self.upload = upload; self.cycleLimit = cycleLimit
+            entryCycles = cpu.cycles
+        }
+
+        var postEntryCycles: Int { cpu.cycles - entryCycles }
+
+        func run(until predicate: () -> Bool, phase: String) throws {
+            while !predicate() {
+                guard postEntryCycles < cycleLimit, !cpu.stopped else {
+                    throw CTSongError("driver-check \(phase) did not complete within \(cycleLimit) cycles (PC $\(String(cpu.registers.pc, radix: 16)))")
+                }
+                cpu.step()
+                if let fault = bus.fault { throw CTSongError("driver-check bus fault: \(fault)") }
+            }
+        }
+    }
+
+    /// Start the actual ROM payload with deterministic zero-filled unloaded
+    /// RAM, zero DSP registers and a fresh normal-speed timer phase, and run it
+    /// to its first main-loop entry. Without `iplROM` the blocks are copied
+    /// directly and IPL is off. With it, the six blocks are uploaded through
+    /// that image and verified before $0200 runs; `cycleLimit` then bounds only
+    /// post-entry execution.
     /// This is a diagnostic start state, not a hardware reset or SPC restore.
-    public static func check(rom: [UInt8], iplROM: [UInt8]? = nil, cycleLimit: Int = 250_000) throws -> Diagnostic {
+    static func boot(rom: [UInt8], iplROM: [UInt8]?, cycleLimit: Int) throws -> Session {
         guard (1...2_000_000).contains(cycleLimit) else {
             throw CTSongError("driver-check cycle limit must be 1...2000000")
         }
@@ -70,20 +103,19 @@ public enum CTSPCDriver {
             bus = try SSMPBus(ram: image.ram, dsp: dsp)
             cpu = SPC700(bus: bus, registers: .init(pc: entry))
         }
-        let entryCycles = cpu.cycles
+        let session = Session(bus: bus, cpu: cpu, dsp: dsp, blocks: image.blocks, upload: upload, cycleLimit: cycleLimit)
+        try session.run(until: { cpu.registers.pc == mainLoop }, phase: "boot")
+        return session
+    }
+
+    /// Run the boot diagnostic: `boot`, then the checks and two driver commands below.
+    public static func check(rom: [UInt8], iplROM: [UInt8]? = nil, cycleLimit: Int = 250_000) throws -> Diagnostic {
+        let session = try boot(rom: rom, iplROM: iplROM, cycleLimit: cycleLimit)
+        let bus = session.bus, cpu = session.cpu, dsp = session.dsp, upload = session.upload
         var checks: [Check] = []
         func record(_ name: String, _ passed: Bool) { checks.append(.init(name: name, passed: passed)) }
-        func run(until predicate: () -> Bool, phase: String) throws {
-            while !predicate() {
-                guard cpu.cycles - entryCycles < cycleLimit, !cpu.stopped else {
-                    throw CTSongError("driver-check \(phase) did not complete within \(cycleLimit) cycles (PC $\(String(cpu.registers.pc, radix: 16)))")
-                }
-                cpu.step()
-                if let fault = bus.fault { throw CTSongError("driver-check bus fault: \(fault)") }
-            }
-        }
-        try run(until: { cpu.registers.pc == mainLoop }, phase: "boot")
-        let bootCycles = cpu.cycles - entryCycles
+        func run(until predicate: () -> Bool, phase: String) throws { try session.run(until: predicate, phase: phase) }
+        let bootCycles = session.postEntryCycles
         // Independent expectations transcribed from Spc_Start and its constants.
         record("driver reached main loop after minimum timer1 wait", bootCycles >= 81_920)
         record("stack initialized", cpu.registers.sp == 0xFF)
@@ -129,8 +161,8 @@ public enum CTSPCDriver {
             : "IPL upload writes host ports between whole SMP instructions from zero-filled RAM; 65816 timing, power-on state and subcycle port races are not modeled."
         return .init(mode: (upload == nil ? "direct-ARAM-load" : "IPL-upload") + "; register-only DSP; no PCM",
                      romSHA256: cleanROMSHA256, iplSHA256: iplROM.map(CTEventPack.sha256),
-                     blocks: image.blocks, upload: upload, bootCycles: bootCycles,
-                     totalCycles: cpu.cycles - entryCycles, dspWrites: dsp.writes, checks: checks,
+                     blocks: session.blocks, upload: upload, bootCycles: bootCycles,
+                     totalCycles: session.postEntryCycles, dspWrites: dsp.writes, checks: checks,
                      limitations: [transfer,
                                    "DSP registers are a diagnostic latch, without synthesis, echo RAM writes or DSP timing.",
                                    "No song/sample transfer, PCM output, hardware reset or cycle-exact snapshot restore is verified."],
