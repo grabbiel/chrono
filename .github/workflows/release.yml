@@ -1,0 +1,71 @@
+name: Release
+
+# Builds the source-only app for an existing v* tag and opens a DRAFT release.
+# A maintainer reviews and publishes the draft by hand. The app is ad-hoc
+# signed, not Developer ID signed or notarized. No ROM, extracted asset, IPL
+# image or test corpus is built into or attached to the release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag (v*) to build a draft release for
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    name: Build app and draft release
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Validate tag
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Source audit
+        run: python3 scripts/ci/publication_audit.py
+      - name: Build app
+        run: |
+          sh re_workspace/tools/libctcodec/build.sh
+          bash macos_studio/tools/bundle_app.sh
+          codesign --verify --deep --strict macos_studio/build/ChronoForgeStudio.app
+      - name: Package and audit
+        run: |
+          mkdir -p dist/stage
+          ditto macos_studio/build/ChronoForgeStudio.app dist/stage/ChronoForgeStudio.app
+          cp LICENSE dist/stage/
+          python3 scripts/ci/publication_audit.py --tree dist/stage --release
+          ARCHIVE="ChronoForgeStudio-$TAG-macos-arm64.zip"
+          (cd dist/stage && ditto -c -k --keepParent ChronoForgeStudio.app "../$ARCHIVE")
+          (cd dist && shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256")
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > dist/notes.md <<EOF
+          Draft build of ChronoForge Studio for $TAG (macOS 15+, Apple silicon).
+
+          - Ad-hoc signed; not notarized. Gatekeeper will require an explicit open.
+          - Contains no game data. Supply your own Chrono Trigger (USA) ROM.
+          - Public CI does not run ROM-dependent verification; see the README.
+          EOF
+          gh release create "$TAG" --draft --verify-tag --title "ChronoForge $TAG" \
+            --notes-file dist/notes.md "dist/$ARCHIVE" "dist/$ARCHIVE.sha256"
