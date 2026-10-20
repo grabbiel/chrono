@@ -49,7 +49,6 @@ jobs:
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      CI_LOG_DIR: ${{ runner.temp }}/ci-logs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,6 +75,8 @@ jobs:
       - name: Build and test
         env:
           CHRONOFORGE_SPC700_VECTORS: ${{ runner.temp }}/processor-tests/spc700/v1
+          # Job-level env cannot use the runner context; keep this with the upload path below.
+          CI_LOG_DIR: ${{ runner.temp }}/ci-logs
         run: bash scripts/ci/run_swift_tests.sh
       - name: Note what public CI does not verify
         if: always()
