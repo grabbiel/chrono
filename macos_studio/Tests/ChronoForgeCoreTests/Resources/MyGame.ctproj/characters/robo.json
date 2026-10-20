@@ -1,0 +1,16 @@
+{
+  "id": "robo",
+  "kind": "playable",
+  "level": 12,
+  "name": "Robo",
+  "palette": ["0x0000", "0x7FFF", "0x7C00", "0x03E0"],
+  "sprite": "robo",
+  "stats": {
+    "atk": 14,
+    "def": 12,
+    "hp": 152,
+    "mag": 10,
+    "mp": 46,
+    "spd": 13
+  }
+}

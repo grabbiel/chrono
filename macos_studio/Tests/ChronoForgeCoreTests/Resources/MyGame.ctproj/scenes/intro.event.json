@@ -1,0 +1,29 @@
+{
+  "id": "intro",
+  "scene": {
+    "object": 0,
+    "funcs": [
+      {
+        "index": 0,
+        "stmts": [
+          { "op": "text", "stringID": "greeting" },
+          { "op": "wait", "frames": 60 },
+          { "op": "if_flag", "symbol": "MET_LAYLA", "then": [{ "op": "text", "stringID": "shop" }], "else": [{ "op": "set_flag", "symbol": "MET_LAYLA" }] },
+          { "op": "call", "map": "overworld", "func": 1 },
+          { "op": "nop" }
+        ]
+      },
+      {
+        "index": 1,
+        "stmts": [
+          { "op": "text", "stringID": "intro" },
+          { "op": "jump", "func": 0 }
+        ]
+      }
+    ],
+    "layout": [
+      { "node_id": 0, "x": 40, "y": 30 },
+      { "node_id": 1, "x": 40, "y": 150 }
+    ]
+  }
+}

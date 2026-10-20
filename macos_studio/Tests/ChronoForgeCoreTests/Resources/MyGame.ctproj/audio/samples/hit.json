@@ -1,0 +1,9 @@
+{
+  "adsr": [10, 30, 150, 180],
+  "brr": "audio/samples/hit.brr",
+  "gain": 200,
+  "loop": true,
+  "loopEndSample": 480,
+  "loopStartSample": 0,
+  "rate": 32000
+}

@@ -1,0 +1,15 @@
+{
+  "exits": [],
+  "height": 1,
+  "id": "tyrano",
+  "layers": [
+    {
+      "bg": 1,
+      "metatiles": [0]
+    }
+  ],
+  "name": "Dinosaur Age",
+  "tileset": "overworld",
+  "triggers": [],
+  "width": 1
+}

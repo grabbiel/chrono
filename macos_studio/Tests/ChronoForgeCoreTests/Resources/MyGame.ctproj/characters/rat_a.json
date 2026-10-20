@@ -1,0 +1,13 @@
+{
+  "id": "rat_a",
+  "kind": "enemy",
+  "name": "Giant Rat",
+  "stats": {
+    "atk": 5,
+    "def": 3,
+    "hp": 22,
+    "mag": 0,
+    "mp": 0,
+    "spd": 4
+  }
+}
