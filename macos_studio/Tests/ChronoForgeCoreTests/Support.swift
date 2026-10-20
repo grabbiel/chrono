@@ -78,9 +78,14 @@ func fixtureURL() throws -> URL {
 }
 
 func resourceData(_ subpath: String) throws -> Data {
-    // Resources/... inside the test bundle
-    let comp = subpath.split(separator: "/").map(String.init)
-    var url = Bundle.module.resourceURL!.appendingPathComponent("Resources")
-    for c in comp { url = url.appendingPathComponent(c) }
+    // Resources/... inside the test bundle. Let Bundle resolve the layout:
+    // SwiftPM's native build makes a flat bundle whose resourceURL is already
+    // its Resources directory; swiftbuild uses Contents/Resources.
+    let path = ("Resources/" + subpath) as NSString
+    guard let url = Bundle.module.url(forResource: (path.lastPathComponent as NSString).deletingPathExtension,
+                                      withExtension: path.pathExtension,
+                                      subdirectory: path.deletingLastPathComponent) else {
+        throw XCTestExpectationError()
+    }
     return try Data(contentsOf: url)
 }
