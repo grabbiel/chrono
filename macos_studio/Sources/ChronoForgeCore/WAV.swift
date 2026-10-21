@@ -54,14 +54,15 @@ public struct WAV: Sendable {
         try WAV.writeWav(samples: samples, rate: sampleRate).write(to: url)
     }
 
-    public static func writeWav(samples: [Int16], rate: Int) -> Data {
+    /// `samples` are interleaved when `channels` > 1.
+    public static func writeWav(samples: [Int16], rate: Int, channels: Int = 1) -> Data {
         let dataSize = samples.count * 2
         var d = Data()
         func str(_ s: String) { d.append(contentsOf: Array(s.utf8)) }
         func u32(_ v: Int) { d.append(contentsOf: [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)]) }
         func u16(_ v: Int) { d.append(contentsOf: [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF)]) }
         str("RIFF"); u32(36 + dataSize); str("WAVE")
-        str("fmt "); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16)
+        str("fmt "); u32(16); u16(1); u16(channels); u32(rate); u32(rate * 2 * channels); u16(2 * channels); u16(16)
         str("data"); u32(dataSize)
         samples.withUnsafeBytes { d.append(contentsOf: $0) } // little-endian on arm64/x86
         return d

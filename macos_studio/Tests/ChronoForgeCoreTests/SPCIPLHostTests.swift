@@ -306,5 +306,5 @@ private struct InvalidIPL: Error, CustomStringConvertible { let description: Str
 private final class NullDSP: SSMPDSPPort {
     func readRegister(_ address: UInt8) -> UInt8 { 0 }
     func writeRegister(_ address: UInt8, _ value: UInt8) {}
-    func clock() {}
+    func clock(ram: inout [UInt8]) {}
 }

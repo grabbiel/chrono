@@ -3,7 +3,7 @@ import Foundation
 /// Bounded execution diagnostics for the US 1.0 CT sound driver. Boot blocks
 /// are copied directly to ARAM, or uploaded through a caller-supplied IPL image
 /// by `SPCIPLHost` (host-side port protocol only, not the 65816 sender).
-/// The DSP endpoint records register traffic only; it does not produce sound.
+/// The S-DSP runs alongside (`SDSP`); this diagnostic does not record its PCM.
 public enum CTSPCDriver {
     public static let cleanROMSHA256 = "06d1c2b06b716052c5596aaa0c2e5632a027fee1a9a28439e509f813c30829a9"
     public static let entry: UInt16 = 0x0200
@@ -34,30 +34,19 @@ public enum CTSPCDriver {
         public let passed: Bool
     }
 
-    final class RegisterProbe: SSMPDSPPort {
-        var registers = [UInt8](repeating: 0, count: 128)
-        var writes = 0
-        var clocks = 0
-        func readRegister(_ address: UInt8) -> UInt8 { registers[Int(address)] }
-        func writeRegister(_ address: UInt8, _ value: UInt8) {
-            registers[Int(address)] = value; writes += 1
-        }
-        func clock() { clocks += 1 }
-    }
-
     /// The driver started by `boot`, stopped at its first `Spc_MainLoop` entry.
     /// Single owner; `CTSPCTransfer` continues from it.
     final class Session {
         let bus: SSMPBus
         let cpu: SPC700
-        let dsp: RegisterProbe
+        let dsp: SDSP
         let blocks: [BootBlock]
         let upload: SPCIPLHost.Report?
         /// SMP clocks before the driver entry (the IPL upload) and the
         /// post-entry budget `run` enforces.
         let entryCycles, cycleLimit: Int
 
-        init(bus: SSMPBus, cpu: SPC700, dsp: RegisterProbe, blocks: [BootBlock],
+        init(bus: SSMPBus, cpu: SPC700, dsp: SDSP, blocks: [BootBlock],
              upload: SPCIPLHost.Report?, cycleLimit: Int) {
             self.bus = bus; self.cpu = cpu; self.dsp = dsp; self.blocks = blocks
             self.upload = upload; self.cycleLimit = cycleLimit
@@ -78,7 +67,8 @@ public enum CTSPCDriver {
     }
 
     /// Start the actual ROM payload with deterministic zero-filled unloaded
-    /// RAM, zero DSP registers and a fresh normal-speed timer phase, and run it
+    /// RAM, the S-DSP's reset registers (zero, FLG $E0) and a fresh
+    /// normal-speed timer phase, and run it
     /// to its first main-loop entry. Without `iplROM` the blocks are copied
     /// directly and IPL is off. With it, the six blocks are uploaded through
     /// that image and verified before $0200 runs; `cycleLimit` then bounds only
@@ -89,7 +79,7 @@ public enum CTSPCDriver {
             throw CTSongError("driver-check cycle limit must be 1...2000000")
         }
         let image = try bootImage(rom: rom)
-        let dsp = RegisterProbe()
+        let dsp = SDSP()
         let bus: SSMPBus, cpu: SPC700
         var upload: SPCIPLHost.Report?
         if let iplROM {
@@ -159,12 +149,12 @@ public enum CTSPCDriver {
         let transfer = upload == nil
             ? "Direct RAM loading bypasses the 65816/IPL transfer handshake."
             : "IPL upload writes host ports between whole SMP instructions from zero-filled RAM; 65816 timing, power-on state and subcycle port races are not modeled."
-        return .init(mode: (upload == nil ? "direct-ARAM-load" : "IPL-upload") + "; register-only DSP; no PCM",
+        return .init(mode: (upload == nil ? "direct-ARAM-load" : "IPL-upload") + "; S-DSP; no PCM recorded",
                      romSHA256: cleanROMSHA256, iplSHA256: iplROM.map(CTEventPack.sha256),
                      blocks: session.blocks, upload: upload, bootCycles: bootCycles,
-                     totalCycles: session.postEntryCycles, dspWrites: dsp.writes, checks: checks,
+                     totalCycles: session.postEntryCycles, dspWrites: dsp.registerWrites, checks: checks,
                      limitations: [transfer,
-                                   "DSP registers are a diagnostic latch, without synthesis, echo RAM writes or DSP timing.",
+                                   "The S-DSP runs (voices, envelopes, echo RAM writes) but no PCM is recorded or compared here; see music render.",
                                    "No song/sample transfer, PCM output, hardware reset or cycle-exact snapshot restore is verified."],
                      passed: checks.allSatisfy(\.passed))
     }

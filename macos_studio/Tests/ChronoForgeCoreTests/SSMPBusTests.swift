@@ -14,7 +14,7 @@ final class SSMPBusTests: XCTestCase {
             accesses.append("write \(address) at \(clocks)")
             registers[Int(address)] = value
         }
-        func clock() { clocks += 1 }
+        func clock(ram: inout [UInt8]) { clocks += 1 }
     }
 
     private func advance(_ bus: SSMPBus, to cycle: Int) {

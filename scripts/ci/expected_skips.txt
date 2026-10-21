@@ -30,6 +30,7 @@ ChronoForgeCoreTests.LZSSTests/testRomSmokeFirstBlock                           
 ChronoForgeCoreTests.LZSSTests/testSwiftDecompressCorpus                                        skip      # local ROM
 ChronoForgeCoreTests.SPCIPLHostTests/testRealIPLUploadMatchesProtocolModelAndStopsBeforeEntry   skip      # local S-SMP IPL image (CHRONOFORGE_IPL_ROM)
 ChronoForgeCoreTests.SPCIPLHostTests/testRealIPLUploadsCTBootBlocksBeforeDriverEntry            skip      # local S-SMP IPL image (CHRONOFORGE_IPL_ROM)
+ChronoForgeCoreTests.SPCRenderTests/testCTSongRenderFromTheDriverLoad                           skip      # local ROM
 ChronoForgeCoreTests.TileTests/testRealGraphicsAssetsIfPresent                                  skip      # local ROM-extracted graphics
 ChronoForgeMetalTests.PPURendererTests/testMTKViewFramePath                                     may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testOffscreenFrameRenders                                may-skip  # Metal device availability on hosted runners

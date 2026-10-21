@@ -2,8 +2,9 @@
 """Independent ROM/CLI acceptance checks for the native S-SMP milestone.
 
 Lanes: `direct` (boot blocks copied to ARAM), `ipl` (blocks uploaded through
-the local S-SMP IPL image named by CHRONOFORGE_IPL_ROM) and `transfer` (a song
-and its samples sent to the running driver, `music song-load`). With the
+the local S-SMP IPL image named by CHRONOFORGE_IPL_ROM), `transfer` (a song
+and its samples sent to the running driver, `music song-load`) and `render`
+(S-DSP PCM after that load, `music render` / `spc-render`). With the
 variable unset the IPL lane and the transfer lane's IPL comparison print
 UNVERIFIED and are not run; a set but bad path fails. `--all-songs` extends the
 transfer lane from its representative songs to every ROM song (not gated).
@@ -15,6 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import wave
 
 ROOT = Path(__file__).resolve().parents[2]
 ROM = ROOT / "re_workspace/ct_clean.sfc"
@@ -52,6 +54,11 @@ def run(*args, operation="driver-check"):
 
 def song_load(*args):
     return run(*args, operation="song-load")
+
+
+def render(*args, operation="render"):
+    return subprocess.run([str(CLI), "music", operation, *map(str, args)],
+                          capture_output=True, text=True, timeout=120)
 
 
 def hirom(long):
@@ -131,7 +138,7 @@ def assert_song_load(report, rom, digest, song, mode):
     command, arguments, samples, transfers, data = expected_song_load(rom, song)
     assert report["format"] == "ct-spc-song-load/1"
     assert report["romSHA256"] == digest and report["song"] == song
-    assert report["mode"] == f"{mode}; first song load; register-only DSP; no PCM"
+    assert report["mode"] == f"{mode}; first song load; S-DSP; no PCM recorded"
     assert report["passed"] is True
     assert {c["name"] for c in report["checks"]} == SONG_LOAD_CHECKS
     assert len(report["checks"]) == len(SONG_LOAD_CHECKS) and all(c["passed"] for c in report["checks"])
@@ -242,7 +249,7 @@ def ipl_lane(rom, digest):
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert_driver_report(report, rom, digest, IPL_CHECKS)
-    assert report["mode"] == "IPL-upload; register-only DSP; no PCM"
+    assert report["mode"] == "IPL-upload; S-DSP; no PCM recorded"
     assert report["iplSHA256"] == IPL_SHA256
     upload = report["upload"]
     # CT's sender: first token $CC; after a block, last counter + 4 (0 -> 1);
@@ -290,7 +297,7 @@ def direct_lane(rom, digest):
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert_driver_report(report, rom, digest, DIRECT_CHECKS)
-    assert report["mode"] == "direct-ARAM-load; register-only DSP; no PCM"
+    assert report["mode"] == "direct-ARAM-load; S-DSP; no PCM recorded"
     assert "upload" not in report and "iplSHA256" not in report
     # Startup opcode sequence actually writes CONTROL, T0, T1, CONTROL.
     assert rom[0x724C5 + 0x3C:0x724C5 + 0x48] == bytes.fromhex("8f30f1 8f2afa 8f80fb 8f03f1")
@@ -312,9 +319,64 @@ def direct_lane(rom, digest):
     print(f"S-SMP driver: 6 ROM blocks, 12 runtime checks, bounded boot {report['bootCycles']} cycles; CLI refusals pass")
 
 
+def render_lane(rom, digest):
+    with tempfile.TemporaryDirectory(prefix="chronoforge-render-") as directory:
+        d = Path(directory)
+        out, spc, again = d / "song.wav", d / "start.spc", d / "again.wav"
+        result = render(ROM, "$18", "--seconds", "1", "--out", out, "--spc", spc)
+        assert result.returncode == 0, result.stdout + result.stderr
+        report = json.loads(result.stdout)
+        assert report["format"] == "ct-spc-render/1" and report["romSHA256"] == digest and report["song"] == 0x18
+        assert report["mode"] == "direct-ARAM-load; first song load; S-DSP PCM from the first idle port report"
+        assert (report["sampleRate"], report["channels"], report["frames"], report["seconds"]) == (32000, 2, 32000, 1.0)
+        assert {c["name"] for c in report["loadChecks"]} == SONG_LOAD_CHECKS
+        assert all(c["passed"] for c in report["loadChecks"]) and len(report["limitations"]) == 3
+        # One frame per 32 clocks; recording stops inside the last frame's pass.
+        assert 32 * 31_999 < report["renderCycles"] <= 32 * 32_001
+        with wave.open(str(out)) as w:
+            assert (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()) == (2, 2, 32000, 32000)
+            pcm = w.readframes(32000)
+        assert hashlib.sha256(pcm).hexdigest() == report["pcmSHA256"]
+        samples = [int.from_bytes(pcm[i:i + 2], "little", signed=True) for i in range(0, len(pcm), 2)]
+        assert max(map(abs, samples)) == report["peak"] > 0
+        assert report["nonzeroFrames"] == sum(1 for i in range(0, len(samples), 2) if samples[i] or samples[i + 1]) > 0
+        assert render(ROM, 0x18, "--seconds", "1", "--out", again).returncode == 0
+        assert again.read_bytes() == out.read_bytes(), "render is not deterministic"
+        # The saved start state is a full SPC snapshot that spc-render plays.
+        image = spc.read_bytes()
+        assert len(image) == 0x10200 and image.startswith(b"SNES-SPC700 Sound File Data v0.30")
+        result = render(spc, "--seconds", "0.5", "--out", again, operation="spc-render")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(result.stdout)["frames"] == 16000
+        assert render(spc, "--seconds", "0.5", "--voices", 0, "--out", again, operation="spc-render").returncode == 0
+        with wave.open(str(again)) as w:
+            assert w.readframes(16000) == bytes(64000), "--voices 0 must mute every voice"
+        damaged = d / "damaged.sfc"
+        damaged.write_bytes(rom[:0x070E11] + bytes([rom[0x070E11] ^ 1]) + rom[0x070E12:])
+        short_ipl = d / "short.rom"
+        short_ipl.write_bytes(bytes(63))
+        refusals = [((ROM, 0x18, "--seconds", s), "render") for s in ("0", "-1", "300.5", "nan", "inf", "x")]
+        refusals += [((ROM, rom[0x070AE9]), "render"), ((ROM, "x"), "render"), ((damaged, 0x18), "render"),
+                     ((ROM, 0x18, "--ipl", short_ipl), "render"), ((ROM, 0x18, "--voices", 1), "render"),
+                     ((spc, "--voices", 256), "spc-render"), ((spc, "--counter", 0x7800), "spc-render"),
+                     ((spc, "--seconds", 0), "spc-render"), ((damaged, "--seconds", 1), "spc-render")]
+        for args, operation in refusals:
+            out.write_text("preserve me")
+            assert render(*args, "--out", out, operation=operation).returncode != 0, args
+            assert out.read_text() == "preserve me", args
+        assert render(ROM, 0x18, "--out", spc, "--spc", spc).returncode != 0
+        alias = d / "alias.sfc"
+        alias.symlink_to(ROM)
+        assert render(ROM, 0x18, "--seconds", "0.1", "--out", alias).returncode != 0
+        assert render(ROM, 0x18, "--seconds", "0.1", "--spc", alias, "--out", out).returncode != 0
+        assert hashlib.sha256(ROM.read_bytes()).hexdigest() == digest
+    print(f"S-DSP render: song $18 1 s = 32000 stereo frames, peak {report['peak']}, deterministic; snapshot "
+          f"plays through spc-render; CLI refusals pass")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--lane", choices=["all", "direct", "ipl", "transfer"], default="all")
+    parser.add_argument("--lane", choices=["all", "direct", "ipl", "transfer", "render"], default="all")
     parser.add_argument("--all-songs", action="store_true", help="transfer lane: every ROM song")
     options = parser.parse_args()
     lane = options.lane
@@ -327,6 +389,8 @@ def main():
         ipl_lane(rom, digest)
     if lane in ("all", "transfer"):
         transfer_lane(rom, digest, range(rom[0x070AE9]) if options.all_songs else TRANSFER_SONGS)
+    if lane in ("all", "render"):
+        render_lane(rom, digest)
 
 
 if __name__ == "__main__":
