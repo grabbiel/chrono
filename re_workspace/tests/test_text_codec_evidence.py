@@ -11,8 +11,23 @@ import ct_text_profile as profile  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def built():
-    return profile.build(profile.read_rom())
+def rom(rom_path):
+    return profile.read_rom(rom_path)
+
+
+@pytest.fixture(scope="module")
+def codec(chronoret, require):
+    """ChronoRET's text codec, with the sources `profile.build` reads beside it."""
+    require(profile.REFERENCE / "tools" / "text.py", "ChronoRET tools/text.py")
+    module = profile.reference_codec()
+    for source in (module.BANK_C2, module.CONSTANTS, profile.REFERENCE / "symbols" / "data_survey.csv"):
+        require(source, f"ChronoRET {source.name}")
+    return module
+
+
+@pytest.fixture(scope="module")
+def built(rom, codec):
+    return profile.build(rom)
 
 
 @pytest.mark.parametrize("index,path", [
@@ -20,8 +35,8 @@ def built():
     (1, profile.ASSETS / "message_corpus.json"),
     (2, profile.MANIFEST),
 ])
-def test_generated_outputs_match_current_rom_and_sources(built, index, path):
-    assert path.is_file(), "Run re_workspace/tools/ct_text_profile.py to generate local assets"
+def test_generated_outputs_match_current_rom_and_sources(built, require, index, path):
+    require(path, f"generated text output ({path.name})")
     assert path.read_text() == profile.serialize(built[index])
 
 
@@ -45,11 +60,11 @@ def test_all_33_dispatch_pointers_are_verified(built):
     assert table["entries"][0]["handler"] == "TextWin_CodeSetStatus"
 
 
-def test_rom_dispatch_mutation_fails_verification():
-    rom = bytearray(profile.read_rom())
+def test_rom_dispatch_mutation_fails_verification(rom, codec):
+    rom = bytearray(rom)
     rom[0x25903] ^= 1
     with pytest.raises(ValueError, match="Control 00"):
-        profile.control_evidence(rom, profile.reference_codec())
+        profile.control_evidence(rom, codec)
 
 
 def test_wrong_rom_fails_before_extraction():
@@ -69,8 +84,7 @@ def test_pointer_and_unreferenced_coverage_is_explicit(built):
     assert evidence["malformedOrOmittedCases"] == 0
 
 
-def test_corpus_has_byte_exact_reference_text_without_formatting_newlines(built):
-    codec = profile.reference_codec()
+def test_corpus_has_byte_exact_reference_text_without_formatting_newlines(built, codec):
     dictionary = codec.Dictionary([bytes(entry) for entry in built[0]["dictionary"]])
     for case in built[1]["cases"]:
         assert "\n" not in case["text"], case["label"]
@@ -85,8 +99,7 @@ def test_corpus_has_byte_exact_reference_text_without_formatting_newlines(built)
     bytes([0x95, 0x96, 0x97, 0x00]),  # Entries excluded from greedy compression.
     bytes([0xCD, 0xC1, 0xBE, 0x00]),  # Literal spelling of dictionary entry 0.
 ])
-def test_boundary_and_noncanonical_runs_remain_lossless(built, data):
-    codec = profile.reference_codec()
+def test_boundary_and_noncanonical_runs_remain_lossless(built, codec, data):
     dictionary = codec.Dictionary([bytes(entry) for entry in built[0]["dictionary"]])
     decoded = codec.decode_msg(data, dictionary).replace("\n", "")
     assert codec.encode_msg(decoded, dictionary, "boundary") == data

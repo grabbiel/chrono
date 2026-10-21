@@ -18,23 +18,20 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # re_workspa
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import ct_lzss  # noqa: E402
 
-ROM = os.path.join(ROOT, "ct_clean.sfc")
-CSV = os.path.join(ROOT, "refs", "ChronoRET", "symbols", "data_assets.csv")
-
 
 def snes_to_pc(s):
     return ((int(s[1:3], 16) & 0x3F) << 16) | int(s[4:], 16)
 
 
 @pytest.fixture(scope="module")
-def rom():
-    return open(ROM, "rb").read()
+def rom(rom_path):
+    return open(rom_path, "rb").read()
 
 
 @pytest.fixture(scope="module")
-def packed_rows():
+def packed_rows(data_assets_csv):
     return [r for r in csv.DictReader(
-        l for l in open(CSV) if not l.startswith("#"))
+        l for l in open(data_assets_csv) if not l.startswith("#"))
         if r["piece"] == "packed"]
 
 

@@ -78,14 +78,19 @@ jobs:
           # Job-level env cannot use the runner context; keep this with the upload path below.
           CI_LOG_DIR: ${{ runner.temp }}/ci-logs
         run: bash scripts/ci/run_swift_tests.sh
+      - name: Python research suites (ROM-dependent tests skip with an expected reason)
+        env:
+          CI_LOG_DIR: ${{ runner.temp }}/ci-logs
+        run: bash scripts/ci/run_python_tests.sh
       - name: Note what public CI does not verify
         if: always()
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ### Not verified by public CI
           No ROM, extracted assets, ChronoRET checkout or S-SMP IPL image is available here.
-          ROM extraction, LZSS corpus, text/event/song round trips, ROM builds, the CT driver
-          and the real-IPL upload lane run only in the local gate (`re_workspace/tools/verify_all.sh`).
+          ROM extraction, LZSS corpus, text/event/song round trips, ROM builds, the CT driver,
+          song/sample transfer, the real-IPL upload lane and the ROM-dependent research tests
+          run only in the local gate (`re_workspace/tools/verify_all.sh`).
           EOF
       - name: Upload logs
         if: always()

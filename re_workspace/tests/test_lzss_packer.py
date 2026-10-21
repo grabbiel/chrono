@@ -14,12 +14,7 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-sys.path.insert(0, os.path.join(ROOT, "refs", "ChronoRET", "tools"))
-import c3pack  # noqa: E402
 import ct_lzss  # noqa: E402
-
-ROM = os.path.join(ROOT, "ct_clean.sfc")
-CSV = os.path.join(ROOT, "refs", "ChronoRET", "symbols", "data_assets.csv")
 
 
 def snes_to_pc(s):
@@ -27,12 +22,20 @@ def snes_to_pc(s):
 
 
 @pytest.fixture(scope="module")
-def rom():
-    return open(ROM, "rb").read()
+def rom(rom_path):
+    return open(rom_path, "rb").read()
 
 
-def test_every_packed_block_is_rebuilt_exactly(rom):
-    rows = [r for r in csv.DictReader(l for l in open(CSV) if not l.startswith("#"))
+@pytest.fixture(scope="module")
+def c3pack(chronoret, require):
+    tools = require(chronoret / "tools" / "c3pack.py", "ChronoRET tools/c3pack.py").parent
+    sys.path.insert(0, str(tools))
+    import c3pack
+    return c3pack
+
+
+def test_every_packed_block_is_rebuilt_exactly(rom, data_assets_csv):
+    rows = [r for r in csv.DictReader(l for l in open(data_assets_csv) if not l.startswith("#"))
             if r["piece"] == "packed"]
     assert len(rows) == 1053
     for r in rows:
@@ -42,7 +45,7 @@ def test_every_packed_block_is_rebuilt_exactly(rom):
         assert ct_lzss.compress(ct_lzss.decompress(data), mode) == data, r["label"]
 
 
-def test_every_event_pack_stream_is_rebuilt_exactly(rom):
+def test_every_event_pack_stream_is_rebuilt_exactly(rom, c3pack):
     starts = {((rom[p + 2] & 0x3F) << 16) | rom[p] | rom[p + 1] << 8
               for p in range(0x3CF9F0, 0x3CF9F0 + 3 * 513, 3)}
     rebuilt = 0
@@ -57,7 +60,7 @@ def test_every_event_pack_stream_is_rebuilt_exactly(rom):
 
 
 @pytest.mark.parametrize("mode", [11, 12])
-def test_c_port_matches_python_transcription(mode):
+def test_c_port_matches_python_transcription(mode, c3pack):
     rng = random.Random(0x5EED + mode)
     cases = [b"", b"\x00", b"ab", b"abc", b"\x00" * 40, b"\x00" * 5000,
              bytes(range(256)) * 20, b"ABC" * 2000, bytes(rng.randrange(4) for _ in range(9000))]

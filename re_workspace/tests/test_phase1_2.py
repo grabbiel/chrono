@@ -15,26 +15,20 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # re_workspace/
 TOOLS = os.path.join(ROOT, "tools")
-REFS = os.path.join(ROOT, "refs")
 sys.path.insert(0, TOOLS)
 
 import c816_dis as D  # noqa: E402
 import opc816  # noqa: E402
-from address_map import Rom, load  # noqa: E402
-
-ROM_PATH = os.path.join(ROOT, "ct_clean.sfc")
-VECTORS_PATH = os.path.join(ROOT, "manifests", "engine_vectors.json")
-COVERAGE_PATH = os.path.join(ROOT, "manifests", "disasm_coverage.json")
-BANKC0_ASM = os.path.join(REFS, "ChronoRET", "asm", "bankC0", "bankC0.asm")
+from address_map import ROM_SIZE, Rom, load  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def rom() -> Rom:
-    return load(ROM_PATH)
+def rom(rom_path) -> Rom:
+    return load(rom_path)
 
 
 @pytest.fixture(scope="module")
-def dis(rom) -> D.Disassembler:
+def dis(rom, data_assets_csv) -> D.Disassembler:
     """Full seeded traversal (module-scoped; ~15s once)."""
     return D.build(rom)
 
@@ -84,8 +78,9 @@ def test_boot_prologue_sizes_and_mnemonics(rom, dis):
     assert dis.insts[0x8012].mnemonic == "adc"
 
 
-def test_boot_prologue_matches_chronoret_listing(rom):
-    block = norm_mnemonics(parse_chronoret_block(BANKC0_ASM, "Sub_C07F9A"))
+def test_boot_prologue_matches_chronoret_listing(chronoret, require):
+    bankc0_asm = require(chronoret / "asm" / "bankC0" / "bankC0.asm", "ChronoRET bankC0.asm")
+    block = norm_mnemonics(parse_chronoret_block(bankc0_asm, "Sub_C07F9A"))
     # the $C0:8000 prologue appears verbatim inside the listing block
     expected = ["TYA", "CLC", "ADC", "STA", "LDA", "STA", "LDA", "STA",
                 "PLY", "LDA", "CLC", "ADC", "AND", "JSR"]
@@ -94,7 +89,7 @@ def test_boot_prologue_matches_chronoret_listing(rom):
     # ChronoRET writes the ADC after PLY/LDA/CLC with a WIDE immediate
     # (ADC.w #!Bg_ScreenWidth) => 16-bit operand => 3-byte instruction,
     # exactly what the M=0 state decode produces at $C0:8012.
-    raw = parse_chronoret_block(BANKC0_ASM, "Sub_C07F9A")
+    raw = parse_chronoret_block(bankc0_asm, "Sub_C07F9A")
     nrm = norm_mnemonics(raw)
     idx = next(i for i in range(len(nrm) - 5)
                if nrm[i:i + 6] == ["PLY", "LDA", "CLC", "ADC", "AND", "JSR"])
@@ -139,7 +134,7 @@ def test_jsl_decomp_sites(rom):
 # (d) SEP/REP state tracking on a hand-assembled synthetic sequence
 # ---------------------------------------------------------------------------
 
-def test_sep_rep_immediate_widths(rom):
+def test_sep_rep_immediate_widths():
     # at PC $C7:FF00 (in-memory patch only):
     #   SEP #$20 / LDA #$34 / SEP #$10 / CPX #$42 / REP #$30 / LDA #$5678 /
     #   CPX #$1234 / RTS
@@ -149,7 +144,7 @@ def test_sep_rep_immediate_widths(rom):
     # after REP #$30 both immediates are 2 bytes (3-byte insns).
     code = bytes([0xE2, 0x20, 0xA9, 0x34, 0xE2, 0x10, 0xE0, 0x42,
                   0xC2, 0x30, 0xA9, 0x78, 0x56, 0xE0, 0x34, 0x12, 0x60])
-    patched = bytearray(rom.data)
+    patched = bytearray(ROM_SIZE)           # blank image: the sequence is self-contained
     patched[0x07FF00:0x07FF00 + len(code)] = code
     synth = Rom(bytes(patched))
     mini = D.Disassembler(synth, blocklist=D.Blocklist())
@@ -178,9 +173,8 @@ def test_sep_rep_immediate_widths(rom):
 # (e) engine_vectors.json validity + byte evidence
 # ---------------------------------------------------------------------------
 
-def test_engine_vectors(rom):
-    assert os.path.exists(VECTORS_PATH), "run tools/c816_dis.py to generate manifests"
-    vectors = json.load(open(VECTORS_PATH))
+def test_engine_vectors(rom, manifest_path):
+    vectors = json.load(open(manifest_path("engine_vectors.json")))
     subs = vectors["subsystems"]
     for name in ("main_loop_and_state_dispatcher", "dma_hdma_transfer_queues",
                  "global_decompression", "location_event_bytecode_interpreter",
@@ -218,8 +212,8 @@ def test_engine_vectors(rom):
     assert any(e["snes"] == "$C7:0000" for e in spc)
 
 
-def test_coverage_manifest(rom, dis):
-    cov = json.load(open(COVERAGE_PATH))
+def test_coverage_manifest(rom, dis, manifest_path):
+    cov = json.load(open(manifest_path("disasm_coverage.json")))
     assert cov["self_check"]["all_pass"] is True
     assert all(c["pass"] for c in cov["self_check"]["checks"])
     assert sum(b["code_bytes"] for b in cov["per_bank"].values()) == cov["total_code_bytes"]

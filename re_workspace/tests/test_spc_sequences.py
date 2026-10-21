@@ -14,17 +14,27 @@ import ct_event_packs as packs  # noqa: E402
 import ct_spc_seq as spc  # noqa: E402
 
 
-def test_manifest_matches_rom():
-    derived = spc.derive(packs.read_rom())
-    assert derived == json.loads(spc.MANIFEST.read_text())
+@pytest.fixture(scope="module")
+def rom(rom_path):
+    return packs.read_rom(rom_path)
+
+
+@pytest.fixture(scope="module")
+def driver_asm(require):
+    return require(spc.REF / "asm" / "spc700" / "driver.asm", "ChronoRET spc700 driver.asm")
+
+
+def test_manifest_matches_rom(rom, driver_asm, require):
+    manifest = require(spc.MANIFEST, "manifest spc_sequences.json")
+    derived = spc.derive(rom)
+    assert derived == json.loads(manifest.read_text())
     assert derived["song_count"] == 83 and derived["totals"]["byte_exact"] == 83
     assert derived["totals"]["unreached_bytes"] == 2
     assert derived["songs_over_song_room"] == [0x3F]
     assert derived["max_length"] == 9983
 
 
-def test_every_song_round_trips():
-    rom = packs.read_rom()
+def test_every_song_round_trips(rom, driver_asm):
     counts, durations = spc.driver_tables(rom)
     for i, _, _, data in spc.songs(rom):
         tables = spc.song_tables(rom, i)
@@ -40,8 +50,8 @@ def _listing(body, origin="$1000", notrack="$FFFF"):
 GOOD = "L_a:\n    tempo $40\nL_loop:\n    note C# 24\n    branch $01 ->L_a\n    jump ->L_loop\nL_b:\n    rest 192\n    end"
 
 
-def test_assembler_bytes_and_refusals():
-    counts, durations = spc.driver_tables(packs.read_rom())
+def test_assembler_bytes_and_refusals(rom, driver_asm):
+    counts, durations = spc.driver_tables(rom)
     data = spc.assemble(_listing(GOOD), counts, durations)
     assert data[0x24:] == bytes([0xF0, 0x40, 0x15, 0xFA, 0x01, 0x00, 0x10, 0xF6, 0x02, 0x10, 0xB6, 0xEB])
     for body, message in [
