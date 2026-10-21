@@ -80,7 +80,12 @@ Builds are ad-hoc signed, not Developer ID signed or notarized.
 - no bypass actors.
 
 Repository settings that go with it: merge commits off, squash and rebase on,
-delete branches after merge.
+auto-merge allowed, delete branches after merge.
+
+Auto-merge is how changes land: a PR opened with `gh pr merge --auto --squash`
+merges by itself once `ci-gate` passes, and never before. Because the ruleset
+requires an up-to-date branch, a PR that falls behind `main` waits until it is
+updated (`gh pr update-branch`), which re-runs CI on the combined state.
 
 Apply only after `ci-gate` has reported at least once on a PR, otherwise every PR
 blocks on a check that never ran:
