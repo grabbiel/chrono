@@ -9,31 +9,80 @@ usage: chronoforge music list <rom.sfc>
        chronoforge music spc-info <snapshot.spc> [--out info.json]
        chronoforge music driver-check <rom.sfc> [--ipl ipl.rom] [--out report.json]
        chronoforge music song-load <rom.sfc> <song> [--ipl ipl.rom] [--out report.json]
+       chronoforge music render <rom.sfc> <song> [--seconds N] [--ipl ipl.rom] [--out song.wav] [--spc start.spc]
+       chronoforge music spc-render <snapshot.spc> [--seconds N] [--ipl ipl.rom] [--voices MASK] [--counter N]
+                                                [--timers-first] [--out song.wav]
 
 driver-check --ipl uploads the boot blocks through the supplied 64-byte S-SMP
 IPL image instead of copying them into ARAM. No IPL image is bundled.
 song-load boots the driver the same way, then sends the song and its samples
 through the driver's transfer protocol and verifies ARAM against the ROM.
+render does the same load, then records N seconds (default 10, at most 300)
+of 32 kHz stereo 16-bit PCM from the S-DSP as a WAV; with --out the JSON
+report goes to standard output, and --spc saves the state rendering starts
+from as an SPC snapshot. spc-render renders a snapshot through the same S-DSP;
+--voices mixes only the voices whose bits are set (muted voices still run);
+--counter starts the S-DSP rate counter at N (default 0, the reset value),
+which SPC files do not store; --timers-first steps the timers before the CPU's
+access in each clock (default: access first), libgme's order for those ties.
 """
 
 func cmdMusic(_ args: [String]) -> Int32 {
-    guard let operation = args.first, ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load"].contains(operation) else {
+    let operations = ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load", "render", "spc-render"]
+    guard let operation = args.first, operations.contains(operation) else {
         print(musicUsage); return 2
     }
-    var positional: [String] = [], out: String?, ipl: String?
+    let rendering = ["render", "spc-render"].contains(operation)
+    var positional: [String] = [], out: String?, ipl: String?, spc: String?, seconds: String?, voices: String?, counter: String?
+    var timersFirst = false
     var i = 1
     while i < args.count {
-        if args[i] == "--out" || (args[i] == "--ipl" && ["driver-check", "song-load"].contains(operation)) {
-            guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
-            if args[i] == "--out" { out = args[i + 1] } else { ipl = args[i + 1] }
+        let option = args[i]
+        if option == "--timers-first" && operation == "spc-render" { timersFirst = true; i += 1; continue }
+        if option == "--out" || (option == "--ipl" && ["driver-check", "song-load", "render", "spc-render"].contains(operation))
+            || (option == "--seconds" && rendering) || (option == "--spc" && operation == "render")
+            || (["--voices", "--counter"].contains(option) && operation == "spc-render") {
+            guard i + 1 < args.count else { print("missing value for \(option)"); return 2 }
+            switch option {
+            case "--out": out = args[i + 1]
+            case "--ipl": ipl = args[i + 1]
+            case "--spc": spc = args[i + 1]
+            case "--voices": voices = args[i + 1]
+            case "--counter": counter = args[i + 1]
+            default: seconds = args[i + 1]
+            }
             i += 2
         } else { positional.append(args[i]); i += 1 }
     }
-    guard positional.count == (["disasm", "song-load"].contains(operation) ? 2 : 1) else { print(musicUsage); return 2 }
-    if let out, ([positional[0]] + (ipl.map { [$0] } ?? [])).contains(where: {
-        URL(fileURLWithPath: out).resolvingSymlinksInPath() == URL(fileURLWithPath: $0).resolvingSymlinksInPath()
-    }) {
+    guard positional.count == (["disasm", "song-load", "render"].contains(operation) ? 2 : 1) else { print(musicUsage); return 2 }
+    func same(_ a: String, _ b: String) -> Bool {
+        URL(fileURLWithPath: a).resolvingSymlinksInPath() == URL(fileURLWithPath: b).resolvingSymlinksInPath()
+    }
+    let inputs = [positional[0]] + (ipl.map { [$0] } ?? [])
+    for output in [out, spc].compactMap({ $0 }) where inputs.contains(where: { same(output, $0) }) {
         print("output must differ from input"); return 2
+    }
+    if let out, let spc, same(out, spc) { print("--out and --spc must differ"); return 2 }
+    var renderSeconds = 10.0
+    if let seconds {
+        guard let value = Double(seconds), value.isFinite, value > 0, value <= SPCRender.maxSeconds else {
+            print("--seconds must be a number above 0 and at most \(Int(SPCRender.maxSeconds))"); return 2
+        }
+        renderSeconds = value
+    }
+    var options = SPCRender.Options()
+    options.timersBeforeAccess = timersFirst
+    if let counter {
+        guard let value = songNumber(counter), (0..<SDSP.counterPeriod).contains(value) else {
+            print("--counter must be from 0 to $77FF (decimal or $hex)"); return 2
+        }
+        options.counter = value
+    }
+    if let voices {
+        guard let value = songNumber(voices), (0...0xFF).contains(value) else {
+            print("--voices must be a voice bit mask from 0 to 255 (decimal or $hex)"); return 2
+        }
+        options.voices = UInt8(value)
     }
     func emit(_ data: Data) throws {
         if let out { try data.write(to: URL(fileURLWithPath: out), options: .atomic) }
@@ -41,6 +90,26 @@ func cmdMusic(_ args: [String]) -> Int32 {
     }
     do {
         switch operation {
+        case "render", "spc-render":
+            let iplROM = try ipl.map { [UInt8](try Data(contentsOf: URL(fileURLWithPath: $0))) }
+            if let iplROM, iplROM.count != 64 {
+                print("IPL image must be exactly 64 bytes (got \(iplROM.count))"); return 2
+            }
+            if operation == "spc-render" {
+                let snapshot = try SPCFile(data: Data(contentsOf: URL(fileURLWithPath: positional[0])))
+                let pcm = try SPCRender.render(snapshot: snapshot, seconds: renderSeconds, iplROM: iplROM, options: options)
+                try emit(SPCRender.wav(pcm))
+                if out != nil {
+                    print(#"{"format": "spc-render/1", "frames": \#(pcm.count / 2), "pcm_sha256": "\#(CTEventPack.sha256(pcm.withUnsafeBytes { Array($0) }))"}"#)
+                }
+                return 0
+            }
+            guard let song = songNumber(positional[1]) else { print("song must be a number (decimal or $hex)"); return 2 }
+            let render = try CTSPCRender.render(rom: try readROM(positional[0]), song: song, seconds: renderSeconds, iplROM: iplROM)
+            if let spc { try render.snapshot.encode().write(to: URL(fileURLWithPath: spc), options: .atomic) }
+            try emit(SPCRender.wav(render.pcm))
+            if out != nil { FileHandle.standardOutput.write(try CTProject.jsonEncoder.encode(render.report)) }
+            return 0
         case "driver-check", "song-load":
             let iplROM = try ipl.map { [UInt8](try Data(contentsOf: URL(fileURLWithPath: $0))) }
             if let iplROM, iplROM.count != 64 {
@@ -113,7 +182,7 @@ func cmdMusic(_ args: [String]) -> Int32 {
     }
 }
 
-/// A song number as `disasm` and `song-load` take it: decimal or `$` hex.
+/// A song number as `disasm`, `song-load` and `render` take it: decimal or `$` hex.
 private func songNumber(_ text: String) -> Int? {
     text.hasPrefix("$") ? Int(text.dropFirst(), radix: 16) : Int(text)
 }

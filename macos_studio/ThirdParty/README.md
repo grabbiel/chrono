@@ -19,3 +19,12 @@ the fixture. They contain no game ROM data and are not bundled with the app.
 The pinned upstream commit carries no license file, so `vectors.json` is not
 committed to the public repository; `tools/prepare_spc700_vectors.py` regenerates
 it from a pinned checkout (CI does this at test time).
+
+`Sources/ChronoForgeCore/SDSP.swift` (the S-DSP) is written from documentation,
+not from emulator source. Its sources are nocash's
+[fullsnes](https://problemkaputt.de/fullsnes.htm) APU chapters and the SNESdev
+Wiki's CC0 pages "DSP envelopes" and "S-DSP registers". The 512-entry Gaussian
+interpolation table and the envelope rate periods are hardware constants
+transcribed from fullsnes, and the rate-counter offsets come from SNESdev. `tools/compare_libgme.py` loads an installed libgme
+(LGPL) through Python ctypes, as an external test reference only. libgme is
+never linked, copied or bundled, and no libgme code is in the sources.

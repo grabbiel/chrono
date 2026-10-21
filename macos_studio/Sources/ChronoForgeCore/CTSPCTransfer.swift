@@ -429,6 +429,13 @@ public enum CTSPCTransfer {
     /// driver.asm and spc700.inc, independently of the host above.
     public static func loadSong(rom: [UInt8], song: Int, iplROM: [UInt8]? = nil,
                                 limits: Limits = .init()) throws -> Diagnostic {
+        try loadSession(rom: rom, song: song, iplROM: iplROM, limits: limits).diagnostic
+    }
+
+    /// `loadSong`, keeping the running driver for `CTSPCRender`: the session
+    /// stops at the first idle port report after the load.
+    static func loadSession(rom: [UInt8], song: Int, iplROM: [UInt8]?, limits: Limits) throws
+        -> (session: CTSPCDriver.Session, diagnostic: Diagnostic) {
         guard rom.count == 4_194_304, CTEventPack.sha256(rom) == CTSPCDriver.cleanROMSHA256 else {
             throw CTSongError("song-load requires the verified unheadered CT USA 1.0 ROM")
         }
@@ -468,15 +475,16 @@ public enum CTSPCTransfer {
                && dsp.registers[0x6D] == UInt8(truncatingIfNeeded: 0xF1 - 8 * Int(delay)))
         record("CPU, bus and DSP endpoint clocks agree", cpu.cycles == bus.cycles && dsp.clocks == cpu.cycles)
         let boot = session.upload == nil ? "direct-ARAM-load" : "IPL-upload"
-        return .init(mode: "\(boot); first song load; register-only DSP; no PCM", romSHA256: CTSPCDriver.cleanROMSHA256,
+        let diagnostic = Diagnostic(mode: "\(boot); first song load; S-DSP; no PCM recorded", romSHA256: CTSPCDriver.cleanROMSHA256,
                      iplSHA256: iplROM.map(CTEventPack.sha256), upload: session.upload, song: song, samples: plan.samples,
                      driverBootCycles: driverBootCycles, idleCycles: idleCycles, transfer: report,
-                     dspWrites: dsp.writes, checks: checks,
+                     dspWrites: dsp.registerWrites, checks: checks,
                      limitations: [
                         "Host writes ports between whole SMP instructions, \(limits.stepDelay) SMP clocks after each acknowledgement (a lower bound for CT's 65816 loops); 65816 timing, its timeouts and retries, and subcycle port races are not modeled.",
                         "Models the first load after a driver boot: every sample slot free, no $2F00 block resend, and directory entries past the song's samples sent as zero (the game sends whatever its WRAM buffer held).",
-                        "DSP registers are a diagnostic latch, without synthesis, echo RAM writes or DSP timing; no PCM output, hardware reset or snapshot restore is verified.",
+                        "The S-DSP runs (voices, envelopes, echo RAM writes) but no PCM is recorded here; music render records it. No hardware reset or snapshot restore is verified.",
                      ],
                      passed: checks.allSatisfy(\.passed))
+        return (session, diagnostic)
     }
 }
