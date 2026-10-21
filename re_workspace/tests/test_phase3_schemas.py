@@ -32,16 +32,19 @@ MANIFESTS = ["characters_schema.json", "items_and_techs_schema.json",
              "maps_schema.json"]
 
 
-def _load(name):
-    with open(os.path.join(WS, "manifests", name), encoding="utf-8") as f:
-        return json.load(f)
+@pytest.fixture(scope="module")
+def load_manifest(manifest_path):
+    def load(name):
+        with open(manifest_path(name), encoding="utf-8") as f:
+            return json.load(f)
+    return load
 
 
 # ---------------------------------------------------------------- basics ---
 
 @pytest.mark.parametrize("name", MANIFESTS)
-def test_manifest_is_valid_json_with_shape(name):
-    m = _load(name)
+def test_manifest_is_valid_json_with_shape(name, load_manifest):
+    m = load_manifest(name)
     assert isinstance(m, dict)
     assert m.get("phase") == 3
     assert "record_types" in m and len(m["record_types"]) >= 5
@@ -49,8 +52,8 @@ def test_manifest_is_valid_json_with_shape(name):
 
 
 @pytest.mark.parametrize("name", MANIFESTS)
-def test_record_type_addresses_in_rom(name):
-    m = _load(name)
+def test_record_type_addresses_in_rom(name, load_manifest):
+    m = load_manifest(name)
     for rt in m["record_types"]:
         if rt.get("address_space", "rom") == "rom":
             assert cs.in_rom(rt["addr"]), \
@@ -58,17 +61,17 @@ def test_record_type_addresses_in_rom(name):
 
 
 @pytest.mark.parametrize("name", MANIFESTS)
-def test_byte_evidence_claims_live(name):
+def test_byte_evidence_claims_live(name, load_manifest, rom_path):
     """Generic verifier: walk the manifest, re-check every claim against ROM."""
-    fails = cs.verify_manifest(_load(name), name)
+    fails = cs.verify_manifest(load_manifest(name), name)
     assert fails == [], "\n".join(fails)
 
 
 # ------------------------------------------------------- stride blobs ------
 
 @pytest.mark.parametrize("name", MANIFESTS)
-def test_stride_blobs_divide_blob_sizes(name):
-    m = _load(name)
+def test_stride_blobs_divide_blob_sizes(name, load_manifest):
+    m = load_manifest(name)
     blobs = m["stride_blobs"]
     assert blobs
     for sb in blobs:
@@ -77,18 +80,16 @@ def test_stride_blobs_divide_blob_sizes(name):
         assert cs.in_rom(sb["addr"])
 
 
-def test_at_least_ten_stride_blobs_across_manifests():
-    total = sum(len(_load(n)["stride_blobs"]) for n in MANIFESTS)
+def test_at_least_ten_stride_blobs_across_manifests(load_manifest):
+    total = sum(len(load_manifest(n)["stride_blobs"]) for n in MANIFESTS)
     assert total >= 10, f"only {total} stride blobs"
 
 
-def test_stride_blob_sizes_match_chronoret_csv():
+def test_stride_blob_sizes_match_chronoret_csv(load_manifest, data_assets_csv):
     """Blob sizes must equal the sizes ChronoRET's data_assets.csv declares."""
     import csv as _csv
-    csv_path = os.path.join(WS, "refs", "ChronoRET", "symbols",
-                            "data_assets.csv")
     sizes = {}
-    with open(csv_path, encoding="utf-8") as f:
+    with open(data_assets_csv, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
@@ -100,7 +101,7 @@ def test_stride_blob_sizes_match_chronoret_csv():
                 pass
     checked = 0
     for n in MANIFESTS:
-        for sb in _load(n)["stride_blobs"]:
+        for sb in load_manifest(n)["stride_blobs"]:
             want = sizes.get(sb["addr"].upper())
             if want is not None:
                 assert sb["size"] == want, \
@@ -112,8 +113,8 @@ def test_stride_blob_sizes_match_chronoret_csv():
 # ------------------------------------------------------ pointer tables -----
 
 @pytest.mark.parametrize("name", MANIFESTS)
-def test_pointer_tables_in_rom(name):
-    m = _load(name)
+def test_pointer_tables_in_rom(name, load_manifest, rom_path):
+    m = load_manifest(name)
     for pt in m.get("pointer_tables", []):
         for i in range(pt["count"]):
             v = cs.u24(pt["addr"], 3 * i)
@@ -126,7 +127,7 @@ def test_pointer_tables_in_rom(name):
 
 # --------------------------------------------------------- text codec ------
 
-def test_dictionary_located_and_decoded():
+def test_dictionary_located_and_decoded(rom_path):
     d = cs.dictionary()
     assert len(d) == 127
     # the highest-frequency English substrings, in roughly the ROM's order
@@ -140,16 +141,16 @@ def test_dictionary_located_and_decoded():
     assert sum(1 for s in d if s) >= 120
 
 
-def test_text_codec_known_names():
+def test_text_codec_known_names(rom_path):
     assert cs.decode_name_at("$CC:15C4", 11) == "Cyclone"        # tech 1
     # item names are fixed 11-byte records (icon byte + text, no $EF inside)
     assert cs.decode_name_at("$CC:0B5E", 11, maxlen=11) == "Wood Sword"
     assert cs.decode_name_at("$CC:6500", 11) == "Reptite"        # enemy 1
 
 
-def test_dict_pointer_table_bytes_live():
+def test_dict_pointer_table_bytes_live(load_manifest, rom_path):
     # first dictionary pointer (entry 0 -> "the") + terminator conventions
-    m = _load("items_and_techs_schema.json")
+    m = load_manifest("items_and_techs_schema.json")
     tc = m["text_codec"]
     assert tc["dictionary"]["located"] is True
     ev = tc["dictionary"]["pointer_table"]["byte_evidence"]
@@ -158,8 +159,8 @@ def test_dict_pointer_table_bytes_live():
 
 # ---------------------------------------------------------- map decode -----
 
-def test_real_map_pack_parses_byte_exact():
-    m = _load("maps_schema.json")
+def test_real_map_pack_parses_byte_exact(load_manifest, rom_path):
+    m = load_manifest("maps_schema.json")
     rd = m["real_map_decode"]
     assert rd["exact_consumption"] is True
     # re-run the parse live rather than trusting the stored numbers
@@ -188,8 +189,8 @@ def test_real_map_pack_parses_byte_exact():
     assert off == len(mp)
 
 
-def test_all_plane_parse_evidence_exact():
-    m = _load("maps_schema.json")
+def test_all_plane_parse_evidence_exact(load_manifest, rom_path):
+    m = load_manifest("maps_schema.json")
     ev = m["plane_parse_evidence"]
     assert len(ev) >= 10
     for e in ev:
@@ -198,7 +199,7 @@ def test_all_plane_parse_evidence_exact():
         assert len(cs.lzss_at(e["packed_addr"])) == e["csv_expected_len"]
 
 
-def test_metatile_words_palette_bits_sane():
+def test_metatile_words_palette_bits_sane(rom_path):
     """The 4x 8x8-tiles -> 16x16-chip composition decodes with valid
     3-bit palette indices for every word of the tileset-2 metatile table."""
     meta = cs.lzss_at("$ED:13C6")
@@ -212,8 +213,8 @@ def test_metatile_words_palette_bits_sane():
     assert all(w & 0x3FF for w in words)   # nonzero tile indices
 
 
-def test_locrom_stride_and_field_sanity():
-    m = _load("maps_schema.json")
+def test_locrom_stride_and_field_sanity(load_manifest, rom_path):
+    m = load_manifest("maps_schema.json")
     rt = next(r for r in m["record_types"] if r["name"] == "LocRom")
     assert rt["stride"] * rt["count"] == 14 * 512 == 7168
     # MapProps entry numbers must stay inside the 256-entry pointer table
@@ -225,10 +226,10 @@ def test_locrom_stride_and_field_sanity():
 
 # ------------------------------------------------------------ coverage -----
 
-def test_field_evidence_coverage():
+def test_field_evidence_coverage(load_manifest):
     """Every field carries an evidence string; decoded fraction is reported."""
     for n in MANIFESTS:
-        m = _load(n)
+        m = load_manifest(n)
         for rt in m["record_types"]:
             for f in rt.get("fields", []):
                 assert f.get("evidence") is not None, \
@@ -240,14 +241,14 @@ def test_field_evidence_coverage():
                         f["offset"] == "var"
 
 
-def test_field_stats_report(capsys):
+def test_field_stats_report(capsys, load_manifest):
     lines = []
     for n in MANIFESTS:
-        st = cs.field_stats(_load(n))
+        st = cs.field_stats(load_manifest(n))
         tot = sum(st.values())
         frac = (st["decoded"] + st["partial"]) / tot
         lines.append(f"{n}: {st} -> evidence-backed {frac:.0%}")
     print("\n".join(lines))
     for n in MANIFESTS:
-        st = cs.field_stats(_load(n))
+        st = cs.field_stats(load_manifest(n))
         assert st["decoded"] > 0

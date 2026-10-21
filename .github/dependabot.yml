@@ -10,3 +10,13 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  # Hash-pinned test-only wheels for the research suites (scripts/ci/requirements-pytest.txt).
+  - package-ecosystem: pip
+    directory: /scripts/ci
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      pytest:
+        patterns: ["*"]

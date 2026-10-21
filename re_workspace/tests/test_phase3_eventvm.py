@@ -28,20 +28,16 @@ sys.path.insert(0, os.path.join(REWORKSPACE, "tools"))
 from address_map import Rom, load as load_rom  # noqa: E402
 import ct_event_isa as isa  # noqa: E402
 
-MANIFEST_PATH = os.path.join(REWORKSPACE, "manifests", "event_vm_isa.json")
-MD_PATH = os.path.join(REWORKSPACE, "manifests", "event_vm_isa.md")
-
 
 @pytest.fixture(scope="module")
-def manifest():
-    assert os.path.exists(MANIFEST_PATH), "run tools/ct_event_isa.py first"
-    with open(MANIFEST_PATH, encoding="utf-8") as f:
+def manifest(manifest_path):
+    with open(manifest_path("event_vm_isa.json"), encoding="utf-8") as f:
         return json.load(f)
 
 
 @pytest.fixture(scope="module")
-def rom():
-    return load_rom(os.path.join(REWORKSPACE, "ct_clean.sfc"))
+def rom(rom_path):
+    return load_rom(rom_path)
 
 
 # ---------------------------------------------------------------------------
@@ -83,9 +79,9 @@ def test_dispatch_sites_are_jsr_absx(manifest, rom):
 # 2. Documented handlers point to non-fill bytes inside code regions
 # ---------------------------------------------------------------------------
 
-def test_documented_handlers_are_real_code(manifest, rom):
-    mos = isa.load_mos65816_table()
-    asm = isa.parse_chronoret_labels()
+def test_documented_handlers_are_real_code(manifest, rom, require):
+    mos = isa.load_mos65816_table(require(isa.MOS65816_SRC, "mos65xx-python opcodes65816.py"))
+    asm = isa.parse_chronoret_labels(require(isa.ASM_C0, "ChronoRET bankC0.asm"))
     n = 0
     for e in manifest["opcodes"]:
         if e["status"] != "documented":
@@ -169,7 +165,7 @@ def test_architecture_fields(manifest):
     assert "Obj_ScriptPos" in sem
 
 
-def test_markdown_twin_exists(manifest):
-    assert os.path.exists(MD_PATH)
-    text = open(MD_PATH, encoding="utf-8").read()
+def test_markdown_twin_exists(manifest, manifest_path):
+    md_path = manifest_path("event_vm_isa.md")
+    text = open(md_path, encoding="utf-8").read()
     assert text.count("\n| $") >= 256

@@ -12,13 +12,10 @@ sys.path.insert(0, os.path.join(WS, "tools"))
 
 from address_map import Rom, load  # noqa: E402
 
-CLEAN = os.path.join(WS, "ct_clean.sfc")
-
 
 @pytest.fixture(scope="module")
-def rom() -> Rom:
-    assert os.path.exists(CLEAN), "run tools/normalize.py first"
-    return load(CLEAN)
+def rom(rom_path) -> Rom:
+    return load(rom_path)
 
 
 def test_clean_size(rom):
@@ -31,7 +28,7 @@ def test_header_fields(rom):
     assert rom.data[0xFFD7] == 0x0C
 
 
-def test_snes_to_pc_linear(rom):
+def test_snes_to_pc_linear():
     # $C0:0000 -> first byte of physical bank 0
     assert Rom.snes_to_pc(0xC0, 0x0000) == 0x000000
     # $C2:8000 -> bank 2, upper half
@@ -40,7 +37,7 @@ def test_snes_to_pc_linear(rom):
     assert Rom.snes_to_pc(0xFF, 0xFFFE) == 0x3FFFFE
 
 
-def test_snes_to_pc_mirrors(rom):
+def test_snes_to_pc_mirrors():
     # $40-$7D mirror $C0-$FF
     assert Rom.snes_to_pc(0x40, 0x8000) == Rom.snes_to_pc(0xC0, 0x8000)
     assert Rom.snes_to_pc(0x5A, 0xFFC0) == Rom.snes_to_pc(0xDA, 0xFFC0)
@@ -50,7 +47,7 @@ def test_snes_to_pc_mirrors(rom):
     assert Rom.snes_to_pc(0xC0, 0x8000) == Rom.snes_to_pc(0x80, 0x8000)
 
 
-def test_non_rom_rejected(rom):
+def test_non_rom_rejected():
     for bank, addr in [(0x7E, 0x0000), (0x7F, 0xFFFF), (0x70, 0x2000), (0x80, 0x7FFF), (0xBF, 0x2000)]:
         with pytest.raises(ValueError):
             Rom.snes_to_pc(bank, addr)
@@ -83,7 +80,7 @@ def test_complement_checksum(rom):
     assert (s + c) & 0xFFFF == 0xFFFF
 
 
-def test_manifest_written():
-    m = json.load(open(os.path.join(WS, "manifests", "rom_identity.json")))
+def test_manifest_written(manifest_path):
+    m = json.load(open(manifest_path("rom_identity.json")))
     assert m["all_passed"] is True
     assert m["map_mode"] == "HiROM FastROM (0x31)"

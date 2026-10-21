@@ -22,9 +22,7 @@ from ct_gfx import (bgr555_to_rgb, decode_palette, decode_tiles_2bpp,  # noqa: E
                     decode_tiles_4bpp, lzss_unpack, rgb_to_bgr555,
                     render_sheet)
 
-CLEAN = os.path.join(WS, "ct_clean.sfc")
 GFX = os.path.join(WS, "assets", "graphics")
-MANIFESTS = os.path.join(WS, "manifests")
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +181,8 @@ def test_synth_2bpp_exact():
 # vectorised vs scalar reference on real ROM bytes
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
-def rom():
-    assert os.path.exists(CLEAN), "run tools/normalize.py first"
-    with open(CLEAN, "rb") as f:
+def rom(rom_path):
+    with open(rom_path, "rb") as f:
         data = f.read()
     assert len(data) == 4 * 1024 * 1024
     return data
@@ -232,12 +229,11 @@ def test_decode_rejects_misaligned():
 # ---------------------------------------------------------------------------
 # LZSS probe (documented $C3:0002 format) against CSV-pinned sizes
 # ---------------------------------------------------------------------------
-def test_lzss_scene_pal_packs(rom):
+def test_lzss_scene_pal_packs(rom, data_assets_csv):
     import csv
     import re as _re
-    csv_path = os.path.join(WS, "refs", "ChronoRET", "symbols", "data_assets.csv")
     checked = 0
-    with open(csv_path, newline="") as f:
+    with open(data_assets_csv, newline="") as f:
         for p in csv.reader(l for l in f if not l.startswith("#")):
             if len(p) < 7 or not p[0].startswith("ScenePalPack_"):
                 continue
@@ -256,10 +252,9 @@ def test_lzss_scene_pal_packs(rom):
 # (d) every PNG written by the extractor is loadable, mode P, right size
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
-def gfx_manifest():
-    path = os.path.join(MANIFESTS, "graphics_manifest.json")
-    assert os.path.exists(path), "run tools/ct_extractor_gfx.py first"
-    with open(path) as f:
+def gfx_manifest(manifest_path, require):
+    require(GFX, "extracted graphics (assets/graphics)")
+    with open(manifest_path("graphics_manifest.json")) as f:
         return json.load(f)
 
 
@@ -334,9 +329,9 @@ def test_font_glyph_rows_decode_to_digits(rom):
 # ---------------------------------------------------------------------------
 # (e) manifests are valid JSON with nonzero counts
 # ---------------------------------------------------------------------------
-def test_manifests_valid_json_nonzero():
-    gpath = os.path.join(MANIFESTS, "graphics_manifest.json")
-    ppath = os.path.join(MANIFESTS, "palettes.json")
+def test_manifests_valid_json_nonzero(manifest_path):
+    gpath = manifest_path("graphics_manifest.json")
+    ppath = manifest_path("palettes.json")
     with open(gpath) as f:
         g = json.load(f)
     with open(ppath) as f:
