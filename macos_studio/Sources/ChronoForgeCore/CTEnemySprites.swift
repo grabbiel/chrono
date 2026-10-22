@@ -51,6 +51,8 @@ public enum CTEnemySpriteROM {
         public var layout: Int
         public var tilesAt: Int                         // the $E4:2000 pointer
         public var packed: Bool                         // unpacked (Decomp_ToWram) rather than raw ROM tiles
+        public var packedBytes: Int = 0                 // packed: the stream's size through its end marker
+        public var mode: LZSSMode = .lz12               // packed: the stream's mode
         public var tiles: [[UInt8]]
         public var framesAt: Int
         public var frames: [CTSpriteROM.Frame]
@@ -69,13 +71,14 @@ public enum CTEnemySpriteROM {
         let shape = layouts[r.size]
         let tilesAt = CTSpriteROM.u24(rom, CTSpriteROM.tilesPtr + 3 * r.gfx)
         var tiles: [[UInt8]]
+        var packedBytes = 0, mode = LZSSMode.lz12
         let packed = i < romGfxMin
         if packed {
             let start = CTSpriteROM.pc(tilesAt)
             guard start < rom.count else { throw CTROMBuildError(String(format: "enemy %d: graphics pointer %@ is outside the ROM", i, CTSpriteROM.snes(tilesAt))) }
             let src = Array(rom[start..<min(rom.count, start + 0x10000)])
             let data: [UInt8]
-            do { data = try LZSS.decompressStream(src).out }
+            do { (data, mode, packedBytes) = try LZSS.decompressStream(src) }
             catch { throw CTROMBuildError(String(format: "enemy %d: graphics at %@ do not unpack: %@", i, CTSpriteROM.snes(tilesAt), "\(error)")) }
             tiles = data.chunked(CTSpriteROM.tileBytes).filter { $0.count == CTSpriteROM.tileBytes }
         } else {
@@ -106,7 +109,8 @@ public enum CTEnemySpriteROM {
         for k in 0..<CTSpriteROM.paletteColours { palette.append(UInt16(CTSpriteROM.u16(rom, paletteAt + 2 * k))) }
         let rowsA = CTSpriteROM.u16(rom, CTSpriteROM.animFrames + 2 * r.anim)
         let rowsB = CTSpriteROM.u16(rom, CTSpriteROM.animFrames + 2 * r.anim + 2)
-        return DecodedEnemy(id: i, record: r, layout: r.size, tilesAt: tilesAt, packed: packed, tiles: tiles,
+        return DecodedEnemy(id: i, record: r, layout: r.size, tilesAt: tilesAt, packed: packed,
+                            packedBytes: packedBytes, mode: mode, tiles: tiles,
                             framesAt: framesAt, frames: frames, paletteAt: paletteAt, palette: palette,
                             frameIdsAt: CTSpriteROM.animBank + rowsA,
                             durationsAt: CTSpriteROM.animBank + CTSpriteROM.u16(rom, CTSpriteROM.animDurs + 2 * r.anim),
@@ -156,10 +160,19 @@ public enum CTEnemySpriteROM {
                                          durations: CTSpriteROM.snes(d.durationsAt), rows: d.rows)
         source.layout = d.layout
         source.packed = d.packed
+        if d.packed { source.packedBytes = d.packedBytes }
         let palette: [UInt16] = [0] + d.palette + [0, 0, 0]
-        return SpriteDef(id: id, sheet: "sprites/\(id).png", bpp: 4, frames: frames, animations: animations,
-                         palettes: [palette.map { BGR555(word: $0).hex }],
-                         stream: .init(columns: shape.columns, rows: shape.rows, baseTile: slotTile), rom: source)
+        var s = SpriteDef(id: id, sheet: "sprites/\(id).png", bpp: 4, frames: frames, animations: animations,
+                          palettes: [palette.map { BGR555(word: $0).hex }],
+                          stream: .init(columns: shape.columns, rows: shape.rows, baseTile: slotTile), rom: source)
+        s.battle = battle(d.record)
+        return s
+    }
+
+    /// The record's battle fields (+4 bits 2-7, +5 to +9) as the project keeps them.
+    public static func battle(_ r: Record) -> SpriteDef.Battle {
+        SpriteDef.Battle(flags: r.flags, screenOffsetX: r.screenOffsetX, screenOffsetY: r.screenOffsetY,
+                         halfWidth: r.halfWidth, height: r.height, moveSpeed: r.moveSpeed, moveDelay: r.moveDelay)
     }
 
     /// The record's tiles as an indexed PNG, 16 per row.

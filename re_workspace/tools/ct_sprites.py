@@ -1079,6 +1079,73 @@ def compose_enemy(frame, tile_bytes, columns):
     return img
 
 
+# --- Enemy write-back (rom.sprites, ct-enemy): what the checker needs -------------------------
+#
+# The builder (CTEnemySpritePatch) writes a listed enemy's frame records,
+# animation rows, colours 1-12 and record bytes +4 to +9 in place, and its
+# pack re-encoded in place or in free space with the $E4:2000 entry
+# repointed. Record byte +4 keeps bits 0-1 (the layout) and 4, 6 (no reader);
+# +9 keeps bit 3 (no reader): Battle_InitScene tests +4 & $04/$08/$20/$80 and
+# reads +9 & 7 (speed) and +9 >> 4 (delay); the field reads +4 & 3 only.
+
+ENEMY_KEPT_FLAGS = 0x53               # +4: layout bits 0-1 and the unread bits 4 and 6
+ENEMY_KEPT_MOVE = 0x08                # +9: the unread bit 3
+
+
+def enemy_users(rom, offset, value):
+    """Records naming a field value (offset 0 graphics, 1 frame set, 2
+    palette, 3 animation set): (every enemy record 0-254, $E4:F000 records
+    7-255), all-zero NPC records left out (they name set 0 only by being empty)."""
+    enemies, others = [], []
+    for i in range(ENEMY_IDS):
+        if rom[pc(ENEMY_SPR + ENEMY_SPR_BYTES * i) + offset] == value:
+            enemies.append(i)
+    for i in range(SETS, POINTERS):
+        b = rom[pc(SPR_REC + SPR_REC_BYTES * i):pc(SPR_REC + SPR_REC_BYTES * (i + 1))]
+        if any(b) and b[offset] == value:
+            others.append(i)
+    return enemies, others
+
+
+def measured_entries(rom):
+    """$E4:2000 entries read as raw tiles, whose size is the distance to the
+    next pointer in the bank: the PC sets, the graphics of records $F8 and up,
+    and (conservatively) every graphics an NPC record names."""
+    out = set(range(SETS)) | {enemy_record(rom, i)["gfx"] for i in range(ROM_GFX_MIN, ENEMY_IDS)}
+    for i in range(SETS, POINTERS):
+        b = rom[pc(SPR_REC + SPR_REC_BYTES * i):pc(SPR_REC + SPR_REC_BYTES * (i + 1))]
+        if any(b):
+            out.add(b[0])
+    return sorted(out)
+
+
+def enemy_pack_span(rom, i):
+    """The span of record i's pack (records below $F8), from its pointer through its end marker."""
+    import ct_tilesets
+    at = pc(u24(rom, TILES_PTR + 3 * enemy_record(rom, i)["gfx"]))
+    _, _, end = ct_tilesets.unpack_bytes(rom[at:at + 0x10000])
+    return range(at, at + end)
+
+
+def enemy_spans(rom, i):
+    """The spans an enemy write-back may touch for record i: record bytes +4
+    to +9, its frame records, palette, frame-id and duration rows, and its pack."""
+    r = enemy_record(rom, i)
+    _, _, record_bytes, _ = LAYOUTS[r["size"]]
+    frames_at = pc(u24(rom, FRAMES_PTR + 3 * r["frames"]))
+    rows = anim_rows(rom, r["anim"])
+    ids = pc(ANIM_BANK + u16(rom, ANIM_FRAMES + 2 * r["anim"]))
+    durs = pc(ANIM_BANK + u16(rom, ANIM_DURS + 2 * r["anim"]))
+    pal = pc(ANIM_BANK + r["palette"] * PAL_BYTES)
+    rec = pc(ENEMY_SPR + ENEMY_SPR_BYTES * i)
+    out = {"record": range(rec + 4, rec + ENEMY_SPR_BYTES),
+           "frames": range(frames_at, frames_at + record_bytes * enemy_frame_count(rom, r["frames"], record_bytes)),
+           "palette": range(pal, pal + PAL_BYTES), "frameIds": range(ids, ids + 16 * rows), "durations": range(durs, durs + 4 * rows)}
+    if i < ROM_GFX_MIN:
+        out["pack"] = enemy_pack_span(rom, i)
+    return out
+
+
 # --- Synthetic vectors for the Swift twin ------------------------------------------------
 
 class Lcg:

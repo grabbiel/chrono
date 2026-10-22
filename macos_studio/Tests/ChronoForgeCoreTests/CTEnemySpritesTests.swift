@@ -154,7 +154,7 @@ final class CTEnemySpritesTests: XCTestCase {
     }
 
     /// Local ROM: every enemy of layouts 0-2 imports, saves, validates and
-    /// draws its rest frame; layout 3 is left out; rom.sprites refuses them.
+    /// draws its rest frame; layout 3 is left out; an unedited one builds without a write.
     func testImportEveryEnemy() throws {
         let rom = [UInt8](try Repo.romData())
         let raw = rom.count == CTROMBuilder.romSize + 512 ? Array(rom.dropFirst(512)) : rom
@@ -191,11 +191,11 @@ final class CTEnemySpritesTests: XCTestCase {
             }
             XCTAssertGreaterThan(lit, 0, "enemy \(i)")
         }
-        // Enemy sprites are read-only: rom.sprites refuses them.
+        // rom.sprites builds an unedited enemy sprite without a write (CTEnemySpritePatchTests edits them).
         var building = loaded
         building.project.rom = Project.ROMBuild(sprites: ["enemy_000"])
-        XCTAssertThrowsError(try CTROMBuilder.build(base: raw, project: building)) { error in
-            XCTAssertTrue("\(error)".contains("is not ct-pc"), "\(error)")
-        }
+        let (built, report) = try CTROMBuilder.build(base: raw, project: building)
+        XCTAssertEqual(built, raw)
+        XCTAssertEqual(report.enemySprites?.map(\.set), [0])
     }
 }

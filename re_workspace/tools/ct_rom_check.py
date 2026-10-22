@@ -78,6 +78,18 @@ unchanged; each reported set decodes to the reported frames, animations and
 colours with the clean ROM's addresses, counts and block ends, its tile block
 hashes as reported, exactly the reported tiles differ and tile 0 stays blank;
 every unreported set is as in the clean ROM.
+Enemy sprites (tools/ct_sprites.py), when reported (enemySprites): only the
+reported records' bytes +4 to +9 (keeping the layout bits, the unread bits 4
+and 6 of +4 and bit 3 of +9), frame records, frame-id and duration rows,
+colours 1-12 and packs may change, and a pack's $E4:2000 entry only when the
+report relocates it (into confirmed free space, inside one bank); every
+other pointer and record is unchanged and every raw tile block keeps its
+measured end; each reported record decodes to the reported tiles (hash,
+count, changed tiles, tile 0 unchanged), frames, animations, colours and
+record fields, and a written pack unpacks from the reported address with the
+reported size (in place within its old span, or relocated); every unreported
+enemy decodes as in the clean ROM unless it names a part the reported PC
+sets changed.
 Samples (tools/ct_samples.py), when reported: the sample tables are where the
 code's twelve long operands say (moved, with one entry per appended sample,
 only into a confirmed free region when the report says so; else in place);
@@ -396,8 +408,12 @@ def check_sprites(clean, built, report):
     by_set = {s["set"]: s for s in reported}
     check(len(by_set) == len(reported) and all(s["family"] == "ct-pc" and 0 <= s["set"] < csp.SETS for s in reported),
           f"sprite sets {sorted(by_set)}")
+    # Enemy packs the report relocates repoint their $E4:2000 entries (check_enemy_sprites checks them).
+    moved = {s["graphics"] for s in report.get("enemySprites") or [] if (s.get("pack") or {}).get("placement") == "free"}
     tables = range(csp.pc(csp.TILES_PTR), csp.pc(csp.ANIM_DURS) + 2 * csp.POINTERS)
-    check(clean[tables.start:tables.stop] == built[tables.start:tables.stop], "a bank-$E4 sprite pointer table changed")
+    entries = [range(csp.pc(csp.TILES_PTR) + 3 * g, csp.pc(csp.TILES_PTR) + 3 * g + 3) for g in sorted(moved)]
+    check(all(clean[k] == built[k] for k in tables if not any(k in e for e in entries)),
+          "a bank-$E4 sprite pointer table changed")
     recs = range(csp.pc(csp.SPR_REC), csp.pc(csp.SPR_REC) + csp.SPR_REC_BYTES * csp.POINTERS)
     check(clean[recs.start:recs.stop] == built[recs.start:recs.stop], "a sprite record changed")
     for c in range(csp.SETS):
@@ -431,6 +447,111 @@ def check_sprites(clean, built, report):
         check(all(w & 0x3800 == 0 and w & csp.TILE_MASK < len(tb) for w in words), f"{name}: a cell's tile or bits 11-13")
         check(all(0 < x <= 0xFF and i < len(d["frameList"]) for a in d["animationList"]
                   for x, i in zip(a["durations"], a["frames"])), f"{name}: a duration or frame id")
+
+
+def enemy_sprite_zones(clean, report):
+    """The spans the builder may write for each reported enemy sprite."""
+    out = []
+    for s in report.get("enemySprites") or []:
+        if s.get("family") != "ct-enemy" or not 0 <= s.get("set", -1) < csp.ENEMY_IDS:
+            continue
+        out += [r for k, r in csp.enemy_spans(clean, s["set"]).items()]
+        p = s.get("pack")
+        if p and p.get("placement") == "free":
+            at = csp.pc(csp.TILES_PTR + 3 * s["graphics"])
+            out.append(range(at, at + 3))
+    return out
+
+
+def check_enemy_sprites(clean, built, report, inside):
+    reported = report.get("enemySprites") or []
+    if not reported and not report.get("sprites"):
+        return
+    by_rec = {s["set"]: s for s in reported}
+    check(len(by_rec) == len(reported) and all(s["family"] == "ct-enemy" and 0 <= s["set"] < csp.ENEMY_IDS
+                                               and s["layout"] in csp.ASSEMBLED for s in reported),
+          f"enemy sprite records {sorted(by_rec)}")
+    moved = {s["graphics"]: s["pack"] for s in reported if (s.get("pack") or {}).get("placement") == "free"}
+    for g in range(csp.POINTERS):
+        before, after = csp.u24(clean, csp.TILES_PTR + 3 * g), csp.u24(built, csp.TILES_PTR + 3 * g)
+        if g in moved:
+            check(csp.pc(after) == moved[g]["pc"] and after >> 16 == 0xC0 | moved[g]["pc"] >> 16,
+                  f"graphics {g}: $E4:2000 does not point at the reported pack")
+        else:
+            check(after == before, f"graphics {g}: its $E4:2000 entry changed but the report does not relocate it")
+    for i in range(csp.ENEMY_RECORDS):
+        at = csp.pc(csp.ENEMY_SPR + csp.ENEMY_SPR_BYTES * i)
+        a, b = clean[at:at + csp.ENEMY_SPR_BYTES], built[at:at + csp.ENEMY_SPR_BYTES]
+        if i not in by_rec:
+            check(a == b, f"enemy record {i} changed but is not reported")
+            continue
+        check(a[:4] == b[:4] and a[4] & csp.ENEMY_KEPT_FLAGS == b[4] & csp.ENEMY_KEPT_FLAGS
+              and a[9] & csp.ENEMY_KEPT_MOVE == b[9] & csp.ENEMY_KEPT_MOVE,
+              f"enemy record {i}: a part index, the layout or an unread bit changed")
+    for g in csp.measured_entries(clean):
+        check(csp.tile_count(built, g) == csp.tile_count(clean, g), f"graphics {g}: a raw tile block's measured end moved")
+    for i, s in sorted(by_rec.items()):
+        name = f"enemy sprite {s['id']}"
+        try:
+            d, tb = csp.decode_enemy(built, i), csp.enemy_tile_bytes(built, i)[0]
+        except ValueError as e:
+            check(False, f"{name}: its graphics do not unpack, so they are not the reported pack ({e})")
+        d0 = csp.decode_enemy(clean, i)
+        tb0, _ = csp.enemy_tile_bytes(clean, i)
+        check(d["tiles"]["pointer"] == s["tiles"] and len(tb) == s["tileCount"] == len(tb0), f"{name}: its tiles moved or changed count")
+        check(packs.sha(b"".join(tb)) == s["tilesSHA256"], f"{name}: the tiles are not the reported ones")
+        check([t for t in range(len(tb)) if tb[t] != tb0[t]] == s["changedTiles"] and tb[0] == tb0[0],
+              f"{name}: other tiles changed than reported")
+        check((d["frames"]["address"], d["frames"]["count"]) == (s["frames"], s["frameCount"]) == (d0["frames"]["address"], d0["frames"]["count"]),
+              f"{name}: its frame block moved, grew or shrank")
+        check(d["frameList"] == [{"cells": f["cells"], "pieces": f["pieces"]} for f in s["frameList"]],
+              f"{name}: the frame records are not the reported frames")
+        anims = d["animations"]
+        check((anims["frameIds"], anims["durations"], anims["rows"]) == (s["frameIds"], s["durations"], s["rows"])
+              and anims == d0["animations"], f"{name}: its animation rows moved")
+        got = [{k: a[k] for k in ("row", "facing", "frames", "durations")} for a in d["animationList"]
+               if all(f < d["frames"]["count"] for f in a["frames"])]
+        want = [{k: a[k] for k in ("row", "facing", "frames", "durations")} for a in s["animations"]]
+        check(got == want, f"{name}: the animation rows are not the reported animations")
+        check(d["palette"]["address"] == s["palette"] == d0["palette"]["address"]
+              and csp.enemy_palette(built, i) == s["colours"] and all(w < 0x8000 for w in s["colours"]),
+              f"{name}: colours 1-12 are not the reported colours")
+        r = d["record"]
+        check({k: r[k] for k in s["record"]} == s["record"], f"{name}: the record fields are not the reported ones")
+        p = s.get("pack")
+        if p:
+            import ct_tilesets
+            at = csp.pc(csp.u24(built, csp.TILES_PTR + 3 * s["graphics"]))
+            data, _, end = ct_tilesets.unpack_bytes(built[at:at + 0x10000])
+            span = range(at, at + end)
+            check(at == p["pc"] and end == p["packedBytes"] and packs.sha(data) == p["unpackedSHA256"] == s["tilesSHA256"],
+                  f"{name}: the pack is not the reported one")
+            check(span.start >> 16 == (span.stop - 1) >> 16, f"{name}: the pack crosses a bank")
+            old = csp.enemy_pack_span(clean, i)
+            if p["placement"] == "original":
+                check(at == old.start and end <= len(old), f"{name}: a pack in place outgrows its old span")
+            else:
+                check(inside(span) and not (span.start < old.stop and old.start < span.stop), f"{name}: the pack is outside free space")
+    # Unreported enemies: unchanged, unless they show a part a reported PC set changed.
+    pc_parts = set()
+    for s in report.get("sprites") or []:
+        c = s["set"]
+        for part, key in (("tiles", (0, c)), ("frames", (1, c)), ("animations", (3, c)),
+                          ("palette", (2, csp.u8(clean, csp.SPR_REC + csp.SPR_REC_BYTES * c + 2)))):
+            if part in s["changed"]:
+                pc_parts.add(key)
+    for i in range(csp.ENEMY_IDS):
+        if i in by_rec:
+            continue
+        r = csp.enemy_record(clean, i)
+        if any((off, r[k]) in pc_parts for off, k in ((0, "gfx"), (1, "frames"), (2, "palette"), (3, "anim"))):
+            continue
+        try:
+            same = csp.decode_enemy(built, i) == csp.decode_enemy(clean, i) \
+                and csp.enemy_tile_bytes(built, i)[0] == csp.enemy_tile_bytes(clean, i)[0]
+        except ValueError:
+            same = False
+        check(same, f"enemy record {i} decodes differently but is not reported")
 
 
 def check_techs(clean, built, report):
@@ -924,6 +1045,7 @@ def main():
     zones += enemy_zones(report)
     zones += script_zones(clean, report)
     zones += sprite_zones(clean, report)
+    zones += enemy_sprite_zones(clean, report)
     zones += csm.zones(clean, report)
 
     def inside(r):
@@ -982,6 +1104,11 @@ def main():
         if span.start >= ce.AI_FREE_PC:
             new_spans[span.start] = span
     check_sprites(clean, built, report)
+    check_enemy_sprites(clean, built, report, inside)
+    for s in report.get("enemySprites") or []:
+        p = s.get("pack")
+        if p and p["placement"] == "free":
+            new_spans[p["pc"]] = range(p["pc"], p["pc"] + p["packedBytes"])
 
     # New packs and tables.
     table_doc = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -1041,6 +1168,7 @@ def main():
           + (f", {len(report['enemies'])} enemies" if report.get("enemies") is not None else "")
           + (f", {len(report['enemyScripts'])} AI scripts" if report.get("enemyScripts") is not None else "")
           + (f", {len(report['sprites'])} sprites" if report.get("sprites") is not None else "")
+          + (f", {len(report['enemySprites'])} enemy sprites" if report.get("enemySprites") is not None else "")
           + (f", {len(report['samples'])} samples" if report.get("samples") is not None else "") + ")")
 
 
