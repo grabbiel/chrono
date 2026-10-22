@@ -301,6 +301,11 @@ final class CTMapsTests: XCTestCase {
         let assets = try LocationScene.assets(for: m, project: loaded)
         let f = LocationScene.frame(m, assets: assets, cgram: TilesetScene.cgram(assets.palette), cameraX: 0, cameraY: 0, frame: 0)
         let rgba = PPUReferenceRenderer.render(f)
-        XCTAssertGreaterThan(Set(stride(from: 0, to: rgba.count, by: 4).map { Int(rgba[$0]) << 16 | Int(rgba[$0 + 1]) << 8 | Int(rgba[$0 + 2]) }).count, 32)
+        var colours = Set<Int>()
+        for i in stride(from: 0, to: rgba.count, by: 4) {
+            let red = Int(rgba[i]), green = Int(rgba[i + 1]), blue = Int(rgba[i + 2])
+            colours.insert(red << 16 | green << 8 | blue)
+        }
+        XCTAssertGreaterThan(colours.count, 32)
     }
 }
