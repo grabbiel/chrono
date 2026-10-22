@@ -427,6 +427,13 @@ public struct SampleMeta: Codable, Equatable, Sendable {
     public var synth: SynthSpec?        // regenerates the PCM this sample was encoded from
     public var source: SampleSource?    // WAV import settings and measured SNR
     public var fx: SampleFX?            // pitch bend, vibrato, noise and preview key-off
+
+    public init(brr: String, rate: Int? = nil, loop: Bool = false, loopStartSample: Int? = nil, loopEndSample: Int? = nil,
+                adsr: [Int]? = nil, gain: Int? = nil, synth: SynthSpec? = nil, source: SampleSource? = nil, fx: SampleFX? = nil) {
+        self.brr = brr; self.rate = rate; self.loop = loop; self.loopStartSample = loopStartSample
+        self.loopEndSample = loopEndSample; self.adsr = adsr; self.gain = gain
+        self.synth = synth; self.source = source; self.fx = fx
+    }
 }
 
 // MARK: - tilesets/<id>.tileset.json
