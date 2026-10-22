@@ -35,6 +35,7 @@ private struct SongListingsView: View {
     @State private var listings: [String] = []
     @State private var pickROM = false
     @State private var importIndex = 1
+    @State private var newSong = false
 
     var body: some View {
         NavigationSplitView {
@@ -52,6 +53,7 @@ private struct SongListingsView: View {
                     Button("Play", systemImage: "play.fill") { store.playROMSong(importIndex) }
                         .labelStyle(.iconOnly).help("Play this ROM song")
                     Button("Import from ROM…") { pickROM = true }
+                    Button("New…") { newSong = true }.help("Start a song from the template, built into this song number")
                 }.padding(8)
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 260)
@@ -67,6 +69,14 @@ private struct SongListingsView: View {
             listings = store.songListings()
             if selection == nil, let song = LaunchArguments.value("--song") { selection = listings.first { $0.hasSuffix("/" + song) } }
         }
+        .sheet(isPresented: $newSong) {
+            NewSongSheet(song: importIndex) { song, options in
+                if let rel = store.newSong(song, options: options) {
+                    listings = store.songListings()
+                    selection = rel
+                }
+            }
+        }
         .fileImporter(isPresented: $pickROM, allowedContentTypes: [.data], allowsMultipleSelection: false) { picked in
             guard case .success(let urls) = picked, let url = urls.first else { return }
             if let rel = store.importSong(rom: url, song: importIndex) {
@@ -74,6 +84,54 @@ private struct SongListingsView: View {
                 selection = rel
             }
         }
+    }
+}
+
+/// A new song from the template (CTSongTemplate, docs/music_tracker.md):
+/// its sample list, tracks of rests the given length that loop, and tempo
+/// and echo delay; notes are then added in the tracker or piano roll.
+private struct NewSongSheet: View {
+    @State var song: Int
+    let create: (Int, CTSongTemplate.Options) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var samplesText = "1"
+    @State private var tracks = 1
+    @State private var bars = 8
+    @State private var tempo = 0x40
+    @State private var edl = 0
+
+    private var samples: [Int]? {
+        let values = samplesText.split(whereSeparator: { $0 == "," || $0 == " " }).map { Int($0) }
+        return values.isEmpty || values.contains(nil) ? nil : values.map { $0! }
+    }
+
+    var body: some View {
+        Form {
+            Stepper(String(format: "Build into song $%02X", song), value: $song, in: 0...(CTSongISA.romSongCount - 1))
+            TextField("@samples (sample numbers)", text: $samplesText)
+                .help("Audio_SampleTable numbers, 63 on for samples rom.samples appends; track k plays slot k (the last slot for the rest)")
+            Stepper("\(tracks) tracks", value: $tracks, in: 1...8)
+            Stepper("\(bars) bars of 96 steps", value: $bars, in: 1...64)
+            Stepper(String(format: "tempo $%02X", tempo), value: $tempo, in: 1...0xFF)
+            Stepper("EDL \(edl) (echo buffer $\(String(format: "%04X", CTSongEcho.buffer(edl: edl).lowerBound)))", value: $edl, in: 0...15)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Create") {
+                    guard let samples else { return }
+                    let list: [CTSongTemplate.Track] = (0..<tracks).map { CTSongTemplate.Track(slot: min($0, samples.count - 1)) }
+                    var o = CTSongTemplate.Options(samples: samples, tracks: list, steps: 96 * bars)
+                    o.tempo = tempo
+                    o.edl = edl
+                    create(song, o)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(samples == nil)
+            }
+        }
+        .padding()
+        .frame(width: 380)
     }
 }
 

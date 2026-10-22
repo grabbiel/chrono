@@ -365,3 +365,124 @@ struct SynthSheet: View {
         }
     }
 }
+
+/// Use in game: lists the saved sample in rom.samples (a ROM sample it
+/// replaces or the next appended number, the songs whose lists load it, the
+/// tuning from its rate and root note) and shows each song's ARAM budget.
+struct SampleUseInGameView: View {
+    let store: ProjectStore
+    let id: String
+    /// The editor's sidecar differs from the saved one: the build reads the saved files.
+    let unsaved: Bool
+    @State private var listed = false
+    @State private var replace = 0              // 0: append after the ROM's samples
+    @State private var songsText = ""
+    @State private var root = CTSampleTuning.defaultRoot
+    @State private var adsrText = ""
+
+    private var songs: [Int]? {
+        let parts = songsText.split(whereSeparator: { $0 == "," || $0 == " " })
+        let values = parts.map { p in p.hasPrefix("$") ? Int(p.dropFirst(), radix: 16) : Int(p) }
+        return values.contains(nil) ? nil : values.map { $0! }
+    }
+
+    private var entry: Project.ROMBuild.Sample? {
+        guard let songs else { return nil }
+        let adsr: Int? = adsrText.isEmpty ? nil : Int(adsrText.replacingOccurrences(of: "$", with: ""), radix: 16)
+        return .init(id: id, replace: replace == 0 ? nil : replace, songs: songs, rootNote: root, adsr: adsr)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Write this sample into the ROM (rom.samples)", isOn: $listed)
+            if listed {
+                HStack(spacing: 14) {
+                    Picker("Slot", selection: $replace) {
+                        Text("Append (sample \(appendedNumber))").tag(0)
+                        ForEach(1...CTSampleTables.rom.count, id: \.self) { Text("Replace ROM sample \($0)").tag($0) }
+                    }
+                    .frame(width: 260)
+                    TextField("songs, e.g. 2, $1A", text: $songsText).frame(width: 160)
+                        .help("Songs whose sample lists load it (Audio_SongTable numbers); a song built from a listing can name it in @samples instead")
+                    TextField("ADSR $word", text: $adsrText).frame(width: 110)
+                        .help("Empty: the sidecar's envelope (the driver plays ADSR only)")
+                }
+                .font(.caption)
+                tuning
+                if case .failure(let error) = resolved { Text(String(describing: error)).font(.caption).foregroundStyle(.red) }
+                budgets
+            }
+            HStack {
+                Button(listed ? "Save to rom.samples" : "Take out of rom.samples") {
+                    if store.updateROMSample(id, entry: listed ? entry : nil) { reload() }
+                }
+                .disabled(listed && (entry == nil || unsaved))
+                if unsaved { Text("Save the sample first: the build reads the saved .brr and sidecar.").font(.caption).foregroundStyle(.orange) }
+                if store.romSample(id) != nil { Text("listed").font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .onAppear(perform: reload)
+    }
+
+    private var appendedNumber: Int {
+        let others = store.project?.project.rom?.samples.filter { $0.replace == nil && $0.id != id }.count ?? 0
+        return CTSampleTables.rom.count + 1 + others
+    }
+
+    private var resolved: Result<CTSamplePatch.Request, Error>? { entry.map { store.resolveROMSample($0) } }
+
+    @ViewBuilder private var tuning: some View {
+        let rate = store.project?.samples[id]?.rate
+        HStack(spacing: 12) {
+            Stepper("Root note \(CTSongTimeline.noteName(root)) (\(root))", value: $root, in: 0...0x7F)
+            if let rate, let s = CTSampleTuning.solve(rate: rate, rootNote: root) {
+                Text(String(format: "%d Hz: tuning $%04X, pitch $%04X (%+.1f cents)", rate, s.tuning, s.pitch, s.cents))
+                    .monospacedDigit()
+            } else if let rate {
+                let range = CTSampleTuning.roots(rate: rate).map { " (roots \(CTSongTimeline.noteName($0.lowerBound))–\(CTSongTimeline.noteName($0.upperBound)))" } ?? ""
+                Text("no tuning word plays \(rate) Hz at this root" + range).foregroundStyle(.red)
+            } else {
+                Text("the sidecar has no rate").foregroundStyle(.red)
+            }
+        }
+        .font(.caption)
+        .help("The root note is the driver note that plays the sample at its own rate (12 × octave + index, transpose 10); Spc_NotePitch's formula gives the tuning word")
+    }
+
+    /// Each named song's budget with this entry in place (the playback ROM gives the ROM's samples).
+    @ViewBuilder private var budgets: some View {
+        if let entry, let project = store.project, let songs, !songs.isEmpty {
+            let candidate = Self.with(entry, in: project)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(songs, id: \.self) { song in
+                    switch store.songBudget(song, in: candidate) {
+                    case .success(let b):
+                        Text(String(format: "song $%02X: %d samples $%04X–$%04X, echo at $%04X (EDL %d): %d bytes free", song, b.samples.count,
+                                    b.sampleStart, b.sampleEnd, b.echoStart, b.edl, b.freeBytes))
+                            .foregroundStyle(b.fits ? Color.secondary : Color.red)
+                    case .failure(let error):
+                        Text(String(format: "song $%02X: %@", song, "\(error)")).foregroundStyle(.red)
+                    }
+                }
+            }
+            .font(.caption.monospacedDigit())
+        }
+    }
+
+    static func with(_ entry: Project.ROMBuild.Sample, in project: CTProject) -> CTProject {
+        var p = project
+        var spec = p.project.rom ?? Project.ROMBuild()
+        if let i = spec.samples.firstIndex(where: { $0.id == entry.id }) { spec.samples[i] = entry } else { spec.samples.append(entry) }
+        p.project.rom = spec
+        return p
+    }
+
+    private func reload() {
+        guard let e = store.romSample(id) else { listed = false; return }
+        listed = true
+        replace = e.replace ?? 0
+        songsText = e.songs.map { String(format: "$%02X", $0) }.joined(separator: ", ")
+        if let r = e.rootNote { root = r }
+        adsrText = e.adsr.map { String(format: "$%04X", $0) } ?? ""
+    }
+}

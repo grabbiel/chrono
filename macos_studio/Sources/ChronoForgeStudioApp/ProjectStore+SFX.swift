@@ -52,6 +52,76 @@ extension ProjectStore {
         }
     }
 
+    // MARK: Use in game (rom.samples)
+
+    /// Sample `id`'s rom.samples entry, when `rom build` writes it.
+    public func romSample(_ id: String) -> Project.ROMBuild.Sample? {
+        project?.project.rom?.samples.first { $0.id == id }
+    }
+
+    /// The bytes and words `entry` would write (from the saved sidecar and .brr), or why not.
+    public func resolveROMSample(_ entry: Project.ROMBuild.Sample) -> Result<CTSamplePatch.Request, Error> {
+        guard let project else { return .failure(CTSongError("no project")) }
+        return Result {
+            let request = try CTROMBuilder.sampleRequest(entry, project: project)
+            try CTSamplePatch.check(request)
+            return request
+        }
+    }
+
+    /// Lists sample `id` in rom.samples as `entry`, or with nil takes it out.
+    /// An entry the game cannot load is refused with the reason in the status line.
+    @discardableResult
+    public func updateROMSample(_ id: String, entry: Project.ROMBuild.Sample?) -> Bool {
+        guard var candidate = project else { return false }
+        var spec = candidate.project.rom ?? Project.ROMBuild()
+        var note = "took \(id) out of rom.samples"
+        if let entry {
+            switch resolveROMSample(entry) {
+            case .failure(let error):
+                statusMessage = "\(error)"
+                statusIsError = true
+                return false
+            case .success(let r):
+                note = String(format: "rom.samples: %@ %@, tuning $%04X, ADSR $%04X", id,
+                              entry.replace.map { "replaces sample \($0)" } ?? "is appended", r.tuning, r.adsr)
+            }
+            if let i = spec.samples.firstIndex(where: { $0.id == id }) { spec.samples[i] = entry } else { spec.samples.append(entry) }
+        } else {
+            spec.samples.removeAll { $0.id == id }
+        }
+        candidate.project.rom = Self.isEmpty(spec) ? nil : spec
+        do {
+            try candidate.save()
+            project = candidate
+            statusMessage = note
+            statusIsError = false
+            return true
+        } catch {
+            statusMessage = "save failed: \(error)"
+            statusIsError = true
+            return false
+        }
+    }
+
+    /// Song `song`'s ARAM and sequence budget as `rom build` would load it
+    /// with `project`'s rom.samples and rom.songs (or `listing` for its text).
+    public func songBudget(_ song: Int, in project: CTProject? = nil, listing: String? = nil) -> Result<CTSongBudget, Error> {
+        guard let p = project ?? self.project else { return .failure(CTSongError("no project")) }
+        guard let path = playbackROMPath, let rom = try? Self.playbackROM(path) else {
+            return .failure(CTSongError("choose the CT ROM (Sound ROM… in the playback bar) for the budget"))
+        }
+        return Result {
+            var text = listing
+            if text == nil, let rel = p.project.rom?.songs.first(where: { $0.song == song })?.listing {
+                text = try String(contentsOf: p.fileURL(relative: rel), encoding: .utf8)
+            }
+            guard let text else { return try CTProjectSamples.budget(rom: rom, project: p, song: song) }
+            let (data, tables) = try CTSongListing.assembleSong(text)
+            return try CTProjectSamples.budget(rom: rom, project: p, song: song, data: data, tables: tables)
+        }
+    }
+
     /// Plays BRR blocks with a sidecar's settings (unsaved edits included).
     public func playSample(blocks: [UInt8], meta: SampleMeta, title: String) {
         Task { await audio.play(title) { try SPCStream.sample(file: SFXImport.fileBytes(blocks), meta: meta) } }

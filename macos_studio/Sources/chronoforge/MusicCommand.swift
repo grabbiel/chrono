@@ -16,6 +16,11 @@ usage: chronoforge music list <rom.sfc>
        chronoforge music events <rom.sfc|song.ctsong> [song] [--json] [--steps N]
        chronoforge music edit <song.ctsong> <roundtrip|semitone|length|delete|insert|control> ... [--out song.ctsong]
        chronoforge music verify-model <rom.sfc> [--driver-steps N] [--songs a,b,...]
+       chronoforge music import <rom.sfc> --project <p.ctproj> [--songs a,b,...]
+       chronoforge music new --project <p.ctproj> --song N --samples a,b,... [--tracks SLOT[:OCTAVE],...]
+                             [--steps N] [--tempo $XX] [--edl N] [--out audio/songs/new.ctsong]
+       chronoforge music budget <rom.sfc> [--songs a,b,...]
+       chronoforge music sample-check <clean.sfc> <built.sfc> <song> <sample> [--frames N] [--out probe.json]
 
 driver-check --ipl uploads the boot blocks through the supplied 64-byte S-SMP
 IPL image instead of copying them into ARAM. No IPL image is bundled.
@@ -39,9 +44,18 @@ line number (see `music edit` alone for its forms) and checks that it still
 assembles. verify-model reads every ROM song into the model and writes it back
 byte for byte; --driver-steps also plays each on the emulated driver and
 compares its key-ons and step timing with the model's over N steps.
+import writes each ROM song's listing to audio/songs/songNN.ctsong and lists it in rom.songs.
+new writes a template listing (docs/music_tracker.md, "Composing"): a header on track 0, then
+each track's sample (slot k of --samples plays sample $20 + k), volume, pan, octave and
+transpose 10 (note 12 x octave + index), and rests --steps long (default 768) that loop; it is
+listed in rom.songs as song N, which it replaces. budget prints each song's sequence and
+sample ARAM against its echo buffer. sample-check loads <song> of the built ROM on the driver
+(booted from the clean ROM), waits for a voice to key on <sample> and checks its directory
+entry, ARAM bytes, words, pitch (Spc_NotePitch) and the samples the S-DSP decodes for it.
 """
 
 func cmdMusic(_ args: [String]) -> Int32 {
+    if let operation = args.first, ["import", "new", "budget", "sample-check"].contains(operation) { return cmdMusicGame(args) }
     let operations = ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load", "render", "spc-render", "play"]
     if let operation = args.first, ["events", "edit", "verify-model"].contains(operation) { return cmdMusicModel(args) }
     guard let operation = args.first, operations.contains(operation) else {
@@ -416,6 +430,109 @@ func cmdMusicModel(_ args: [String]) -> Int32 {
             print("\(exact) of \(total) songs byte-exact through the model" + (driverSteps != nil ? "; \(passed) of \(checked) match the driver" : ""))
             return exact == total && failures == 0 ? 0 : 1
         }
+    } catch {
+        print("music \(operation) failed: \(error)"); return 1
+    }
+}
+
+// MARK: - Composed songs in the game (import, new, budget, sample-check)
+
+private func cmdMusicGame(_ args: [String]) -> Int32 {
+    let operation = args[0]
+    var positional: [String] = [], options: [String: String] = [:]
+    var i = 1
+    while i < args.count {
+        if args[i].hasPrefix("--") {
+            guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
+            options[args[i]] = args[i + 1]; i += 2
+        } else { positional.append(args[i]); i += 1 }
+    }
+    func numbers(_ key: String) throws -> [Int]? {
+        guard let text = options[key] else { return nil }
+        let values = text.split(separator: ",").map { songNumber(String($0)) }
+        guard !values.contains(nil) else { throw CTSongError("\(key) takes numbers separated by commas") }
+        return values.map { $0! }
+    }
+    do {
+        switch operation {
+        case "import":
+            guard positional.count == 1, let path = options["--project"] else { print(musicUsage); return 2 }
+            let rom = try readROM(positional[0])
+            var p = try CTProject.load(from: URL(fileURLWithPath: path))
+            let songs = try CTSong.romSongs(rom)
+            let wanted = try numbers("--songs") ?? Array(songs.indices)
+            var spec = p.project.rom ?? .init()
+            for n in wanted {
+                guard songs.indices.contains(n) else { throw CTSongError("song \(n) is not 0-\(songs.count - 1)") }
+                let s = songs[n], listing = String(format: "audio/songs/song%02X.ctsong", n)
+                let title = String(format: "song $%02X ($%02X:%04X, %d bytes)", n, s.pointer >> 16, s.pointer & 0xFFFF, s.data.count)
+                let text = try CTSongListing.render(try CTSong(data: s.data), title: title, tables: CTSongTables.rom(rom, song: n))
+                let url = p.fileURL(relative: listing)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(text.utf8).write(to: url, options: .atomic)
+                spec.songs.removeAll { $0.song == n }
+                spec.songs.append(.init(song: n, listing: listing))
+            }
+            spec.songs.sort { $0.song < $1.song }
+            p.project.rom = spec
+            try p.save()
+            print("imported \(wanted.count) songs into \(path) (rom.songs)")
+        case "new":
+            guard positional.isEmpty, let path = options["--project"], let songText = options["--song"],
+                  let song = songNumber(songText), let samples = try numbers("--samples") else { print(musicUsage); return 2 }
+            var tracks: [CTSongTemplate.Track] = []
+            for part in (options["--tracks"] ?? "0").split(separator: ",") {
+                let fields = part.split(separator: ":").map { songNumber(String($0)) }
+                guard (1...2).contains(fields.count), !fields.contains(nil) else { throw CTSongError("--tracks takes SLOT[:OCTAVE],...") }
+                tracks.append(fields.count == 2 ? .init(slot: fields[0]!, octave: fields[1]!) : .init(slot: fields[0]!))
+            }
+            var o = CTSongTemplate.Options(samples: samples, tracks: tracks)
+            if let steps = options["--steps"] { guard let n = Int(steps) else { throw CTSongError("--steps takes a number") }; o.steps = n }
+            if let tempo = options["--tempo"] { guard let n = songNumber(tempo) else { throw CTSongError("--tempo takes a byte") }; o.tempo = n }
+            if let edl = options["--edl"] { guard let n = Int(edl) else { throw CTSongError("--edl takes 0-15") }; o.edl = n }
+            let listing = options["--out"] ?? String(format: "audio/songs/song%02X.ctsong", song)
+            guard !listing.hasPrefix("/"), !listing.split(separator: "/").contains("..") else {
+                throw CTSongError("--out is a path inside the project")
+            }
+            var p = try CTProject.load(from: URL(fileURLWithPath: path))
+            let text = try CTSongTemplate.listing(o, title: String(format: "new song $%02X", song))
+            let url = p.fileURL(relative: listing)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url, options: .atomic)
+            var spec = p.project.rom ?? .init()
+            spec.songs.removeAll { $0.song == song }
+            spec.songs.append(.init(song: song, listing: listing))
+            spec.songs.sort { $0.song < $1.song }
+            p.project.rom = spec
+            try p.save()
+            print(String(format: "wrote %@ (%d tracks, %d steps) and listed it in rom.songs as song $%02X", listing, tracks.count, o.steps, song))
+        case "budget":
+            guard positional.count == 1 else { print(musicUsage); return 2 }
+            let rom = try readROM(positional[0])
+            let count = Int(rom[CTSongISA.songCountPC])
+            var over = 0
+            for song in try numbers("--songs") ?? Array(0..<count) {
+                let b = try CTSongBudget.of(rom: rom, song: song)
+                if !b.fits { over += 1 }
+                print(String(format: "song $%02X  sequence %5d of %d bytes%@  samples %2d: $%04X-$%04X, echo $%04X (EDL %2d), %6d bytes free%@",
+                             song, b.sequenceBytes, b.sequenceMax, b.reachesEffectsBlock ? " (reaches $2F00)" : "", b.samples.count,
+                             b.sampleStart, b.sampleEnd, b.echoStart, b.edl, b.freeBytes, b.fits ? "" : "  OVER"))
+            }
+            return over == 0 ? 0 : 1
+        default:
+            guard positional.count == 4, let song = songNumber(positional[2]), let sample = songNumber(positional[3]) else {
+                print(musicUsage); return 2
+            }
+            let frames = Int(options["--frames"] ?? "4096") ?? 4096
+            let result = try CTSampleProbe.run(clean: try readROM(positional[0]), built: try readROM(positional[1]),
+                                               song: song, sample: sample, frames: frames)
+            let data = try CTProject.jsonEncoder.encode(result)
+            if let out = options["--out"] { try data.write(to: URL(fileURLWithPath: out), options: .atomic) }
+            else { FileHandle.standardOutput.write(data); print() }
+            for c in result.checks where !c.passed { print("FAILED: \(c.name)") }
+            return result.passed ? 0 : 1
+        }
+        return 0
     } catch {
         print("music \(operation) failed: \(error)"); return 1
     }

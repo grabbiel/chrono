@@ -64,7 +64,9 @@ MyGame.ctproj/
            "maps": ["loc_001"],
            "tilesets": ["t12_02", "pal_00"],
            "enemies": ["enemy_005"],
-           "sprites": ["crono"] }
+           "sprites": ["crono"],
+           "samples": [ { "id": "lead", "replace": 7 },
+                        { "id": "bass", "songs": [2], "rootNote": 48, "adsr": 57599 } ] }
 }
 ```
 `flags` entries name a bit of `$7F:0000–$7F:01FF` for scenes (`bit` 0–7). Two
@@ -89,6 +91,22 @@ enemy's stats, rewards and name are written over its `enemy.enemyId`
 `sprites` names `sprites/<id>.sprite.json` files with a `rom` source of family
 `ct-pc`; each set is written in place ([sprites](sprites.md#writing-back)). The
 list is omitted when empty.
+`samples` lists `audio/samples/<id>.brr` files to write into the sample tables
+([SFX Lab](sfx_lab.md#a-project-sample-in-the-game-romsamples)). Each entry has:
+
+- `id`: the sample;
+- `replace`: the ROM sample 1–62 it takes over (absent: appended as 63, 64, …
+  in list order);
+- `songs`: the Audio_SongTable numbers whose sample lists load it;
+- `rootNote`: the driver note that plays it at its sidecar `rate`, from
+  which the tuning word is solved (default 60, or the nearest feasible C);
+- `tuning`: a tuning word given directly instead;
+- `adsr`: the ParamB word (ADSR1 low byte, ADSR2 high byte); absent, it
+  comes from the sidecar's `adsr`;
+- `asIs` with `loopOffset`: the `.brr` blocks and loop word written
+  unchanged, as `sfx import-rom` writes them.
+
+Fields at their defaults are omitted, and the list is omitted when empty.
 
 ## `characters/<id>.json`
 ```json

@@ -167,6 +167,13 @@ a replaced song or event pack, or free space. Then it rewrites the song's
 steps the bank. Song `$18` does so in the ROM, and its old place is reused
 across the bank boundary.
 
+`@samples` takes sample numbers 1–255: the ROM's 62 and samples that
+`rom.samples` appends from 63 on ([SFX Lab](sfx_lab.md#a-project-sample-in-the-game-romsamples)).
+A project sample that names the song is added after the listing's own list.
+The build then refuses any written song whose samples would reach the echo
+buffer (`$F100 − EDL × $800`). `chronoforge music budget <rom>` prints every
+song's sequence and sample budget.
+
 ## Verification
 
 - `ct_spc_seq.py` reads the driver's operand counts and lengths from the ROM and
@@ -197,8 +204,8 @@ across the bank boundary.
   event model in [music_tracker.md](music_tracker.md) does: it plays each track
   step by step as the driver does, and the Studio's tracker and piano roll edit
   listings through it.
-- Samples themselves (BRR data, loop points, tuning and ADSR words) are not
-  written; a song can only list the ROM's 62 samples.
+- Samples are written through `rom.samples`, not through the listing; an
+  `@samples` number above 62 must be one that `rom.samples` appends.
 - The effects block at `$2F00` (sound-effect tracks, reached by `sfx_track1/2`)
   is not decoded or written.
 - The tracker-score format (`.akao.json`) is the Studio's own and is not converted

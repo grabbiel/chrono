@@ -229,6 +229,50 @@ public enum Validator {
                     do { _ = try CTSongListing.assemble(text) } catch { err(4, path, "\(song.listing): \(error)") }
                 } else { err(4, path, "listing \(song.listing) not found") }
             }
+            // Samples (docs/sfx_lab.md): the file, its BRR blocks and loop, the slot and the songs.
+            var sampleIDs = Set<String>(), replacedSamples = Set<Int>()
+            var sampleLengths: [Int: Int] = [:], sampleNumbers: [String: Int] = [:], appendedSamples = 0
+            for s in spec.samples {
+                let path = "project.json rom sample \(s.id)"
+                if !sampleIDs.insert(s.id).inserted { err(4, path, "sample listed twice"); continue }
+                if let n = s.replace, !replacedSamples.insert(n).inserted { err(4, path, "sample \(n) replaced twice") }
+                for song in s.songs where !(0..<CTSongISA.romSongCount).contains(song) {
+                    err(4, path, "song \(song) is not an Audio_SongTable index (0-\(CTSongISA.romSongCount - 1))")
+                }
+                let number = s.replace ?? CTSampleTables.rom.count + 1 + appendedSamples
+                if s.replace == nil { appendedSamples += 1 }
+                sampleNumbers[s.id] = number
+                do {
+                    let request = try CTROMBuilder.sampleRequest(s, project: p)
+                    try CTSamplePatch.check(request)
+                    sampleLengths[number] = request.brr.count
+                } catch { err(4, path, "\(error)") }
+            }
+            if CTSampleTables.rom.count + appendedSamples > CTSampleTables.numberMax {
+                err(4, "project.json rom samples", "at most \(CTSampleTables.numberMax - CTSampleTables.rom.count) samples can be appended")
+            }
+            // Sample budgets of songs built from listings (the listing check above
+            // covers the sequence): at most 16 samples, and project samples that
+            // cannot fit below the echo buffer even from $4700 (the build checks
+            // the exact start with the ROM's own samples).
+            for song in spec.songs {
+                let path = "project.json rom song \(song.song)"
+                guard !song.listing.hasPrefix("/"), !song.listing.split(separator: "/").contains(".."),
+                      let text = try? String(contentsOf: p.fileURL(relative: song.listing), encoding: .utf8),
+                      let tables = try? CTSongListing.assembleSong(text).tables else { continue }
+                guard let own = tables.samples, let echo = tables.echo else { continue }
+                var list = own
+                for s in spec.samples where s.songs.contains(song.song) {
+                    if let n = sampleNumbers[s.id], !list.contains(n) { list.append(n) }
+                }
+                if list.count > 16 { err(4, path, "loads \(list.count) samples; a song loads at most 16") }
+                let known: [Int] = list.compactMap { sampleLengths[$0] }
+                let bytes = known.reduce(0, +)
+                let room = CTSongEcho.buffer(edl: Int(echo[0] & 0x0F)).lowerBound - 0x4700
+                if bytes > room {
+                    err(4, path, "its project samples alone take \(bytes) bytes; at most \(room) fit below the echo buffer")
+                }
+            }
             // Characters: a file with a pc record each, no record twice, values in the game's ranges.
             var characterIDs = Set<String>(), records = Set<Int>()
             for id in spec.characters {

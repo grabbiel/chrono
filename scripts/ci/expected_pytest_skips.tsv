@@ -153,3 +153,5 @@ re_workspace/tests/test_dialogue.py::test_rom_routines_run_as_modelled	local ROM
 re_workspace/tests/test_sprites.py::test_enemy_chronoret_source_claims	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_sprites.py::test_enemy_code_and_data_claims	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_sprites.py::test_rom_unpacker_and_frame_decoder_run_as_decoded_for_some_enemies	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_samples.py::test_tables_and_budgets	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_samples.py::test_rom_song_load	local ROM not present (re_workspace/ct_clean.sfc)

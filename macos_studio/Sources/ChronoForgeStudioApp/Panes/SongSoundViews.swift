@@ -1,5 +1,6 @@
 // SongSoundViews.swift — a song's instrument rack (its @samples row, the ROM's
-// tuning and ADSR words, one-note auditions through the driver) and its echo
+// tuning and ADSR words or a project sample's, the build's budget, one-note
+// auditions through the driver) and its echo
 // designer (EDL, EVOL, EFB, FIR set, echo per track, and their responses).
 import SwiftUI
 import ChronoForgeCore
@@ -11,7 +12,8 @@ struct InstrumentRackView: View {
     let target: Int
     @State private var auditionNumber = 48
     @State private var rack: [CTSongInstrument]?
-    @State private var areaStart: Int?
+    @State private var placed: [CTProjectSamples.Placed] = []
+    @State private var budget: Result<CTSongBudget, Error>?
 
     private var samples: [Int] { model.tables?.samples ?? [] }
 
@@ -30,9 +32,18 @@ struct InstrumentRackView: View {
             Table(rack ?? []) {
                 TableColumn("Slot") { i in Text(String(format: "$%02X", 0x20 + i.slot)).monospaced() }.width(44)
                 TableColumn("ROM sample") { i in
-                    Stepper("\(i.sample)", onIncrement: { setSample(i.slot, min(CTSongISA.sampleMax, i.sample + 1)) },
+                    Stepper("\(i.sample)", onIncrement: { setSample(i.slot, min(sampleCount, i.sample + 1)) },
                             onDecrement: { setSample(i.slot, max(1, i.sample - 1)) })
                 }.width(110)
+                TableColumn("Project sample") { i in
+                    Menu(projectSample(i.sample)?.id ?? "ROM's") {
+                        ForEach(placed, id: \.number) { p in
+                            Button("\(p.id) (sample \(p.number))") { setSample(i.slot, p.number) }
+                        }
+                    }
+                    .disabled(placed.isEmpty || model.tables?.samples == nil)
+                    .help("Load a sample rom.samples writes (SFX Lab › Use in game) in this slot")
+                }.width(130)
                 TableColumn("Tuning") { i in Text(String(format: "$%04X ×%.4f", i.tuning, i.pitchFactor)).monospaced() }.width(130)
                 TableColumn("ADSR") { i in
                     let e = i.envelope
@@ -45,18 +56,25 @@ struct InstrumentRackView: View {
                     Button("Audition", systemImage: "play.fill") {
                         store.audition(slot: i.slot, number: auditionNumber, tables: model.tables ?? .init(), replacing: target)
                     }.labelStyle(.iconOnly)
+                    .disabled(projectSample(i.sample) != nil)
+                    .help(projectSample(i.sample) != nil ? "Auditions play the playback ROM's samples: build the ROM to hear a project sample" : "Audition")
                 }.width(30)
             }
             HStack {
                 Button("Add slot") { setSamples(samples + [samples.last ?? 1]) }.disabled(samples.count >= 16 || model.tables?.samples == nil)
                 Button("Remove last slot") { setSamples(Array(samples.dropLast())) }.disabled(samples.count <= 1)
                 Spacer()
-                if let rack, let areaStart, let edl = CTSongEcho.settings(model.doc, model.timeline ?? .empty).edl {
-                    let used = rack.reduce(0) { $0 + $1.length }
-                    let room = CTSongEcho.buffer(edl: edl).lowerBound - areaStart
-                    Text(String(format: "samples: %d bytes from $%04X; %d free below the echo buffer ($%04X)", used, areaStart,
-                                room - used, CTSongEcho.buffer(edl: edl).lowerBound))
-                        .foregroundStyle(used > room ? .red : .secondary).font(.caption)
+                switch budget {
+                case .success(let b):
+                    Text(String(format: "budget as built into $%02X: samples %d bytes from $%04X, %d free below the echo buffer ($%04X); sequence %d of %d bytes%@",
+                                target, b.sampleBytes, b.sampleStart, b.freeBytes, b.echoStart, b.sequenceBytes, b.sequenceMax,
+                                b.reachesEffectsBlock ? " (reaches the $2F00 effects block)" : ""))
+                        .foregroundStyle(b.fits ? Color.secondary : Color.red).font(.caption)
+                        .help("The build refuses a song whose samples reach the echo buffer or whose sequence reaches $4700")
+                case .failure(let error):
+                    Text(String(describing: error)).foregroundStyle(.secondary).font(.caption)
+                case nil:
+                    EmptyView()
                 }
             }
             overrides
@@ -64,7 +82,13 @@ struct InstrumentRackView: View {
         .padding()
         .onAppear(perform: reload)
         .onChange(of: samples) { _, _ in reload() }
+        .onChange(of: model.text) { _, _ in budget = store.songBudget(target, listing: model.text) }
     }
+
+    /// The ROM's samples and the ones rom.samples appends.
+    private var sampleCount: Int { CTSampleTables.rom.count + placed.filter { $0.number > CTSampleTables.rom.count }.count }
+
+    private func projectSample(_ number: Int) -> CTProjectSamples.Placed? { placed.first { $0.number == number } }
 
     private var uses: [Int: Int] {
         Dictionary(grouping: model.timeline?.tracks.flatMap(\.notes) ?? [], by: { $0.sample ?? -1 }).mapValues(\.count)
@@ -86,8 +110,9 @@ struct InstrumentRackView: View {
     }
 
     private func reload() {
+        placed = store.project.map { CTProjectSamples.placed($0).placed } ?? []
         rack = samples.isEmpty ? [] : store.instrumentRack(samples: samples)
-        if let path = store.playbackROMPath, let rom = try? ProjectStore.playbackROM(path) { areaStart = CTSongInstrument.sampleAreaStart(rom: rom) }
+        budget = store.songBudget(target, listing: model.text)
     }
 
     private func setSample(_ slot: Int, _ number: Int) {

@@ -12,8 +12,17 @@ usage: chronoforge sfx encode <in.wav> [--out out.brr | --project <p.ctproj> --i
                        [--adsr A,D,SL,SR | --gain $XX] [--gain-start 0-127] [--key-off TICK] [--loop-block N]
                        [--bend SEMIS,TICKS] [--vibrato CENTS,PERIOD[,DELAY]] [--noise CLOCK] [--tick-div N]
                        [--envelope env.csv]
+       chronoforge sfx import-rom <rom.sfc> --project <p.ctproj> [--samples 1,2,...]
+       chronoforge sfx use <p.ctproj> <id> [--replace N] [--songs A,B,...] [--root NOTE | --tuning $WORD]
+                       [--adsr $WORD] [--remove]
   Loop points are source samples (snapped to 16-sample BRR blocks); ticks are timer-0 ticks of
   tick-div/8000 s (default 32: 4 ms). SNR and errors compare the S-DSP's decode with the source.
+  import-rom copies the ROM's samples into the project as rom_NN, each listed in rom.samples to be
+  written back as it is. use lists a sample in rom.samples: --replace takes over ROM sample N
+  (1-62), else it is appended after them; --songs adds it to those songs' sample lists; the
+  tuning word comes from the sidecar's rate and the root note (the driver note that plays it at
+  its own pitch: 12 x octave + index with transpose 10) unless --tuning gives it. See
+  docs/sfx_lab.md.
 """
 
 /// Options without a value; `synth --loop` is a flag, `encode --loop` takes START:END.
@@ -107,6 +116,7 @@ private func blocks(of file: [UInt8]) throws -> [UInt8] {
 }
 
 func cmdSFX(_ args: [String]) -> Int32 {
+    if let operation = args.first, ["import-rom", "use"].contains(operation) { return cmdSFXGame(args) }
     guard let operation = args.first, ["encode", "synth", "info", "render"].contains(operation),
           let (positional, options) = parse(Array(args.dropFirst()), flags: operation == "synth" ? ["--verify", "--loop"] : ["--verify"]) else { print(sfxUsage); return 2 }
     do {
@@ -234,4 +244,85 @@ func cmdSFX(_ args: [String]) -> Int32 {
 
 private extension JSONEncoder {
     static var sorted: JSONEncoder { let e = JSONEncoder(); e.outputFormatting = [.sortedKeys]; return e }
+}
+
+/// `sfx import-rom` and `sfx use`: project samples in the game (rom.samples).
+private func cmdSFXGame(_ args: [String]) -> Int32 {
+    let operation = args[0]
+    guard let (positional, options) = parse(Array(args.dropFirst()), flags: ["--remove"]) else { print(sfxUsage); return 2 }
+    func list(_ key: String) throws -> [Int] {
+        guard let text = options[key] else { return [] }
+        let values = text.split(separator: ",").map { number(String($0)) }
+        guard !values.contains(nil) else { throw SFXError("\(key) takes numbers separated by commas") }
+        return values.map { $0! }
+    }
+    do {
+        if operation == "import-rom" {
+            guard positional.count == 1, let path = options["--project"] else { print(sfxUsage); return 2 }
+            let rom = try readROM(positional[0])
+            let tables = try CTSampleTables.locate(rom)
+            var p = try CTProject.load(from: URL(fileURLWithPath: path))
+            let wanted = try list("--samples")
+            var spec = p.project.rom ?? .init()
+            for n in wanted.isEmpty ? Array(1...tables.count) : wanted {
+                let e = try tables.entry(rom, n)
+                let id = String(format: "rom_%02d", n)
+                let brr = tables.brr(rom, e)
+                var meta = SampleMeta(brr: "audio/samples/\(id).brr")
+                let looped = brr.count >= 9 && brr[brr.count - 9] & 2 != 0
+                meta.loop = looped
+                if looped { meta.loopStartSample = e.loopOffset / 9 * 16 }
+                let a1 = e.adsr & 0xFF, a2 = e.adsr >> 8
+                meta.adsr = [a1 & 0x0F, a1 >> 4 & 7, a2 >> 5, a2 & 0x1F]
+                let url = p.fileURL(relative: meta.brr)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(SFXImport.fileBytes(brr)).write(to: url)
+                p.samples[id] = meta
+                spec.samples.removeAll { $0.id == id || $0.replace == n }
+                spec.samples.append(.init(id: id, replace: n, tuning: e.tuning, adsr: e.adsr, asIs: true, loopOffset: e.loopOffset))
+            }
+            spec.samples.sort { ($0.replace ?? Int.max, $0.id) < ($1.replace ?? Int.max, $1.id) }
+            p.project.rom = spec
+            try p.save()
+            print("imported \(wanted.isEmpty ? tables.count : wanted.count) samples into \(path) (rom.samples, written back as they are)")
+            return 0
+        }
+        // use
+        guard positional.count == 2 else { print(sfxUsage); return 2 }
+        var p = try CTProject.load(from: URL(fileURLWithPath: positional[0]))
+        let id = positional[1]
+        guard p.samples[id] != nil else { throw SFXError("no audio/samples/\(id).json") }
+        var spec = p.project.rom ?? .init()
+        if options["--remove"] != nil {
+            spec.samples.removeAll { $0.id == id }
+            p.project.rom = spec
+            try p.save()
+            print("removed \(id) from rom.samples")
+            return 0
+        }
+        var entry = spec.samples.first { $0.id == id } ?? .init(id: id)
+        if let r = options["--replace"] {
+            guard let n = number(r), (1...CTSampleTables.rom.count).contains(n) else { throw SFXError("--replace takes 1-62") }
+            entry.replace = n
+        }
+        if options["--songs"] != nil { entry.songs = try list("--songs") }
+        if let r = options["--root"] { guard let n = number(r) else { throw SFXError("--root takes a note number") }; entry.rootNote = n; entry.tuning = nil }
+        if let t = options["--tuning"] { guard let n = number(t), (0...0xFFFF).contains(n) else { throw SFXError("--tuning takes a word") }; entry.tuning = n }
+        if let a = options["--adsr"] { guard let n = number(a), (0...0xFFFF).contains(n) else { throw SFXError("--adsr takes a word") }; entry.adsr = n }
+        entry.asIs = false
+        entry.loopOffset = nil
+        // Resolve now, so a bad sample is refused before it is listed.
+        let request = try CTROMBuilder.sampleRequest(entry, project: p)
+        if let i = spec.samples.firstIndex(where: { $0.id == id }) { spec.samples[i] = entry } else { spec.samples.append(entry) }
+        p.project.rom = spec
+        try p.save()
+        let tune = request.tune.map { String(format: " (root note %d, %d Hz: pitch $%04X, %.1f cents)", $0.rootNote, $0.rate, $0.pitch, $0.cents) } ?? ""
+        print(String(format: "rom.samples: %@ %@, %d BRR bytes, tuning $%04X%@, ADSR $%04X, songs %@", id,
+                     entry.replace.map { "replaces sample \($0)" } ?? "is appended", request.brr.count, request.tuning, tune,
+                     request.adsr, entry.songs.isEmpty ? "none" : entry.songs.map { String(format: "$%02X", $0) }.joined(separator: ", ")))
+        return 0
+    } catch {
+        print("sfx \(operation) failed: \(error)")
+        return 1
+    }
 }

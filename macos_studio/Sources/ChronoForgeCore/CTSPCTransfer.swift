@@ -120,13 +120,19 @@ public enum CTSPCTransfer {
             let echo = CTSongISA.echoPC + 2 * (song & 0x7F)
             let arguments = [UInt8(song), rom[echo + 1], rom[echo] & 0x0F]
 
+            // The sample tables where the code reads them (a built ROM may have
+            // moved them to append samples: CTSampleTables); a data-only image
+            // without that code has them where US 1.0 does.
+            let tables: CTSampleTables
+            if CTSampleTables.hasNoReaders(rom) { tables = .rom }
+            else { do { tables = try CTSampleTables.locate(rom) } catch { throw Failure.invalidInput("\(error)") } }
             // Audio_CmdLoadSong .copy_list (bankC7.asm:504-526): up to 16 words, 0-ended.
             var list: [Int] = []
             for k in 0..<16 {
                 let number = word(CTSongISA.samplesPC + 32 * song + 2 * k)
                 if number == 0 { break }
-                guard (1...CTSongISA.sampleMax).contains(number) else {
-                    throw Failure.invalidInput("song \(song) lists sample \(number); the sample table has 1...\(CTSongISA.sampleMax)")
+                guard (1...tables.count).contains(number) else {
+                    throw Failure.invalidInput("song \(song) lists sample \(number); the sample table has 1...\(tables.count)")
                 }
                 list.append(number)
             }
@@ -137,7 +143,7 @@ public enum CTSPCTransfer {
             for (slot, number) in list.enumerated() {
                 // Audio_UploadSample (bankC7.asm:1247-1359): length word, then
                 // length / 3 triples; the BNE loop needs a nonzero multiple of 3.
-                var reader = Reader(rom: rom, long: pointer(sampleTablePC + 3 * (number - 1)))
+                var reader = Reader(rom: rom, long: pointer(CTSampleTables.pc(tables.pointers) + 3 * (number - 1)))
                 let length = try reader.length()
                 guard length > 0, length % 3 == 0 else {
                     throw Failure.invalidInput("sample \(number) length \(length) is not a nonzero multiple of 3")
@@ -145,7 +151,7 @@ public enum CTSPCTransfer {
                 let crossesBank = reader.y + length > 0xFFFF, sourcePC = reader.pc
                 let bytes = try reader.bytes(length, stepBank: crossesBank)
                 samples.append(.init(number: number, slot: slot, destination: UInt16(address), length: length,
-                                     loopOffset: word(sampleLoopPC + 2 * (number - 1)), sourcePC: sourcePC,
+                                     loopOffset: word(CTSampleTables.pc(tables.loops) + 2 * (number - 1)), sourcePC: sourcePC,
                                      crossesBank: crossesBank))
                 transfers.append(.init(label: "sample \(number)", destination: UInt16(address), mode: modeTriples, bytes: bytes))
                 address = (address + length) & 0xFFFF
@@ -171,8 +177,8 @@ public enum CTSPCTransfer {
                 }
             }
             transfers.append(.init(label: "directory", destination: songDirectory, mode: modeWords, bytes: directory))
-            transfers.append(.init(label: "parameters A", destination: songParamA, mode: modeWords, bytes: try parameters(paramALong)))
-            transfers.append(.init(label: "parameters B", destination: songParamB, mode: modeWords, bytes: try parameters(paramBLong)))
+            transfers.append(.init(label: "parameters A", destination: songParamA, mode: modeWords, bytes: try parameters(tables.tuning)))
+            transfers.append(.init(label: "parameters B", destination: songParamB, mode: modeWords, bytes: try parameters(tables.adsr)))
 
             // Audio_SendSongData (bankC7.asm:1023-1108): X counts the length down
             // by 3 while it stays >= 0 (BPL, 16-bit), so length / 3 + 1 steps

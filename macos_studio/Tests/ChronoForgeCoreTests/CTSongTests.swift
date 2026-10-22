@@ -100,8 +100,8 @@ final class CTSongTests: XCTestCase {
         let none = try CTSongListing.assembleSong(listing().replacingOccurrences(of: "@notrack $FFFF\n", with: "@notrack $FFFF\n@samples none\n@drums none\n")).tables
         XCTAssertEqual(none, CTSongTables(samples: [], drums: [UInt8](repeating: 0, count: 36)))
         XCTAssertTrue(try CTSongListing.render(try CTSong(data: data), tables: none).contains("@samples none\n@drums none\n"))
-        for (line, expected) in [("@samples 0", "sample numbers 1-62"), ("@samples 63", "sample numbers 1-62"),
-                                 ("@samples +5", "sample numbers 1-62"),
+        for (line, expected) in [("@samples 0", "sample numbers 1-255"), ("@samples 256", "sample numbers 1-255"),
+                                 ("@samples +5", "sample numbers 1-255"),
                                  ("@samples " + Array(repeating: "1", count: 17).joined(separator: " "), "1-16 sample numbers"),
                                  ("@echo $04", "@echo $XX $XX"), ("@drum 12 $00 $00 $00", "@drum 0-11"),
                                  ("@drum 0 $00 $00 $00", "all 12 @drum lines"),
@@ -193,7 +193,7 @@ final class CTSongTests: XCTestCase {
             catch { return "\(error)" }
         }
         XCTAssertTrue(refusal([.init(song: 83, source: "", data: good)]).contains("is not 0-82"))
-        XCTAssertTrue(refusal([.init(song: 1, source: "", data: good, tables: .init(samples: [63]))]).contains("@samples takes"))
+        XCTAssertTrue(refusal([.init(song: 1, source: "", data: good, tables: .init(samples: [63]))]).contains("names sample 63; the ROM has 62"))
         XCTAssertTrue(refusal([.init(song: 1, source: "", data: good, tables: .init(echo: [1]))]).contains("@echo takes 2 bytes"))
         XCTAssertTrue(refusal([.init(song: 1, source: "", data: good), .init(song: 1, source: "", data: good)]).contains("built twice"))
         XCTAssertTrue(refusal([.init(song: 1, source: "", data: good + [UInt8](repeating: 0xEB, count: 9983))]).contains("loads below $4700"))
