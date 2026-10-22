@@ -23,6 +23,52 @@ final class CTSamplePatchTests: XCTestCase {
 
     // MARK: Synthetic
 
+    func testValidatorChecksSampleSettings() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ctsamples-\(UUID().uuidString).ctproj")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.copyItem(at: fixtureURL(), to: dir)
+        var project = try CTProject.load(from: dir)
+        let (file, meta) = try tone()
+        let samplesDir = dir.appendingPathComponent("audio/samples")
+        try FileManager.default.createDirectory(at: samplesDir, withIntermediateDirectories: true)
+        for id in ["tone", "gain", "big"] {
+            var m = meta
+            m.brr = "audio/samples/\(id).brr"
+            if id == "gain" { m.adsr = nil; m.gain = 0x7F }
+            if id == "big" { m.loop = false; m.loopStartSample = nil; m.loopEndSample = nil }
+            // About 44 KB of silence: more than fits between $4700 and the echo buffer at $F100.
+            let silence: [UInt8] = [UInt8](repeating: 0, count: 9 * 4900) + [1, 0, 0, 0, 0, 0, 0, 0, 0]
+            let bytes: [UInt8] = id == "big" ? SFXImport.fileBytes(silence) : file
+            try Data(bytes).write(to: samplesDir.appendingPathComponent("\(id).brr"))
+            project.samples[id] = m
+        }
+        // A composed song whose own list is the tone; a second song over budget.
+        let songsDir = dir.appendingPathComponent("audio/songs")
+        try FileManager.default.createDirectory(at: songsDir, withIntermediateDirectories: true)
+        let listing = try CTSongTemplate.listing(.init(samples: [1], tracks: [.init(slot: 0)], steps: 96))
+        try Data(listing.utf8).write(to: songsDir.appendingPathComponent("a.ctsong"))
+        let long = listing.replacingOccurrences(of: "LOOP0:\n", with: "LOOP0:\n" + String(repeating: "    note C 96\n", count: 12000))
+        try Data(long.utf8).write(to: songsDir.appendingPathComponent("b.ctsong"))
+        var spec = Project.ROMBuild()
+        spec.songs = [.init(song: 5, listing: "audio/songs/a.ctsong"), .init(song: 6, listing: "audio/songs/b.ctsong")]
+        spec.samples = [.init(id: "tone", songs: [5]), .init(id: "big", songs: [5]), .init(id: "gain"),
+                        .init(id: "tone", replace: 3), .init(id: "missing"), .init(id: "x2", replace: 70, songs: [90])]
+        project.samples["x2"] = project.samples["tone"]
+        project.project.rom = spec
+        let messages: [String] = Validator.validate(project).filter { $0.path.hasPrefix("project.json rom") }.map(\.description)
+        let expected = ["sample listed twice", "ADSR envelopes only", "no audio/samples/missing.json", "replace takes one of the ROM's samples",
+                        "song 90 is not an Audio_SongTable index", "its transfer would reach $4700",
+                        "project samples alone take"]
+        for e in expected {
+            XCTAssertTrue(messages.contains { $0.contains(e) }, "\(e) not in \(messages)")
+        }
+        // Without the bad entries the settings are valid.
+        project.project.rom?.samples = [.init(id: "tone", songs: [5])]
+        project.project.rom?.songs = [.init(song: 5, listing: "audio/songs/a.ctsong")]
+        let rest: [ValidationIssue] = Validator.validate(project).filter { $0.path.hasPrefix("project.json rom") }
+        XCTAssertTrue(rest.isEmpty, "\(rest)")
+    }
+
     func testPitchFormulaFollowsTheDriversSteps() {
         // t = 0, h = 0: the table word, shifted by the octave's distance from 4.
         XCTAssertEqual(CTSampleTuning.pitch(note: 48, tuning: 0), 0x0879)
