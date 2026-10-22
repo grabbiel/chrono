@@ -83,6 +83,13 @@ public struct Project: Codable, Equatable, Sendable {
         public var bank: String
         public var addr: String
         public var bit: Int
+        /// "story" for flags the story registry writes (story/flags.json); absent for the maintainer's own.
+        public var origin: String? = nil
+        public var notes: String? = nil
+        public init(symbol: String, bank: String, addr: String, bit: Int, origin: String? = nil, notes: String? = nil) {
+            self.symbol = symbol; self.bank = bank; self.addr = addr; self.bit = bit
+            self.origin = origin; self.notes = notes
+        }
     }
     public struct Encounter: Codable, Equatable, Sendable {
         public var id: String
