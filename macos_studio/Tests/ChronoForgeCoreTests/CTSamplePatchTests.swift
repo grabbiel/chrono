@@ -256,12 +256,13 @@ final class CTSamplePatchTests: XCTestCase {
             XCTAssertThrowsError(try CTROMBuilder.build(base: rom, requests: [], samples: [try request("x", replace: nil, songs: [full])],
                                                         textProfile: nil)) { XCTAssertTrue("\($0)".contains("16 samples"), "\($0)") }
         }
-        // A listing whose @samples leaves the sample out is refused.
+        // A song built from a listing gets the sample after its own @samples row.
         let listing = try CTSongTemplate.listing(.init(samples: [1], tracks: [.init(slot: 0)], steps: 96))
         let (data, tables) = try CTSongListing.assembleSong(listing)
-        XCTAssertThrowsError(try CTROMBuilder.build(base: rom, requests: [], songs: [.init(song: 5, source: "t", data: data, tables: tables)],
-                                                    samples: [try request("y", replace: nil, songs: [5])], textProfile: nil)) {
-            XCTAssertTrue("\($0)".contains("does not load"), "\($0)")
-        }
+        let (built, report) = try CTROMBuilder.build(base: rom, requests: [], songs: [.init(song: 5, source: "t", data: data, tables: tables)],
+                                                     samples: [try request("y", replace: nil, songs: [5])], textProfile: nil)
+        XCTAssertEqual(CTSongTables.rom(built, song: 5).samples, [1, 63])
+        XCTAssertEqual(report.sampleLists, [.init(song: 5, samples: [1, 63])])
+        XCTAssertEqual(report.budgets?.map { $0.song }, [5])
     }
 }

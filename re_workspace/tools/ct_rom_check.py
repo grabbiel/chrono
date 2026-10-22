@@ -71,6 +71,18 @@ unchanged; each reported set decodes to the reported frames, animations and
 colours with the clean ROM's addresses, counts and block ends, its tile block
 hashes as reported, exactly the reported tiles differ and tile 0 stays blank;
 every unreported set is as in the clean ROM.
+Samples (tools/ct_samples.py), when reported: the sample tables are where the
+code's twelve long operands say (moved, with one entry per appended sample,
+only into a confirmed free region when the report says so; else in place);
+each reported sample's pointer, length, BRR bytes (hash), loop, tuning and
+ADSR words are the reported ones, its BRR is whole blocks the S-DSP plays as
+one sample (end flag on the last block only and a loop offset on a block,
+unless kept as it is) and decodes, it lies in free space or a replaced
+sample's old span no other entry uses, and appended samples are numbered from
+63; every other entry is the clean ROM's; only reported songs' sample lists
+change, each to the reported list of numbers the tables hold; every song a
+sample names loads it; and every written song's samples end below its echo
+buffer ($F100 - EDL x $800), as the report's budgets say.
 """
 
 import argparse
@@ -88,6 +100,7 @@ import ct_event_packs as packs  # noqa: E402
 import ct_items as ci  # noqa: E402
 import ct_maps as cm  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
+import ct_samples as csm  # noqa: E402
 import ct_spc_seq as spc  # noqa: E402
 import ct_sprites as csp  # noqa: E402
 import ct_techs as ct  # noqa: E402
@@ -840,6 +853,7 @@ def main():
     zones += tileset_zones(clean, report)
     zones += enemy_zones(report)
     zones += sprite_zones(clean, report)
+    zones += csm.zones(clean, report)
 
     def inside(r):
         return any(r.start >= z.start and r.stop <= z.stop for z in zones)
@@ -858,9 +872,13 @@ def main():
         check(stream(built, packs.to_pc(entries_after[i]))[0] == stream(clean, packs.to_pc(entries_before[i]))[0],
               f"entry {i} no longer unpacks as before")
 
+    # Samples: tables, entries, sample lists and budgets (tools/ct_samples.py).
+    free = zones[:len(rom_layout["freeRegions"])]
+    sample_spans, sample_count = csm.check_samples(clean, built, report, check, inside, free)
+
     # Songs: untouched ones as before, new ones as reported.
     counts, _ = spc.driver_tables(built)
-    new_spans = {}
+    new_spans = dict(sample_spans)
     for (i, _, _, before), (_, pointer, pc, after) in zip(songs_before, songs_after):
         if i not in rebuilt_songs:
             check(after == before, f"song {i} changed")
@@ -876,7 +894,7 @@ def main():
         check(inside(range(pc, pc + 2 + len(data))), f"song {s['song']}: outside free space")
         tables = song_tables_of(s)
         samples = tables.get("samples", [])
-        check(len(samples) <= 16 and all(1 <= x <= spc.SAMPLE_MAX for x in samples), f"song {s['song']}: sample list")
+        check(len(samples) <= 16 and all(1 <= x <= sample_count for x in samples), f"song {s['song']}: sample list")
         check(len(tables.get("echo", b"..")) == 2 and len(tables.get("drums", bytes(36))) == 36, f"song {s['song']}: table sizes")
         for at, row, want in spc.table_rows(tables):
             got = built[at + row * s["song"]:at + row * (s["song"] + 1)]
@@ -947,7 +965,8 @@ def main():
           + (f", {len(report['maps'])} maps" if report.get("maps") is not None else "")
           + (f", {len(report['tilesets'])} tilesets" if report.get("tilesets") is not None else "")
           + (f", {len(report['enemies'])} enemies" if report.get("enemies") is not None else "")
-          + (f", {len(report['sprites'])} sprites" if report.get("sprites") is not None else "") + ")")
+          + (f", {len(report['sprites'])} sprites" if report.get("sprites") is not None else "")
+          + (f", {len(report['samples'])} samples" if report.get("samples") is not None else "") + ")")
 
 
 if __name__ == "__main__":

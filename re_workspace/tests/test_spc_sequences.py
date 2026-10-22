@@ -65,7 +65,7 @@ def test_assembler_bytes_and_refusals(rom, driver_asm):
     ]:
         with pytest.raises(ValueError, match=message):
             spc.assemble(_listing(body), counts, durations)
-    for line, message in [("@samples 0", "sample numbers"), ("@samples 63", "sample numbers"),
+    for line, message in [("@samples 0", "sample numbers"), ("@samples 256", "sample numbers"),
                           ("@echo $04", "@echo"), ("@drum 0 $00 $00 $00", "all 12 @drum"),
                           ("@drums none\n@drum 0 $00 $00 $00", "given twice")]:
         text = _listing(GOOD).replace("@notrack $FFFF\n", f"@notrack $FFFF\n{line}\n")

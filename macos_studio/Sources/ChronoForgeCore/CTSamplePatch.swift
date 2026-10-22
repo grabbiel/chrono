@@ -226,6 +226,7 @@ public enum CTSamplePatch {
         public let songs: [Int]
         public let rootNote: Int?                  // when the tuning came from the rate
         public let rate: Int?
+        public let asIs: Bool                      // bytes kept as they are (block flags not checked)
     }
 
     public struct ReportTables: Codable, Equatable, Sendable {
@@ -328,7 +329,7 @@ public enum CTSamplePatch {
             report.append(.init(id: r.id, number: number, replaced: r.replace != nil, address: CTROMBuilder.snes(pc), pc: pc,
                                 length: r.brr.count, brrSHA256: CTEventPack.sha256(r.brr), loopOffset: r.loopOffset,
                                 tuning: r.tuning, adsr: r.adsr, placement: placement, songs: r.songs.sorted(),
-                                rootNote: r.tune?.rootNote, rate: r.tune?.rate))
+                                rootNote: r.tune?.rootNote, rate: r.tune?.rate, asIs: !r.strict))
         }
 
         // The tables: rewritten in place for replacements only; moved when appending.
@@ -406,8 +407,12 @@ public enum CTSampleProbe {
         public let note: Int?, fine: Int?
         /// The voice's pitch register and Spc_NotePitch's value for that note.
         public let pitch: Int?, formulaPitch: Int?
-        /// Samples the voice decoded, compared with the BRR's S-DSP decode.
+        /// Samples the voice decoded, compared with the BRR's S-DSP decode,
+        /// the filter history at its first decode, and the samples' SHA-256
+        /// (little-endian 16-bit), for an independent decode to compare.
         public let decodedSamples: Int
+        public let history: [Int]
+        public let decodedSHA256: String
         public let transfer: CTSPCTransfer.Report
         public let checks: [CTSPCDriver.Check]
         public let passed: Bool
@@ -415,7 +420,7 @@ public enum CTSampleProbe {
         public var playedRate: Double? { pitch.map { Double(CTSampleTuning.outputRate) * Double($0) / Double(CTSampleTuning.unityPitch) } }
         enum CodingKeys: String, CodingKey {
             case format, song, sample, slot, aram, length, loopOffset, tuning, adsr, voice, note, fine, pitch, formulaPitch
-            case decodedSamples, transfer, checks, passed, playedRate
+            case decodedSamples, history, decodedSHA256, transfer, checks, passed, playedRate
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -425,6 +430,7 @@ public enum CTSampleProbe {
             try c.encodeIfPresent(voice, forKey: .voice); try c.encodeIfPresent(note, forKey: .note)
             try c.encodeIfPresent(fine, forKey: .fine); try c.encodeIfPresent(pitch, forKey: .pitch)
             try c.encodeIfPresent(formulaPitch, forKey: .formulaPitch); try c.encode(decodedSamples, forKey: .decodedSamples)
+            try c.encode(history, forKey: .history); try c.encode(decodedSHA256, forKey: .decodedSHA256)
             try c.encode(transfer, forKey: .transfer); try c.encode(checks, forKey: .checks); try c.encode(passed, forKey: .passed)
             try c.encodeIfPresent(playedRate, forKey: .playedRate)
         }
@@ -475,7 +481,7 @@ public enum CTSampleProbe {
             record("a voice keys on the sample", false)
             return Result(song: song, sample: number, slot: slot, aram: start, length: entry.length, loopOffset: entry.loopOffset,
                           tuning: entry.tuning, adsr: entry.adsr, voice: nil, note: nil, fine: nil, pitch: nil, formulaPitch: nil,
-                          decodedSamples: 0, transfer: load.transfer, checks: checks, passed: false)
+                          decodedSamples: 0, history: [], decodedSHA256: "", transfer: load.transfer, checks: checks, passed: false)
         }
         // Wait for the S-DSP to take the key-on (KON delay 5), then for its first decode.
         let base = v * 12
@@ -512,7 +518,9 @@ public enum CTSampleProbe {
         record("the pitch register is Spc_NotePitch's value", pitch & 0x3FFF == formula & 0x3FFF)
         return Result(song: song, sample: number, slot: slot, aram: start, length: entry.length, loopOffset: entry.loopOffset,
                       tuning: entry.tuning, adsr: entry.adsr, voice: v, note: note, fine: fine, pitch: pitch & 0x3FFF,
-                      formulaPitch: formula & 0x3FFF, decodedSamples: compared, transfer: load.transfer, checks: checks,
+                      formulaPitch: formula & 0x3FFF, decodedSamples: compared, history: [history?.0 ?? 0, history?.1 ?? 0],
+                      decodedSHA256: CTEventPack.sha256(got.prefix(compared).flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8 & 0xFF)] }),
+                      transfer: load.transfer, checks: checks,
                       passed: checks.allSatisfy(\.passed))
     }
 }

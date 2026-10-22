@@ -549,9 +549,8 @@ public enum CTROMBuilder {
         }
 
         // Samples (docs/sfx_lab.md): BRR bytes, table entries (moved when
-        // appending) and the sample-list rows of the songs they join. A song
-        // built from a listing that sets @samples keeps its own row, which
-        // must then load the sample.
+        // appending) and the sample-list rows of the songs they join, after
+        // the song's own row (its listing's @samples when it sets one).
         var sampleReport: [CTSamplePatch.ReportSample] = [], sampleTables: CTSamplePatch.ReportTables?
         var sampleLists: [Report.SampleList] = []
         if !sampleRequests.isEmpty {
@@ -562,13 +561,7 @@ public enum CTROMBuilder {
             sampleReport = applied.samples; sampleTables = applied.tables
             for (song, list) in applied.lists.sorted(by: { $0.key < $1.key }) {
                 guard romSongs.indices.contains(song) else { throw CTROMBuildError("rom.samples names song \(song); songs are 0-\(romSongs.count - 1)") }
-                if let own = listed[song] {
-                    guard own == list else {
-                        throw CTROMBuildError(String(format: "song $%02X: its listing's @samples does not load %@", song,
-                                                     sampleReport.filter { $0.songs.contains(song) }.map(\.id).joined(separator: ", ")))
-                    }
-                    continue
-                }
+                if listed[song] == list { continue }
                 for row in CTSongTables(samples: list).rows(song: song) {
                     write(row.bytes, at: row.pc, String(format: "AudioRom_SongSamples[$%02X]", song))
                 }
