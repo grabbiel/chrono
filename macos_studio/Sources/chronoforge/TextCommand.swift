@@ -115,6 +115,8 @@ private func analysisOutput(_ r: CTTextAnalyzer.Report, json: Bool) throws -> Da
 let textBoxUsage = """
        chronoforge text preview <rom> <TABLE:INDEX | --text "..."> [--page N | --frame F] [--png out.png]
                     [--frames] [--layout-json] [--press N] [--place 1|2] [--style 0-7]
+       chronoforge text preview <rom> --help-line item|tech <N | --text "..."> [--png out.png] [--layout-json]
+                    (an item's or a tech's description in the menu's help line)
        chronoforge text font <rom> [--json]
        chronoforge text fit <rom> <message.txt | dialogue.json> [--json]   (report only: lines past the frame)
 """
@@ -150,7 +152,7 @@ func cmdTextBox(_ args: [String]) -> Int32 {
         if ["--frames", "--layout-json", "--json"].contains(a) {
             flags.insert(a)
             i += 1
-        } else if ["--text", "--page", "--frame", "--png", "--press", "--place", "--style"].contains(a) {
+        } else if ["--text", "--page", "--frame", "--png", "--press", "--place", "--style", "--help-line"].contains(a) {
             guard i + 1 < args.count else { print("missing value for \(a)"); return 2 }
             options[a] = args[i + 1]
             i += 2
@@ -183,6 +185,11 @@ func cmdTextBox(_ args: [String]) -> Int32 {
             break
         }
         let settings = CTDialogueSettings.placeholder(press: press, place: place)
+        if let where_ = options["--help-line"] {
+            guard let helpPlace = CTHelpLine.Place(rawValue: where_) else { print("--help-line takes item or tech"); return 2 }
+            return try helpLinePreview(rom, place: helpPlace, positional: Array(positional.dropFirst()), options: options,
+                                       flags: flags, settings: settings)
+        }
         let layout: CTDialogueLayout
         if let text = options["--text"] {
             guard positional.count == 1 else { print("give a message id or --text, not both"); return 2 }
@@ -347,4 +354,55 @@ private func textFit(_ rom: [UInt8], _ input: URL, json: Bool) throws -> Int32 {
     }
     for f in report.failed { print("  \(f)") }
     return 0
+}
+
+// MARK: - The menu's help line (CTHelpLine)
+
+/// `--help-line item|tech`: description N of the ROM's table, or `--text`, as the menu draws it.
+private func helpLinePreview(_ rom: [UInt8], place: CTHelpLine.Place, positional: [String], options: [String: String],
+                             flags: Set<String>, settings: CTDialogueSettings) throws -> Int32 {
+    let mem = CTDialogueMemory(rom: rom)
+    let line: CTHelpLine
+    var label: String
+    if let text = options["--text"] {
+        guard positional.isEmpty else { print("give a description number or --text, not both"); return 2 }
+        let codec = try CTTextCodec(profile: CTTextProfile.fromROM(Data(rom)))
+        line = try CTHelpLine.bytes(try codec.compileMessage(text), rom: rom, place: place, settings: settings)
+        label = "--text"
+    } else {
+        guard positional.count == 1, let n = parseNumber(positional[0]), (0..<place.count).contains(n) else {
+            print("give a \(place.rawValue) number 0-\(place.count - 1) (decimal or $hex) or --text \"...\""); return 2
+        }
+        line = try CTHelpLine(mem: mem, text: CTHelpLine.stringAddress(mem, place: place, index: n), place: place,
+                              settings: settings, stopAtRunaway: true)
+        label = String(format: "%@ $%02X", place.rawValue, n)
+    }
+    if flags.contains("--layout-json") {
+        FileHandle.standardOutput.write(try jsonLine(line.summary))
+        return 0
+    }
+    var out = ["\(label): \(line.glyphs.count) glyphs in \(line.frames) frames (one a frame), "
+               + "BG3 rows \(line.place.row)-\(line.place.row + 1), map to VRAM "
+               + String(format: "$%04X", line.place.vramMap)]
+    out.append("pen 8-\(line.right): screen x 24-\(line.rightX) of 256; \(line.fits ? "fits" : "OVERFLOWS")")
+    if line.lineCount > 1 { out.append("  \(line.lineCount) lines: only the first is sent to the screen") }
+    if line.pastRow { out.append("  tile words run past column 31 into the next row") }
+    if line.wraps { out.append("  the 8-bit pen wraps") }
+    if let why = line.runaway { out.append("  the game would not survive it: \(why); stopped there") }
+    print(out.joined(separator: "\n"))
+    if let png = options["--png"] {
+        let (backdrop, colours) = CTHelpLine.palette(mem)
+        let rgba = line.renderStrip(backdrop: backdrop, colours: colours)
+        let url = URL(fileURLWithPath: png)
+        try PNG.writeRGBA(width: PPUFrame.width, height: 16, rgba: rgba).write(to: url, options: .atomic)
+        print("wrote \(url.path) (256 x 16, BG3 over the menu's colour 0; the window frame is not drawn)")
+    }
+    return 0
+}
+
+/// `12`, `$0C` or `0x0C`.
+func parseNumber(_ s: String) -> Int? {
+    if s.hasPrefix("$") { return Int(s.dropFirst(), radix: 16) }
+    if s.hasPrefix("0x") { return Int(s.dropFirst(2), radix: 16) }
+    return Int(s)
 }

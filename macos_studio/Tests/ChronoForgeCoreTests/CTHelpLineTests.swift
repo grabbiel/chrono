@@ -114,6 +114,12 @@ final class CTHelpLineTests: XCTestCase {
         let two = try CTHelpLine.bytes([0xA0, 0x05, 0xA1, 0x00], rom: mem.rom, place: .item)
         XCTAssertEqual(two.lineCount, 2)
         XCTAssertFalse(two.fits)
+        // A pen reset without a new line ($06): the next tile count wraps.
+        let reset = try CTHelpLine.bytes([0xA0, 0xA1, 0xA2, 0xA3, 0x06, 0xA0, 0x00], rom: mem.rom, place: .item)
+        XCTAssertNotNil(reset.runaway)
+        XCTAssertFalse(reset.fits)
+        XCTAssertThrowsError(try CTHelpLine.bytes([0xA0, 0xA1, 0xA2, 0xA3, 0x06, 0xA0, 0x00], rom: mem.rom, place: .item,
+                                                  stopAtRunaway: false))
     }
 
     func testEveryROMDescriptionFits() throws {

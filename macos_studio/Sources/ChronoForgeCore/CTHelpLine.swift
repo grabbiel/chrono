@@ -62,35 +62,41 @@ public struct CTHelpLine: Sendable {
     public private(set) var wraps = false
     /// A tile word of the first line went past column 31 of its row.
     public private(set) var pastRow = false
+    /// Why the game's tile loop would run away (a pen reset or wrap: 65536 words), when
+    /// `stopAtRunaway` stopped the line there instead of throwing.
+    public private(set) var runaway: String?
     public private(set) var buffer: [UInt8]
     public private(set) var wram: [Int: UInt8]
 
     /// One line, in the row, no wrap and the pen at most 240.
-    public var fits: Bool { lineCount == 1 && !wraps && !pastRow && right <= CTHelpLineROM.rightLimit }
+    public var fits: Bool {
+        lineCount == 1 && !wraps && !pastRow && runaway == nil && right <= CTHelpLineROM.rightLimit
+    }
     /// The screen x the first line ends at (buffer tile k is map column 2 + k).
     public var rightX: Int { right + 16 }
 
     /// The string at `text` (24-bit, in `mem`) to the decoder's status 0.
     /// `gfx`: the glyph buffer before (the routine never clears it); `wram`:
     /// bank-$7E bytes of the map before (by 16-bit address).
+    /// `stopAtRunaway`: a runaway tile loop ends the line (see `runaway`) instead of throwing.
     public init(mem: CTDialogueMemory, text: Int, place: Place, settings: CTDialogueSettings = .placeholder(),
-                gfx: [UInt8]? = nil, wram: [Int: UInt8] = [:], maxFrames: Int = 4000) throws {
+                gfx: [UInt8]? = nil, wram: [Int: UInt8] = [:], maxFrames: Int = 4000, stopAtRunaway: Bool = false) throws {
         var m = mem
         for (k, v) in settings.ram() { m.ram[CTDialogueMemory.canon(k)] = v }
         self.place = place
         self.buffer = gfx ?? [UInt8](repeating: 0, count: CTHelpLineROM.gfxBytes)
         self.wram = wram
-        try run(m, text: text, maxFrames: maxFrames)
+        try run(m, text: text, maxFrames: maxFrames, stopAtRunaway: stopAtRunaway)
     }
 
     /// Description bytes overlaid at $C8:0000 on `rom`.
     public static func bytes(_ text: [UInt8], rom: [UInt8], place: Place,
-                             settings: CTDialogueSettings = .placeholder()) throws -> CTHelpLine {
+                             settings: CTDialogueSettings = .placeholder(), stopAtRunaway: Bool = true) throws -> CTHelpLine {
         let at = 0xC80000
         guard text.count <= 0x10000 else { throw CTDialogueError("description too long") }
         var mem = CTDialogueMemory(rom: rom)
         for (i, b) in text.enumerated() { mem.ram[at + i] = b }
-        return try CTHelpLine(mem: mem, text: at, place: place, settings: settings)
+        return try CTHelpLine(mem: mem, text: at, place: place, settings: settings, stopAtRunaway: stopAtRunaway)
     }
 
     /// The ROM's string `index` of the place's table (16-bit pointers into its bank).
@@ -121,7 +127,7 @@ public struct CTHelpLine: Sendable {
         return out
     }
 
-    private mutating func run(_ mem: CTDialogueMemory, text: Int, maxFrames: Int) throws {
+    private mutating func run(_ mem: CTDialogueMemory, text: Int, maxFrames: Int, stopAtRunaway: Bool) throws {
         let row = place.dest & 0xFFC0
         for i in 0..<CTHelpLineROM.mapBytes { wram[row + i] = 0 }
         var glyphCount = 0, col = 0, penStart = CTHelpLineROM.penFirst
@@ -152,7 +158,11 @@ public struct CTHelpLine: Sendable {
                 let count = (p - tmp02) & 0xFFFF
                 guard count != 0 && count <= 0x40 else {
                     let n = count == 0 ? 0x10000 : count
-                    throw CTDialogueError("frame \(frames): the tile loop would write \(n) words (pen \(tw.pen), last tile pen \(penStart))")
+                    let why = "frame \(frames): the tile loop would write \(n) words (pen \(tw.pen), last tile pen \(penStart))"
+                    guard stopAtRunaway else { throw CTDialogueError(why) }
+                    runaway = why
+                    frames += 1
+                    return
                 }
                 var a = ((tmp02 - 1) & 0xFFFF) + tileWord
                 let carry = a >> 16

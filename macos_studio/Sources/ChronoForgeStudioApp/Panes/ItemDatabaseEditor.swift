@@ -235,6 +235,15 @@ private struct ItemForm: View {
             }
             if let text = item.description, !text.isEmpty {
                 GridRow {
+                    Text("In the menu").foregroundStyle(.secondary)
+                    HelpLinePreviewView(source: .text(text), place: .item, romPath: romPath,
+                                        names: CTDialogueSettings.projectNames(project), scale: 1.5)
+                        .help(String(format: "The menu's help line for item $%02X: Menu_DrawDescText's VWF line on BG3 "
+                                     + "rows 2-3, live as you type (the window frame is not drawn)", item.rom?.itemId ?? 0))
+                }
+            }
+            if let text = item.description, !text.isEmpty {
+                GridRow {
                     Text("In a dialogue box").foregroundStyle(.secondary)
                     DialoguePreviewView(source: .text(text), romPath: romPath, scale: 1.5)
                         .help("The text through the field's dialogue box (font, widths, frame, pacing); "
