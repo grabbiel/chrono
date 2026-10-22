@@ -167,30 +167,12 @@ re_workspace/.venv/bin/python re_workspace/tools/ct_story.py xref|graph|code|che
 
 ### Embedded runtime
 
-Goal: play one location or scene in a native window with live flag and
-coroutine inspection.
-
-- **Scheduler**: `EventScheduler` already runs Studio scenes as cooperative
-  objects with CT call levels, preemption and retry/wait semantics. The runtime
-  runs ROM packs instead: a `CTEventVM` steps `CTEventPack` instructions per
-  object (`Obj_ScriptPos`, `Obj_Unk1C00` levels, the `$7F:0580` save tables, the
-  five-opcode budget of `Field_Unk68`) with the semantics of `event_vm_isa.json`.
-  Each opcode family gets an executable model checked against the ROM handler in
-  ChronoRET's interpreter, as `ct_story.py check --run` does for `$65/$66/$56`
-  and `verify_event_lowering.py` for the calls; unmodelled opcodes stop the
-  object with a visible reason.
-- **State**: one `WRAMModel` with the story block, event words, object tables and
-  `Loc_*`; the registry names its story bytes, so the inspector shows
-  `flag_7F00A6_1` (or the maintainer's name) changing, with the instruction that
-  changed it.
-- **Picture and sound**: the Maps module's tilesets and `SNESPPU`/Metal views
-  for the location, sprites from the Sprites module, music through
-  `AKAOAudioEngine`. Movement opcodes animate object positions in tiles.
-- **Inspector**: per object its function, level, position, wait state and call
-  stack; breakpoints on a flag symbol or an instruction; flags editable before a
-  run (the Execution Timeline's initial flags, generalised).
-- **Warps**: a location change loads the destination's pack and keeps WRAM, so
-  the world graph can be walked and its guards observed.
+Built in slice 2: see [runtime.md](runtime.md). `CTEventVM` runs the ROM packs
+with each opcode family checked against its handler, `CTFieldRuntime` runs the
+field frame, and the Studio's **Play** window (from the Maps, Scenes or Story
+pane) shows the story flags by registry symbol with the instruction that
+changed them, breakpoints on a flag or an instruction, and flags editable
+before a run. Music is not played yet.
 
 ### `.app` and `.sfc` compiler
 

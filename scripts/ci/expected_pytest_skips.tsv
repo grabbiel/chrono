@@ -157,3 +157,4 @@ re_workspace/tests/test_samples.py::test_tables_and_budgets	local ROM not presen
 re_workspace/tests/test_samples.py::test_rom_song_load	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_enemies.py::test_script_region_claims	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_enemies.py::test_rom_script_reader_follows_a_moved_script	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_event_vm.py::test_party_control_agrees_with_the_rom	local ROM not present (re_workspace/ct_clean.sfc)
