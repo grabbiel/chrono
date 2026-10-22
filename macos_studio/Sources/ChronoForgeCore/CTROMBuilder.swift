@@ -1,5 +1,5 @@
 // Writes event packs, their message tables, songs, playable-character
-// records, techs, items, maps and tilesets into a copy of the base ROM.
+// records, techs, items, maps, tilesets and enemies into a copy of the base ROM.
 // Layout facts and their evidence: CTROMLayout.swift / docs/rom_builder.md.
 import Foundation
 
@@ -51,7 +51,26 @@ public enum CTROMBuilder {
         }
     }
 
+    /// One enemy to write: its stat and reward records over the base ROM's
+    /// `enemy.enemyId`, and its name when given and changed.
+    public struct EnemyRequest: Sendable {
+        public let id: String
+        public let enemy: CharacterDef.Enemy
+        public let name: String?
+        public init(id: String, enemy: CharacterDef.Enemy, name: String? = nil) {
+            self.id = id; self.enemy = enemy; self.name = name
+        }
+    }
+
     public struct Report: Codable, Equatable, Sendable {
+        public struct Enemy: Codable, Equatable, Sendable {
+            public let id: String
+            public let enemyId: Int
+            public let address: String                 // the stat record
+            public let pc: Int
+            public let name: String?                   // written (absent: left as it was)
+            public let enemy: CharacterDef.Enemy
+        }
         public struct Character: Codable, Equatable, Sendable {
             public let id: String
             public let charId: Int
@@ -125,6 +144,7 @@ public enum CTROMBuilder {
         public var maps: [CTMapPatch.ReportMap]? = nil             // absent: not requested
         public var tilesets: [CTTilesetPatch.ReportTileset]? = nil // absent: not requested
         public var relocations: [Relocation]? = nil               // absent: nothing moved
+        public var enemies: [Enemy]? = nil                        // absent: none requested
     }
 
     // MARK: Project entry point
@@ -142,9 +162,9 @@ public enum CTROMBuilder {
     public static func build(base: [UInt8], project: CTProject) throws -> (rom: [UInt8], report: Report) {
         guard let spec = project.project.rom,
               !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items
-                && spec.maps.isEmpty && spec.tilesets.isEmpty) else {
+                && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty) else {
             throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters, rom.techs, rom.items, " +
-                                  "rom.maps or rom.tilesets to build")
+                                  "rom.maps, rom.tilesets or rom.enemies to build")
         }
         func inside(_ path: String) -> Bool { !path.hasPrefix("/") && !path.split(separator: "/").contains("..") }
         var requests: [Request] = []
@@ -216,8 +236,13 @@ public enum CTROMBuilder {
             }
             return CTTilesetPatch.Request(tileset: ts, sheet: try tiles(ts.sheet), animSheet: try tiles(ts.animSheet))
         }
+        let enemies = try spec.enemies.map { id -> EnemyRequest in
+            guard let c = project.characters[id] else { throw CTROMBuildError("enemy \(id): no characters/\(id).json") }
+            guard let e = c.enemy else { throw CTROMBuildError("enemy \(id) has no enemy record; import the ROM's enemies") }
+            return EnemyRequest(id: id, enemy: e, name: CTEnemyROM.writableName(c))
+        }
         return try build(base: base, requests: requests, songs: songs, characters: characters, techs: techs,
-                         items: items, maps: maps, tilesets: tilesets, textProfile: project.textProfile)
+                         items: items, maps: maps, tilesets: tilesets, enemies: enemies, textProfile: project.textProfile)
     }
 
     /// `block` in its old span `home` (now unused) when it fits, else in a
@@ -238,6 +263,7 @@ public enum CTROMBuilder {
     public static func build(base input: [UInt8], requests: [Request], songs songRequests: [SongRequest] = [],
                              characters characterRequests: [CharacterRequest] = [], techs: TechSystemDef? = nil,
                              items: ItemsRequest? = nil, maps: [GameMap] = [], tilesets: [CTTilesetPatch.Request] = [],
+                             enemies enemyRequests: [EnemyRequest] = [],
                              textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
@@ -273,6 +299,16 @@ public enum CTROMBuilder {
         if let techs {
             try CTTechROM.check(techs)
             try CTTechROM.check(techs, against: CTTechROM.decode(rom: rom, codec: nil))
+        }
+        var seenEnemies = Set<Int>(), seenEnemyIDs = Set<String>()
+        var enemyWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
+        for e in enemyRequests {
+            guard seenEnemyIDs.insert(e.id).inserted else { throw CTROMBuildError("enemy \(e.id) is built twice") }
+            try CTEnemyROM.check(e.enemy, name: e.name)
+            guard seenEnemies.insert(e.enemy.enemyId).inserted else {
+                throw CTROMBuildError("enemy \(e.id): record \(e.enemy.enemyId) is built twice")
+            }
+            enemyWrites += try CTEnemyROM.writes(e.enemy, id: e.id, name: e.name, base: rom)
         }
         var itemWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
         if let items {
@@ -463,18 +499,28 @@ public enum CTROMBuilder {
         }
         // Items: records, names and ItemBoosts in place; the descriptions repacked in their own span.
         for w in itemWrites { write(w.bytes, at: w.pc, w.what) }
+        // Enemies: the stat and reward records field by field, the name in place (docs/enemies.md).
+        for w in enemyWrites { write(w.bytes, at: w.pc, w.what) }
+        let enemyReport = enemyRequests.map { e -> Report.Enemy in
+            let pc = CTEnemyROM.statsPC(e.enemy.enemyId)
+            let wroteName = enemyWrites.contains { $0.what == "enemy \(e.id) name" }
+            let named = wroteName ? e.name : nil
+            return .init(id: e.id, enemyId: e.enemy.enemyId, address: snes(pc), pc: pc, name: named, enemy: e.enemy)
+        }
 
         let sum = checksum(rom)
         write([UInt8(~sum & 0xFF), UInt8(~sum >> 8 & 0xFF), UInt8(sum & 0xFF), UInt8(sum >> 8)],
               at: CTROMLayout.complementPC, "checksum")
         // Drop writes that changed nothing (an identical rebuild), keeping the report about real edits.
         let changed = writes.filter { w in (w.pc..<(w.pc + w.length)).contains { rom[$0] != base[$0] } }
-        return (rom, Report(schema: "ct-rom-build/1", baseSHA256: CTEventPack.sha256(base),
+        var report = Report(schema: "ct-rom-build/1", baseSHA256: CTEventPack.sha256(base),
                             outputSHA256: CTEventPack.sha256(rom), checksum: sum, packs: packs,
                             messageTables: tables, songs: songs, characters: characters.isEmpty ? nil : characters,
                             techs: techs, items: items?.items, itemTables: items?.tables,
                             writes: changed, freeBytesLeft: space.total, maps: mapReport, tilesets: tilesetReport,
-                            relocations: relocations.isEmpty ? nil : relocations))
+                            relocations: relocations.isEmpty ? nil : relocations)
+        report.enemies = enemyReport.isEmpty ? nil : enemyReport
+        return (rom, report)
     }
 
     /// Checks LocLoad_CheckEvtData makes after unpacking, and that the pack

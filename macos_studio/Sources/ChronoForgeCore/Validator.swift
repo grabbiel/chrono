@@ -45,8 +45,11 @@ public enum Validator {
             }
         }
         for enc in pr.encounters {
-            for e in enc.enemies where p.characters[e] == nil {
-                err(1, "project.json", "encounter \(enc.id) references missing enemy \"\(e)\"")
+            for e in enc.enemies {
+                guard let c = p.characters[e] else {
+                    err(1, "project.json", "encounter \(enc.id) references missing enemy \"\(e)\""); continue
+                }
+                if c.kind != "enemy" { warn(1, "project.json", "encounter \(enc.id): \"\(e)\" is kind \"\(c.kind)\", not an enemy") }
             }
         }
         for (id, c) in p.characters {
@@ -237,6 +240,16 @@ public enum Validator {
                 if let party = p.party {
                     do { try CTCharacterROM.check(r, growth: c.growth, party: party) } catch { err(4, "characters/\(id).json", "\(error)") }
                 } else { warn(4, path, "no party.json: equipment and ranges are checked only by the build") }
+            }
+            // Enemies: a file with an enemy record each, no enemy id twice, values in the game's ranges.
+            var enemyFiles = Set<String>(), enemyIDs = Set<Int>()
+            for id in spec.enemies {
+                let path = "project.json rom enemy \(id)"
+                if !enemyFiles.insert(id).inserted { err(4, path, "enemy built twice"); continue }
+                guard let c = p.characters[id] else { err(4, path, "no characters/\(id).json"); continue }
+                guard let e = c.enemy else { err(4, path, "no enemy record; import the ROM's enemies"); continue }
+                if !enemyIDs.insert(e.enemyId).inserted { err(4, path, "enemy \(e.enemyId) built twice") }
+                do { try CTEnemyROM.check(e, name: CTEnemyROM.writableName(c)) } catch { err(4, "characters/\(id).json", "\(error)") }
             }
             if spec.techs {
                 if let system = p.techSystem {
