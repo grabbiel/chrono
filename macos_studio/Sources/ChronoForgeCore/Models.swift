@@ -312,6 +312,8 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
     public var stream: Stream?
     /// Where an import read the sprite (for write-back).
     public var rom: ROMSource?
+    /// ct-enemy: the record's battle fields ($E4:F600 +4 to +9; absent: not written).
+    public var battle: Battle? = nil
 
     public init(id: String, sheet: String, bpp: Int = 4, frames: [Frame] = [], animations: [Animation] = [],
                 palettes: [[String]]? = nil, stream: Stream? = nil, rom: ROMSource? = nil) {
@@ -388,6 +390,23 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         public var rows: Int
         public var layout: Int? = nil  // ct-enemy: the frame layout (size class 0-2; absent = 0)
         public var packed: Bool? = nil // ct-enemy: the graphics are unpacked from `tiles` (absent = raw)
+        public var packedBytes: Int? = nil // ct-enemy, packed: the pack's size in the base ROM (its in-place budget)
+    }
+    /// An enemy record's battle fields, as Battle_InitScene reads them
+    /// (docs/sprites.md, "Enemy write-back").
+    public struct Battle: Codable, Equatable, Sendable {
+        public var flags: Int          // +4 bits 2-7 (the game tests 2, 3, 5 and 7; 4 and 6 stay as imported)
+        public var screenOffsetX: Int  // +5, 0-255
+        public var screenOffsetY: Int  // +6, 0-255
+        public var halfWidth: Int      // +7, 0-255
+        public var height: Int         // +8, 0-255
+        public var moveSpeed: Int      // +9 bits 0-2
+        public var moveDelay: Int      // +9 bits 4-7
+        public init(flags: Int, screenOffsetX: Int, screenOffsetY: Int, halfWidth: Int, height: Int,
+                    moveSpeed: Int, moveDelay: Int) {
+            self.flags = flags; self.screenOffsetX = screenOffsetX; self.screenOffsetY = screenOffsetY
+            self.halfWidth = halfWidth; self.height = height; self.moveSpeed = moveSpeed; self.moveDelay = moveDelay
+        }
     }
     public struct Box: Codable, Equatable, Sendable {
         public var x: Int, y: Int, w: Int, h: Int

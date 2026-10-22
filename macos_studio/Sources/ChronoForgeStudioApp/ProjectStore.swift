@@ -168,6 +168,26 @@ public final class ProjectStore {
         }
     }
 
+    /// Adds or removes a sprite in the list `rom build` writes (`rom.sprites`).
+    public func setROMSprite(_ id: String, listed: Bool) -> Bool {
+        guard var candidate = project else { return false }
+        var spec = candidate.project.rom ?? Project.ROMBuild()
+        spec.sprites.removeAll { $0 == id }
+        if listed { spec.sprites.append(id); spec.sprites.sort() }
+        candidate.project.rom = Self.isEmpty(spec) ? nil : spec
+        do {
+            try candidate.save()
+            project = candidate
+            statusMessage = listed ? "\(id) is written to the ROM (rom.sprites)" : "\(id) is no longer written to the ROM"
+            statusIsError = false
+            return true
+        } catch {
+            statusMessage = "save failed: \(error)"
+            statusIsError = true
+            return false
+        }
+    }
+
     /// Saves whether `rom build` writes tech_system.json's tables (`rom.techs`).
     public func updateROMTechs(_ on: Bool) -> Bool {
         guard var candidate = project else { return false }

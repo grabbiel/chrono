@@ -95,3 +95,4 @@ ChronoForgeCoreTests.CTFieldRuntimeTests/testAnExitWarpsAndKeepsWRAM            
 ChronoForgeCoreTests.CTFieldRuntimeTests/testDebuggerLogsFlagChangesAndStopsOnBreakpoints       skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testThePictureDrawsTheObjects                          skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testSummaryNamesTheLimitations                         skip      # local ROM
+ChronoForgeCoreTests.CTEnemySpritePatchTests/testImportThenBuildIsIdentical                 skip      # local ROM

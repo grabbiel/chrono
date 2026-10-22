@@ -308,3 +308,41 @@ def test_rom_unpacker_and_frame_decoder_run_as_decoded_for_some_enemies(rom, chr
     # The full run (every enemy) is ct_sprites.py check --run.
     claims = cs.enemy_run_claims(rom, ref=chronoret, ids=(0, 2, 26, 117, 253))
     assert len(claims) == 2 and not failed(claims)
+
+
+def test_enemy_users_count_every_enemy_and_non_empty_npc_records():
+    image, _ = synthetic_enemy_image()
+    assert cs.enemy_users(image, 0, 10) == ([0, 2], [])
+    assert cs.enemy_users(image, 0, 11) == ([1], [])
+    assert cs.enemy_users(image, 3, 3) == ([0, 2], [])
+    image = bytearray(image)
+    image[cs.pc(cs.SPR_REC + cs.SPR_REC_BYTES * 7)] = 11                 # an NPC record naming graphics 11
+    assert cs.enemy_users(bytes(image), 0, 11) == ([1], [7])
+    enemies, others = cs.enemy_users(bytes(image), 1, 0)                 # frame set 0: record 7, not the all-zero ones
+    assert others == [7] and 0xF8 in enemies
+
+
+def test_measured_entries_are_raw_tile_blocks():
+    image, _ = synthetic_enemy_image()
+    assert cs.measured_entries(image) == list(range(cs.SETS))          # record $F8 shows PC set 0
+    image = bytearray(image)
+    image[cs.pc(cs.SPR_REC + cs.SPR_REC_BYTES * 7)] = 11
+    image[cs.pc(cs.ENEMY_SPR + cs.ENEMY_SPR_BYTES * 0xF9)] = 12
+    assert cs.measured_entries(bytes(image)) == list(range(cs.SETS)) + [11, 12]
+
+
+def test_enemy_spans_cover_the_write_back():
+    image, _ = synthetic_enemy_image()
+    spans = {i: cs.enemy_spans(image, i) for i in (0, 1, 2, 0xF8)}
+    for i, s in spans.items():
+        assert s["record"] == range(cs.pc(cs.ENEMY_SPR + cs.ENEMY_SPR_BYTES * i) + 4,
+                                    cs.pc(cs.ENEMY_SPR + cs.ENEMY_SPR_BYTES * (i + 1)))
+        assert len(s["palette"]) == cs.PAL_BYTES and len(s["frameIds"]) == 4 * len(s["durations"])
+    assert [len(spans[i]["frames"]) for i in (0, 1, 2)] == [6 * 40, 5 * 80, 4 * 120]
+    assert spans[0]["pack"] == spans[2]["pack"] != spans[1]["pack"]     # records 0 and 2 share graphics 10
+    assert "pack" not in spans[0xF8]
+    for i in (0, 1):
+        s = spans[i]["pack"]
+        assert cs.pc(cs.u24(image, cs.TILES_PTR + 3 * cs.enemy_record(image, i)["gfx"])) == s.start
+        data, _, end = __import__("ct_tilesets").unpack_bytes(image[s.start:s.start + 0x10000])
+        assert end == len(s) and len(data) == 32 * (30, 50)[i]
