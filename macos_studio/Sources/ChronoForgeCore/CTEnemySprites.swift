@@ -72,6 +72,7 @@ public enum CTEnemySpriteROM {
         let packed = i < romGfxMin
         if packed {
             let start = CTSpriteROM.pc(tilesAt)
+            guard start < rom.count else { throw CTROMBuildError(String(format: "enemy %d: graphics pointer %@ is outside the ROM", i, CTSpriteROM.snes(tilesAt))) }
             let src = Array(rom[start..<min(rom.count, start + 0x10000)])
             let data: [UInt8]
             do { data = try LZSS.decompressStream(src).out }
@@ -79,6 +80,9 @@ public enum CTEnemySpriteROM {
             tiles = data.chunked(CTSpriteROM.tileBytes).filter { $0.count == CTSpriteROM.tileBytes }
         } else {
             let n = CTSpriteROM.tileCount(rom, set: r.gfx)
+            guard CTSpriteROM.pc(tilesAt) + 32 * n <= rom.count else {
+                throw CTROMBuildError(String(format: "enemy %d: tiles at %@ run past the ROM", i, CTSpriteROM.snes(tilesAt)))
+            }
             tiles = (0..<n).map { Array(rom[(CTSpriteROM.pc(tilesAt) + 32 * $0)..<(CTSpriteROM.pc(tilesAt) + 32 * ($0 + 1))]) }
         }
         let framesAt = CTSpriteROM.u24(rom, CTSpriteROM.framesPtr + 3 * r.frames)
@@ -86,6 +90,9 @@ public enum CTEnemySpriteROM {
         var frames: [CTSpriteROM.Frame] = []
         for f in 0..<n {
             let at = CTSpriteROM.pc(framesAt + shape.recordBytes * f)
+            guard at + shape.recordBytes <= rom.count else {
+                throw CTROMBuildError(String(format: "enemy %d: frame %d runs past the ROM", i, f))
+            }
             frames.append(decodeFrame(Array(rom[at..<(at + shape.recordBytes)]), columns: shape.columns, rows: shape.rows, objs: shape.objs))
         }
         let paletteAt = CTSpriteROM.animBank + r.palette * CTSpriteROM.paletteBytes
@@ -114,7 +121,7 @@ public enum CTEnemySpriteROM {
     /// Records up to the next frame block (the PC rule with the layout's record size).
     static func frameCount(_ rom: [UInt8], frameSet: Int, recordBytes: Int) -> Int {
         let start = CTSpriteROM.u24(rom, CTSpriteROM.framesPtr + 3 * frameSet)
-        var n = min(CTSpriteROM.pointers, (CTSpriteROM.blockEnd(CTSpriteROM.framesPtr, start, rom) - start) / recordBytes)
+        var n = max(0, min(CTSpriteROM.pointers, (CTSpriteROM.blockEnd(CTSpriteROM.framesPtr, start, rom) - start) / recordBytes))
         while n > 0, rom[CTSpriteROM.pc(start + recordBytes * (n - 1))..<CTSpriteROM.pc(start + recordBytes * n)].allSatisfy({ $0 == 0 }) {
             n -= 1
         }
