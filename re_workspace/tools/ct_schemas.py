@@ -336,16 +336,84 @@ def verify_all(names=("characters_schema.json",
     return fails
 
 
+# Field statuses: "verified" = decoded and re-derived independently (code
+# bytes, ChronoRET source, data and an executed routine; tools/ct_characters.py
+# check), "decoded" = from ChronoRET's documentation and a ROM check.
+STATUSES = ("verified", "decoded", "partial", "undecoded")
+
+
 def field_stats(manifest: dict) -> dict:
-    """decoded / partial / undecoded field counts for a manifest."""
-    st = {"decoded": 0, "partial": 0, "undecoded": 0}
+    """verified / decoded / partial / undecoded field counts for a manifest."""
+    st = {s: 0 for s in STATUSES}
     for rt in manifest.get("record_types", []):
         for f in rt.get("fields", []):
             st[f.get("status", "undecoded")] = st.get(f.get("status", "undecoded"), 0) + 1
     return st
 
 
-if __name__ == "__main__":
+def characters_manifest_update(manifest: dict) -> dict:
+    """The characters manifest with CharRec, StatGrowth and ExpToLevel as
+    tools/ct_characters.py decodes and checks them, and the HpGrowth and
+    MpGrowth tables added. Everything else, byte claims included, is kept.
+    `ct_schemas.py characters-update --out PATH` writes it (the manifest
+    itself is local data this tool does not overwrite)."""
+    import ct_characters as cc
+
+    m = json.loads(json.dumps(manifest))
+    types = m["record_types"]
+    by_name = {rt["name"]: rt for rt in types}
+    char = by_name["CharRec"]
+    char["role"] = ("playable-character record, ids 0-6 (" + ", ".join(cc.NAMES) + "); copied to WRAM $7E:2600 "
+                    "for a new game (Menu_InitNewGameData) and to a battle's PcStatBlk ($7E:5E2D + slot x $80), "
+                    "whose offsets it shares")
+    char["fields"] = [{"offset": f"+${o:02X}", "size": s, "name": n, "status": st, "evidence": ev}
+                      for o, s, n, st, ev in cc.FIELDS]
+    char["checked_by"] = "tools/ct_characters.py check; re_workspace/tests/test_characters.py"
+    growth = by_name["StatGrowth"]
+    growth["role"] = "per-character-id stat growth per level, in the growth order (BattleSys_LevelUpStep)"
+    growth["fields"] = [{"offset": f"+${k:02X}", "size": 1, "name": cc.STATS[cc.GROWTH_ORDER[k]],
+                         "status": "verified",
+                         "evidence": (f"growth byte {k}: stat {cc.GROWTH_ORDER[k]} = .GrowBase+{k} + byte x "
+                                      "(level - 1) / 100 (8-bit sum), capped 99"
+                                      if cc.GROWTH_ORDER[k] != cc.SPEED else
+                                      "growth byte 2 (speed): never read; 0 for every character")}
+                        for k in range(7)]
+    exp = by_name["ExpToLevel"]
+    exp["fields"] = [{"offset": "+$00", "size": 2, "name": "exp_next_level", "status": "verified",
+                      "evidence": "entry L = experience from level L to L + 1: BattleSys_ApplyExpStep loads "
+                                  "entry [new level] into PcStatBlk.ExpNeed (+$2B); 0 at 99; the 7 records' "
+                                  "exp = sum of entries 1 to level - 1"}]
+    for name, addr, stat, cap in (("HpGrowth", "$CC:258A", "max_hp (+$05)", 999),
+                                  ("MpGrowth", "$CC:25C2", "max_mp (+$09)", 99)):
+        rt = by_name.get(name)
+        if rt is None:
+            rt = {"name": name}
+            types.insert(types.index(growth), rt)
+        rt.update({"role": f"per-character-id {name[:2].upper()} gain per level: 4 (top level, gain) pairs",
+                   "addr": addr, "stride": 8, "count": 7, "address_space": "rom",
+                   "evidence": (f"BattleSys_GrowHpMp ($C1:F871): row = id x 8; the gain of the first pair "
+                                f"whose top level is at least the new level is added to {stat}, capped at {cap}"),
+                   "fields": [{"offset": f"+${2 * i:02X}", "size": 2, "name": f"step{i}", "status": "verified",
+                               "evidence": "byte 0 = top level, byte 1 = gain"} for i in range(4)]})
+    return m
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["characters-update"]:
+    import argparse
+    _args = argparse.ArgumentParser(prog="ct_schemas.py characters-update")
+    _args.add_argument("--out", required=True)
+    _out = _args.parse_args(sys.argv[2:]).out
+    if os.path.realpath(_out) == os.path.realpath(os.path.join(_WS, "manifests", "characters_schema.json")):
+        raise SystemExit("write the proposal elsewhere; the manifest is local data")
+    _m = characters_manifest_update(load_manifest("characters_schema.json"))
+    _fails = verify_manifest(_m, "characters (updated)")
+    if _fails:
+        raise SystemExit("\n".join(_fails))
+    with open(_out, "w", encoding="utf-8") as _f:
+        json.dump(_m, _f, indent=2)
+        _f.write("\n")
+    print(f"{_out}: {field_stats(_m)}")
+elif __name__ == "__main__":
     fails = verify_all()
     for n in ("characters_schema.json", "items_and_techs_schema.json", "maps_schema.json"):
         print(n, field_stats(load_manifest(n)))
