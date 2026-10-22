@@ -394,6 +394,11 @@ public struct SampleMeta: Codable, Equatable, Sendable {
 
 // MARK: - tilesets/<id>.tileset.json
 
+/// Sheet tile k is BG character k (a tilemap word's bits 0-9). Every field
+/// after `collision` is optional: older files load and save unchanged. A
+/// `kind` "palette" entry holds only palettes and their cycles (Chrono
+/// Trigger picks a location's palette apart from its graphics); see
+/// docs/tilesets.md.
 public struct Tileset: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var sheet: String?          // indexed PNG sheet (mode P)
@@ -402,10 +407,36 @@ public struct Tileset: Codable, Equatable, Sendable, Identifiable {
     public var tileCount: Int
     public var metatiles: [Metatile]
     public var collision: [Collision]
+    /// "bg12" (layers 1/2), "bg3" (layer 3) or "palette"; absent: a plain bank.
+    public var kind: String?
+    /// Where the sheet sits in VRAM and which of its tiles the tileset sets.
+    public var vram: VRAM?
+    /// CGRAM rows: entry r is 16 hex BGR555 words for palette row r.
+    public var palettes: [[String]]?
+    public var paletteCycles: [PaletteCycle]?
+    /// Frames shown in place of 4 characters each (`animSheet` holds them).
+    public var tileAnimations: [TileAnimation]?
+    public var animSheet: String?      // indexed PNG, 16 tiles per row
+    /// Ids of the tilesets the Studio previews this one with.
+    public var preview: Preview?
+    /// Where an import read the tileset (for write-back).
+    public var rom: ROMSource?
+
+    public init(id: String, sheet: String? = nil, blob: String? = nil, bpp: Int = 4, tileCount: Int = 0,
+                metatiles: [Metatile] = [], collision: [Collision] = [], kind: String? = nil, vram: VRAM? = nil,
+                palettes: [[String]]? = nil, paletteCycles: [PaletteCycle]? = nil,
+                tileAnimations: [TileAnimation]? = nil, animSheet: String? = nil, preview: Preview? = nil,
+                rom: ROMSource? = nil) {
+        self.id = id; self.sheet = sheet; self.blob = blob; self.bpp = bpp; self.tileCount = tileCount
+        self.metatiles = metatiles; self.collision = collision; self.kind = kind; self.vram = vram
+        self.palettes = palettes; self.paletteCycles = paletteCycles; self.tileAnimations = tileAnimations
+        self.animSheet = animSheet; self.preview = preview; self.rom = rom
+    }
 
     /// 16x16 chip = 4 subtiles (order: TL, TR, BL, BR).
     public struct Metatile: Codable, Equatable, Sendable {
         public var chips: [Chip]
+        public init(chips: [Chip]) { self.chips = chips }
     }
     public struct Chip: Codable, Equatable, Sendable {
         public var tile: Int
@@ -413,6 +444,92 @@ public struct Tileset: Codable, Equatable, Sendable, Identifiable {
         public var hflip: Bool
         public var vflip: Bool
         public var priority: Bool
+        public init(tile: Int, pal: Int = 0, hflip: Bool = false, vflip: Bool = false, priority: Bool = false) {
+            self.tile = tile; self.pal = pal; self.hflip = hflip; self.vflip = vflip; self.priority = priority
+        }
+        /// The SNES tilemap word: tile 0-9, palette 10-12, priority 13, hflip 14, vflip 15.
+        public var word: UInt16 { PPUFrame.tilemapEntry(tile: tile, palette: pal, priority: priority, hflip: hflip, vflip: vflip) }
+        public init(word w: UInt16) {
+            self.init(tile: Int(w & 0x3FF), pal: Int(w >> 10 & 7), hflip: w & 0x4000 != 0, vflip: w & 0x8000 != 0,
+                      priority: w & 0x2000 != 0)
+        }
+    }
+    public struct VRAM: Codable, Equatable, Sendable {
+        public var charBase: Int       // VRAM word of character 0
+        public var slots: [Slot]       // the uploads that fill the sheet
+        public var known: [Span]       // characters the tileset sets; the rest hold other data in the game
+        public init(charBase: Int, slots: [Slot] = [], known: [Span] = []) {
+            self.charBase = charBase; self.slots = slots; self.known = known
+        }
+    }
+    public struct Slot: Codable, Equatable, Sendable {
+        public var slot: Int
+        public var vram: Int           // VRAM word address
+        public var firstTile: Int
+        public var tiles: Int          // characters the upload sends
+        public var pack: Int?          // graphics pack number (absent: slot unused)
+        public var source: String?     // "$E2:0C1E"
+        public var ownTiles: Int?      // characters from this pack; the rest are an earlier pack's
+        public init(slot: Int, vram: Int, firstTile: Int, tiles: Int, pack: Int? = nil, source: String? = nil,
+                    ownTiles: Int? = nil) {
+            self.slot = slot; self.vram = vram; self.firstTile = firstTile; self.tiles = tiles; self.pack = pack
+            self.source = source; self.ownTiles = ownTiles
+        }
+    }
+    public struct Span: Codable, Equatable, Sendable {
+        public var firstTile: Int
+        public var tiles: Int
+        public init(firstTile: Int, tiles: Int) { self.firstTile = firstTile; self.tiles = tiles }
+    }
+    /// One palette animation. kind: "rotate-down" / "rotate-up" turn colours
+    /// first...first+count (count + 1 of them) by one; "rom-frames" copies
+    /// frame k of `frames` to colours first..<first+count, k stepping 0, 1, ...;
+    /// "list-frames" the same with k from `order`. Every `delay` frames (0 =
+    /// 256). Colours are CGRAM indices (16 x row + colour).
+    public struct PaletteCycle: Codable, Equatable, Sendable {
+        public var kind: String
+        public var first: Int
+        public var count: Int
+        public var delay: Int
+        public var frames: [[String]]?
+        public var order: [Int]?
+        public var source: String?     // "$F6:7568": where the frames are read
+        public init(kind: String, first: Int, count: Int, delay: Int, frames: [[String]]? = nil, order: [Int]? = nil,
+                    source: String? = nil) {
+            self.kind = kind; self.first = first; self.count = count; self.delay = delay; self.frames = frames
+            self.order = order; self.source = source
+        }
+    }
+    /// 4 characters from `tile` show animSheet tiles frames[f]...frames[f]+3,
+    /// f advancing as the game's accumulator: += 4 x steps[f] per upload, f =
+    /// bits 9-11 (8 entries each; one upload every other field IRQ).
+    public struct TileAnimation: Codable, Equatable, Sendable {
+        public var tile: Int
+        public var tiles: Int
+        public var steps: [Int]
+        public var frames: [Int]
+        public init(tile: Int, tiles: Int = 4, steps: [Int], frames: [Int]) {
+            self.tile = tile; self.tiles = tiles; self.steps = steps; self.frames = frames
+        }
+    }
+    public struct Preview: Codable, Equatable, Sendable {
+        public var palette: String?
+        public var layer3: String?
+        public init(palette: String? = nil, layer3: String? = nil) { self.palette = palette; self.layer3 = layer3 }
+    }
+    public struct ROMSource: Codable, Equatable, Sendable {
+        public var family: String      // "ct-loc12" | "ct-loc3" | "ct-locpal"
+        public var index: Int          // the LocRom.Tileset12 / Tileset3 / Palette value
+        public var table: String       // the metatile pack, or the palette set
+        public var packedBytes: Int?
+        public var list: String?       // LocGfx_Lists entry
+        public var animations: String? // FieldAnimListA / B list
+        public var locations: [Int]
+        public init(family: String, index: Int, table: String, packedBytes: Int? = nil, list: String? = nil,
+                    animations: String? = nil, locations: [Int] = []) {
+            self.family = family; self.index = index; self.table = table; self.packedBytes = packedBytes
+            self.list = list; self.animations = animations; self.locations = locations
+        }
     }
     public struct Collision: Codable, Equatable, Sendable {
         public var plane1: String      // walk|solid|water|...
