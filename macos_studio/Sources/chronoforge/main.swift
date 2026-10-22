@@ -254,6 +254,7 @@ case "music":           exit(cmdMusic(rest))
 case "characters":      exit(cmdCharacters(rest))
 case "sprites":         exit(cmdSprites(rest))
 case "tilesets":        exit(cmdTilesets(rest))
+case "maps":            exit(cmdMaps(rest))
 case "items":           exit(cmdItems(rest))
 case "sfx":             exit(cmdSFX(rest))
 default:
@@ -268,6 +269,7 @@ default:
       chronoforge characters <import|show|curve> ...             (playable-character records)
       chronoforge sprites <import|show> ...                      (playable-character sprites)
       chronoforge tilesets <import|show|verify> ...              (location tilesets and palettes)
+      chronoforge maps <import|show|render|verify> ...           (location maps: layers, collision, exits)
       chronoforge items <import|show> ...                        (item, gear and consumable tables)
       chronoforge sfx <encode|synth|info|render> ...             (BRR samples: WAV import, synth, S-DSP render)
       chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render|play|events|edit|verify-model> ...

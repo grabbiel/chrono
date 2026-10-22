@@ -592,17 +592,43 @@ public struct GameMap: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
     public var tileset: String
-    public var width: Int              // in 16px chips
+    public var width: Int              // in 16px chips (layer 1's size)
     public var height: Int
     public var layers: [Layer]
     public var exits: [Exit]
     public var triggers: [Trigger]
+    /// The LocRom record an import read (CTMapROM.Header): absent in hand-made maps.
+    public var location: Location?
+    /// MapProps' screen and scroll settings.
+    public var settings: Settings?
+    /// Map_TileHiBits / AttrA / AttrB over layer 1 (CTTileProps decodes them).
+    public var tileProps: TileProps?
+    /// TreasureRom records, in the ROM's order (their numbers are the flag bits).
+    public var treasure: [Treasure]?
+    /// Where an import read the map (for write-back).
+    public var rom: ROMSource?
+
+    public init(id: String, name: String, tileset: String, width: Int, height: Int, layers: [Layer],
+                exits: [Exit], triggers: [Trigger], location: Location? = nil, settings: Settings? = nil,
+                tileProps: TileProps? = nil, treasure: [Treasure]? = nil, rom: ROMSource? = nil) {
+        self.id = id; self.name = name; self.tileset = tileset; self.width = width; self.height = height
+        self.layers = layers; self.exits = exits; self.triggers = triggers; self.location = location
+        self.settings = settings; self.tileProps = tileProps; self.treasure = treasure; self.rom = rom
+    }
 
     public struct Layer: Codable, Equatable, Sendable {
         public var bg: Int             // 1..3
         public var metatiles: [Int]    // width*height metatile indices
         public var scrollX: Int?
         public var scrollY: Int?
+        /// The layer's own size when it differs from the map's (layers 2 and 3 can).
+        public var width: Int?
+        public var height: Int?
+        public init(bg: Int, metatiles: [Int], scrollX: Int? = nil, scrollY: Int? = nil,
+                    width: Int? = nil, height: Int? = nil) {
+            self.bg = bg; self.metatiles = metatiles; self.scrollX = scrollX; self.scrollY = scrollY
+            self.width = width; self.height = height
+        }
     }
     public struct Exit: Codable, Equatable, Sendable {
         public var x: Int
@@ -610,11 +636,91 @@ public struct GameMap: Codable, Equatable, Sendable, Identifiable {
         public var map: String
         public var toX: Int
         public var toY: Int
+        /// Tiles after the first the exit also covers, along the row or (`vertical`) down the column.
+        public var span: Int?
+        public var vertical: Bool?
+        /// The facing on arrival (ExitRom byte 4 bits 1-4) and that byte's bit 7.
+        public var facing: Int?
+        public var facingBit7: Bool?
+        public init(x: Int, y: Int, map: String, toX: Int, toY: Int, span: Int? = nil, vertical: Bool? = nil,
+                    facing: Int? = nil, facingBit7: Bool? = nil) {
+            self.x = x; self.y = y; self.map = map; self.toX = toX; self.toY = toY
+            self.span = span; self.vertical = vertical; self.facing = facing; self.facingBit7 = facingBit7
+        }
     }
     public struct Trigger: Codable, Equatable, Sendable {
         public var x: Int
         public var y: Int
         public var scene: String
+        public init(x: Int, y: Int, scene: String) { self.x = x; self.y = y; self.scene = scene }
+    }
+    /// LocRom fields besides the map: raw values (CTMapROM.Header names them).
+    public struct Location: Codable, Equatable, Sendable {
+        public var music: Int
+        public var tileset12: Int
+        public var tileset3: Int
+        public var palette: Int
+        public var events: Int
+        public var unk06: Int
+        /// LimitLeft, LimitTop, LimitRight, LimitBottom; LimitLeft bit 7: the layer-1 edges.
+        public var limits: [Int]
+        public init(music: Int, tileset12: Int, tileset3: Int, palette: Int, events: Int, unk06: Int, limits: [Int]) {
+            self.music = music; self.tileset12 = tileset12; self.tileset3 = tileset3; self.palette = palette
+            self.events = events; self.unk06 = unk06; self.limits = limits
+        }
+    }
+    /// MapProps bytes 1-5 apart from the layer sizes (those are the layers').
+    public struct Settings: Codable, Equatable, Sendable {
+        public var screens: Int        // bits 0-3 main screen BG1-3/OBJ, 4-7 sub screen
+        public var colorMath: Int      // CGADSUB
+        public var move2: Int          // layer 2's own step (CTMapROM.ownStep)
+        public var move3: Int
+        public var halfRate2: Bool     // layer 2 scrolls at half the camera's rate
+        public var ownStep2: Bool      // layer 2 moves by its own step only
+        public var ownStep3: Bool
+        public init(screens: Int, colorMath: Int, move2: Int = 0, move3: Int = 0, halfRate2: Bool = false,
+                    ownStep2: Bool = false, ownStep3: Bool = false) {
+            self.screens = screens; self.colorMath = colorMath; self.move2 = move2; self.move3 = move3
+            self.halfRate2 = halfRate2; self.ownStep2 = ownStep2; self.ownStep3 = ownStep3
+        }
+    }
+    /// One byte per layer-1 tile of each plane, row-major, as hex.
+    public struct TileProps: Codable, Equatable, Sendable {
+        public var width: Int
+        public var height: Int
+        public var hiBits: String
+        public var attrA: String
+        public var attrB: String
+        public init(width: Int, height: Int, hiBits: String, attrA: String, attrB: String) {
+            self.width = width; self.height = height; self.hiBits = hiBits; self.attrA = attrA; self.attrB = attrB
+        }
+    }
+    public struct Treasure: Codable, Equatable, Sendable {
+        public var x: Int
+        public var y: Int
+        /// Bit 15: gold, amount = bits 0-14 x 2; else bit 14: nothing; else the item in bits 0-8.
+        public var contents: Int
+        public init(x: Int, y: Int, contents: Int) { self.x = x; self.y = y; self.contents = contents }
+    }
+    public struct ROMSource: Codable, Equatable, Sendable {
+        public var location: Int
+        public var record: String          // LocRom record, "$F6:000E"
+        public var mapProps: Int           // Map_PropsPtrs entry
+        public var packedAt: String
+        public var packedBytes: Int
+        public var unpackedBytes: Int
+        /// Tiles at the end whose properties the game reads from WRAM past the map (decoded as 0).
+        public var staleTiles: Int
+        public var exitsAt: String?
+        /// The location whose TreasureRom list this one uses (itself unless redirected).
+        public var treasureList: Int
+        public var treasureAt: String?
+        public init(location: Int, record: String, mapProps: Int, packedAt: String, packedBytes: Int,
+                    unpackedBytes: Int, staleTiles: Int, exitsAt: String?, treasureList: Int, treasureAt: String?) {
+            self.location = location; self.record = record; self.mapProps = mapProps; self.packedAt = packedAt
+            self.packedBytes = packedBytes; self.unpackedBytes = unpackedBytes; self.staleTiles = staleTiles
+            self.exitsAt = exitsAt; self.treasureList = treasureList; self.treasureAt = treasureAt
+        }
     }
 }
 
