@@ -10,7 +10,7 @@ The Swift twin is `CTTilesets.swift` (`CTTilesetROM`, `CTTilesets`,
 `TilesetBudget`).
 
 No ROM data is stored in the repository: the import reads it from your ROM into
-your project. Writing tilesets back to a ROM is the next slice (see the end).
+your project. `chronoforge rom build` writes tilesets back (see [Writing back](#writing-back)).
 
 ## What a location picks
 
@@ -264,31 +264,47 @@ local ROM on t12_02, t12_37 and t3_00. On the ROM, `tilesets verify` passes
 - The fade kinds 4–7 of `FieldAnimB` are not used by location lists. They are
   named but not simulated.
 
-## Next slice: writing back
+## Writing back
 
-This is a design only; the ROM builder (`CTROMBuilder`) belongs to the other
-worker.
+List the sets in `project.json`'s `rom.tilesets` (`t12_NN`, `t3_NN`, `pal_NN`)
+and run `chronoforge rom build` (see [ROM builder](rom_builder.md)). Only the
+parts that differ from the ROM are written; the report's `tilesets` entry names
+them (`palette`, `cycles`, `frames`, `metatiles`, `characters`, `animations`).
 
-1. **Palettes.** Each 210-byte set is written in place (fixed size). A cycle
-   list rewrite stays in place if its length is unchanged. Otherwise the list
-   moves within bank `$FD` (16-bit offsets from `$FD:FA77`, before `$FD:FF29`),
-   and its `$FD:F9C7` entry is repointed. Kind 1/8 frames go to bank `$F6`.
-2. **Metatiles.** Pack lz11 with a real packer. Keep a table in place when it
-   fits its old packed size; otherwise use free space and repoint the
-   `$F6:2100` / `$F6:21C0` entry.
-3. **Characters.** Map each edited character to the slot and pack that own it
-   (`vram.slots[].ownTiles`). Rebuild the pack's bytes with the planar encoder
-   (`TileDecoder`), repack it in its original mode, and repoint its
-   `$F6:2220` entry.
-   - Packs are shared between lists. A pack edited differently by two
-     tilesets must be forked into a free pack number, and the list
-     (`$F6:1C00`) updated; otherwise the import must refuse.
-   - Stale-tail characters (past `ownTiles`) cannot be written back through
-     their slot.
-4. **Tile animations.** Record steps and frames are rewritten in place in
-   `FieldAnimListA`. Frame pixels go back into packs 6/7 by the same rule as
-   characters.
-5. **Interface.** A `CTTilesetPatch` returns (address, bytes) edits and
-   free-space requests for `CTROMBuilder`. The built ROM is then checked by
-   `ct_tilesets.py verify-import` and `check` against the project, as the
-   sprite and character slices do.
+1. **Palettes.** Each 210-byte set is written in place. A cycle list
+   (`FieldAnimListB`, `$FD:FA77` via `$FD:F9C7`) is rewritten in place and may
+   not grow: other data follows the lists before `$FD:FF29`, so they cannot
+   move. A list shared with a palette set that is not built, or built with
+   other cycles, is refused. Cycles stay in rows 1–7. Kind 1 frames stay where
+   they are or move within bank `$F6` (the free region at `$F6:7B80`, since the
+   frames are read from that bank).
+2. **Metatiles.** The table is packed with the original packer (lz11), which
+   rebuilds every ROM table byte for byte. It stays in place if it fits;
+   otherwise it moves and its `$F6:2100` / `$F6:21C0` entry is repointed.
+3. **Characters.** The sheet's characters (`sheet`, `animSheet` PNGs) are
+   mapped to the slots and packs that own them and encoded back with the
+   planar encoder; each changed pack is repacked in its own mode (lz12).
+   - A pack is read by every list that names it, by the Tileset3 sets and by
+     the battle backgrounds (`BattleFx_BgSetPacks`, `$D1:ECDB`). When users want
+     different content, the build forks the pack into a free number (204–223:
+     no loader names them and their pointers do not unpack) and repoints the
+     lists (`$F6:1C00`) that want the new content. A Tileset3 or battle user
+     cannot be repointed, so an edit that would need one forked is refused.
+   - Before placing anything, the builder loads each affected list's windows
+     from the new packs, as the game does, and refuses a sheet the game would
+     not load (stale-tail characters past `ownTiles`, for example).
+4. **Tile animations.** `FieldAnimListA` (`$FD:F310` via `$FD:F290`) records
+   are rewritten in place: the same number of records, steps that repeat with
+   the record's period. Their frames go into packs by the character rule.
+
+**Checks.** Validate (gate 4) runs the same range checks. After a build,
+`ct_rom_check.py` unpacks every reported block and compares the parts each set
+does not report, and every unreported set and battle pack, with the clean ROM;
+`ct_tilesets.py verify-import` and `chronoforge tilesets verify` decode the
+built ROM against the project; and the ROM's own `Decomp_ToWram`, both list
+loaders and `PalAnim_TickAll` run on the built ROM in ChronoRET's interpreter
+(`macos_studio/tools/verify_map_tileset_build.py`).
+
+**Limits.** Lists A and B keep their place and size; at most 20 packs can be
+forked; empty cycle records between filled ones are dropped (79 of the 83 ROM
+lists re-encode byte for byte; the other four re-decode the same).

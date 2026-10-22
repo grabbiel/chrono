@@ -58,6 +58,21 @@ func cmdRom(_ args: [String]) -> Int32 {
                 print("techs: \(changed.count) table write(s) changed" +
                       (changed.isEmpty ? "" : " (" + changed.prefix(6).map(\.what).joined(separator: ", ") + (changed.count > 6 ? ", ..." : "") + ")"))
             }
+            for m in report.maps ?? [] where m.placement != "unchanged" || report.writes.contains(where: { $0.what == "LocRom[\(m.location)]" }) {
+                print("map \(m.id): MapProps entry \(m.entry)\(m.newEntry ? " (new)" : "") at \(m.address), " +
+                      "\(m.packedBytes) packed bytes (\(m.placement))")
+            }
+            if let maps = report.maps {
+                let tables = report.writes.filter { $0.what == "ExitRom" || $0.what.hasPrefix("TreasureRom") }.map(\.what)
+                print("maps: \(maps.count) listed" + (tables.isEmpty ? "" : ", rewrote " + Set(tables).sorted().joined(separator: ", ")))
+            }
+            for t in report.tilesets ?? [] where !t.changed.isEmpty {
+                print("tileset \(t.id): \(t.changed.joined(separator: ", "))" +
+                      (t.blocks.isEmpty ? "" : "; " + t.blocks.map { "\($0.what) at \($0.address) (\($0.placement))" }.joined(separator: ", ")))
+            }
+            for r in report.relocations ?? [] {
+                print("moved \(r.what): \(r.from ?? "new") -> \(r.to), \(r.bytes) bytes")
+            }
             print(String(format: "wrote %@: checksum $%04X, %d bytes of free space left", out, report.checksum, report.freeBytesLeft))
         case "info":
             let rom = try readROM(positional[0])

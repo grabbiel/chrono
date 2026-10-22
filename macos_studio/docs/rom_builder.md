@@ -2,7 +2,7 @@
 
 `chronoforge rom build` (and **Story → Build ROM…** or **Characters → Build ROM…**
 in Studio) writes a project's event packs, songs, playable-character records,
-tech tables and item tables into a copy of the clean Chrono Trigger US 1.0 ROM and
+tech tables, item tables, location maps and tilesets into a copy of the clean Chrono Trigger US 1.0 ROM and
 fixes the header checksum. It starts from the unmodified ROM every time (SHA-256
 `06d1c2b0…829a9`; a 512-byte copier header is dropped); a built ROM is refused as
 a base. The output is game data: keep it local.
@@ -22,9 +22,20 @@ a base. The output is game data: keep it local.
   ],
   "characters": ["crono", "robo"],
   "techs": true,
-  "items": true
+  "items": true,
+  "maps": ["loc_001", "loc_002"],
+  "tilesets": ["t12_02", "t3_00", "pal_00"]
 }
 ```
+
+`maps` names `maps/<id>.map.json` files imported from the ROM (`chronoforge maps
+import`); each is written over the location in its `rom.location`. `tilesets`
+names `tilesets/<id>.tileset.json` files imported from the ROM (`chronoforge
+tilesets import`, or with the maps): a Tileset12 (`t12_NN`), a Tileset3
+(`t3_NN`) or a palette set (`pal_NN`). A tileset's characters come from its
+sheet PNGs (`sheet`, `animSheet`). Both lists are set by hand in `project.json`
+for now; see [maps](maps.md#writing-maps-back) and
+[tilesets](tilesets.md#writing-back) for what can be written.
 
 `items` writes each ROM item's record A and B, name and target mode, ItemBoosts
 and (when a text changed) the description table (see [items](items.md));
@@ -58,7 +69,10 @@ event pack (entry 0 points at a graphics pack, seven at an empty stream, the res
 bytes that do not decode) and are refused.
 
 Validate (gate 4) checks the rows: entries, duplicates, scenes that exist and
-lower, listings that exist, and song listings that assemble.
+lower, listings that exist, and song listings that assemble. For `maps` and
+`tilesets` it checks that each id exists and is listed once, that no location is
+listed twice, and the same checks the builder makes before it writes (sizes,
+ranges, the bit rules, the tileset a map names against its location record).
 
 ## What the builder does
 
@@ -87,6 +101,43 @@ lower, listings that exist, and song listings that assemble.
    [items](items.md).
 8. Writes the `Evt_PackPtrs` entries and the checksum and complement.
 
+Maps and tilesets are applied first, right after the free space is set up, so
+the spans they free are known before the event packs are placed:
+
+- **Maps** (`CTMapPatch`). Locations listed with the same content as their
+  base `MapProps` entry keep it. Each distinct new content is packed (lz11) and
+  takes the entry of the locations that all still share it, or, when only some
+  locations sharing an entry changed, one of the 54 free `Map_PropsPtrs` slots
+  (202–255, pointer 0 and named by no record). A pack goes into its old span if
+  it fits and nothing else uses it, then into a reclaimed span, then into free
+  space, never across a bank; then the builder writes the `Map_PropsPtrs`
+  pointer and the 14-byte LocRom record. The `ExitRom` block (513 offset words
+  and the records) is rebuilt for all 512 locations at once and grows only into
+  the confirmed padding that follows it at `$E5:1A44`. Treasure records are
+  written in place: a chest's flag is its record's position in `TreasureRom`,
+  so a change in the number of records is refused, as are two maps sharing one
+  treasure list with different chests and a first record on tile 0,0 (the
+  redirect marker).
+- **Tilesets** (`CTTilesetPatch`). Palette sets (210 bytes) and cycle lists
+  (`FieldAnimListB`) are written in place; a list that grows, or that is shared
+  with a palette set not in the build, is refused. Palette frames stay in their
+  place or move within bank `$F6`. Metatile tables are repacked (lz11) and
+  placed like map packs; the `$F6:2100`/`$F6:21C0` pointer is rewritten when
+  they move. Edited characters are encoded back into the graphics packs the
+  sheet's windows load from, each pack repacked in its own mode. A pack that
+  other users need unchanged is forked into a free pack number (204–223: named
+  by no loader, and their pointers do not unpack) and the lists that want the
+  new content are repointed (`$F6:1C00`); a Tileset3 pack or a battle background
+  pack (`BattleFx_BgSetPacks`, `$D1:ECDB`) cannot be forked and such an edit is
+  refused. Before anything is placed, the builder loads every affected list's
+  windows from the new packs and refuses a build where any sheet differs.
+  Tile animations (`FieldAnimListA`) are rewritten in place with the same
+  number of records and periodic steps. Lists A and B cannot move: other data
+  follows them in bank `$FD`.
+
+Nothing unchanged is written, so a project that imports every map and tileset
+and lists them all rebuilds the clean ROM byte for byte.
+
 Pack and table placement never crosses a bank (a song may): `Decomp_ToWram` reads a pack with DB = its bank
 and a 16-bit index, and `TextWin_Init` reads the table's entries as addresses in
 the table's bank.
@@ -111,6 +162,13 @@ written (`items`, `itemTables`, when built), every byte range written (one
 per changed character field, such as `character robo power`, and per changed
 tech span, such as `tech $02 target` or `TechTpCost`, and per changed item span,
 such as `item $5C record B`, `ItemBoosts` or `item descriptions`), and the free space left.
+With maps or tilesets the report adds `maps` (each listed map's location,
+`MapProps` entry, whether it is a new entry, address, sizes, unpacked SHA-256,
+placement, LocRom record, exits and treasure), `tilesets` (each listed set's
+kind, the parts written, the packed blocks placed and a Tileset12's pack list
+after the build) and `relocations` (each block or table that moved or took a
+new slot: what, from, to, size). The CLI prints one line per changed map,
+tileset and relocation.
 
 ## The packer
 
@@ -164,6 +222,31 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
 
   The ROM's own `Menu_BuildItemTables` and `Menu_RefreshAllChars` on the built
   ROM agree with the menu-stat rule. Eight damaged copies are rejected.
+- **Maps and tilesets** (`CTMapTilesetBuildTests`,
+  `macos_studio/tools/verify_map_tileset_build.py`): importing all 512 maps and
+  every tileset and listing them all gives the clean ROM with no write; the
+  encoders reproduce every location's MapProps content, LocRom record, the
+  `ExitRom` block, every palette set and every metatile table byte for byte. An
+  edited build (a cell in a shared entry, the same edit to two locations sharing
+  one, a grown map, an added exit, chest contents, music, a colour, a cycle
+  delay, a metatile, a character in an unshared and in a shared pack, a BG3
+  pixel, animation steps) writes 20 ranges and 4 relocations, and is checked:
+  - by `ct_rom_check.py`: every pointer table outside free space, `ExitRom`
+    ending where the padding begins; each reported map's record, entry, pack
+    (unpacked with the transcribed `Decomp_ToWram`), exits and treasure; each
+    reported tileset's blocks, pointers, fork numbers and pack lists, with the
+    parts it does not report unchanged; every unreported location, tileset,
+    palette set and battle pack equal to the clean ROM;
+  - by `ct_maps.py verify-import --content` (512 of 512) and `ct_tilesets.py
+    verify-import` (207 of 207) against the project, and by `chronoforge
+    tilesets verify` (154 of 154);
+  - by the ROM's own routines run on the built ROM with ChronoRET's interpreter
+    (`ct_maps.py`/`ct_tilesets.py` run claims): `LocLoad_UnkA33B` and
+    `Map_LoadTreasureTiles` on 15 locations, `Decomp_ToWram` on the edited
+    tables and packs (including the fork), both animation list loaders and
+    `PalAnim_TickAll` (12 claims).
+
+  Nine damaged copies are rejected and ten bad edits are refused.
 
 ## Limitations
 
@@ -171,10 +254,15 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
   routines as traced or transcribed, not a booted game.
 - Only event packs, message tables, song sequences (with their per-song table
   rows), the playable characters' records and growth rows, the tech tables'
-  writable fields and the item tables' writable fields are written. New
-  locations, maps, graphics, samples, sound effects, new items or item ids, new
+  writable fields, the item tables' writable fields, and the maps and tilesets
+  of existing locations are written. New locations, overworld maps, sprites, samples, sound effects, new items or item ids, new
   techs or tech names, enemies, ExpToLevel and other tables are not.
 - Lowered packs cover the Studio statements in `event_bytecode.md`; cross-map calls
   are refused.
+- Maps keep their number of treasure records; animation lists keep their
+  place and size; a Tileset3 or battle-background pack shared with an unedited
+  user cannot be forked; at most 54 new `MapProps` entries and 20 forked packs.
+  Empty palette-cycle records between filled ones are not kept (the list
+  re-decodes the same).
 - Free space is limited to the confirmed padding; ExHiROM (6/8 MB) expansion is not
   implemented.

@@ -18,14 +18,17 @@ public struct Project: Codable, Equatable, Sendable {
     /// lowered from Studio scenes or assembled from a ct-events/1 listing),
     /// songs by Audio_SongTable index (each assembled from a ct-song/1 listing),
     /// and playable characters by their `characters/<id>.json` (its `pc`
-    /// record and `growth` rows; docs/characters.md), the tech tables and the
-    /// item tables (docs/items.md).
+    /// record and `growth` rows; docs/characters.md), the tech tables, the
+    /// item tables (docs/items.md), and maps and tilesets by id over the
+    /// locations and sets they were imported from (docs/rom_builder.md).
     public struct ROMBuild: Codable, Equatable, Sendable {
         public var eventPacks: [EventPack]
         public var songs: [Song]
         public var characters: [String]
         public var techs: Bool                 // write tech_system.json's tables (absent = false)
         public var items: Bool                 // write the ROM items and item_tables.json (absent = false)
+        public var maps: [String] = []         // maps/<id>.map.json with a rom.location (absent = none)
+        public var tilesets: [String] = []     // tilesets/<id>.tileset.json with a rom source (absent = none)
         public struct Song: Codable, Equatable, Sendable {
             public var song: Int
             public var listing: String         // project-relative path
@@ -40,11 +43,11 @@ public struct Project: Codable, Equatable, Sendable {
             }
         }
         public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = [], techs: Bool = false,
-                    items: Bool = false) {
+                    items: Bool = false, maps: [String] = [], tilesets: [String] = []) {
             self.eventPacks = eventPacks; self.songs = songs; self.characters = characters; self.techs = techs
-            self.items = items
+            self.items = items; self.maps = maps; self.tilesets = tilesets
         }
-        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items }
+        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items, maps, tilesets }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             eventPacks = try c.decodeIfPresent([EventPack].self, forKey: .eventPacks) ?? []
@@ -52,6 +55,8 @@ public struct Project: Codable, Equatable, Sendable {
             characters = try c.decodeIfPresent([String].self, forKey: .characters) ?? []
             techs = try c.decodeIfPresent(Bool.self, forKey: .techs) ?? false
             items = try c.decodeIfPresent(Bool.self, forKey: .items) ?? false
+            maps = try c.decodeIfPresent([String].self, forKey: .maps) ?? []
+            tilesets = try c.decodeIfPresent([String].self, forKey: .tilesets) ?? []
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -60,6 +65,8 @@ public struct Project: Codable, Equatable, Sendable {
             if !characters.isEmpty { try c.encode(characters, forKey: .characters) }
             if techs { try c.encode(techs, forKey: .techs) }
             if items { try c.encode(items, forKey: .items) }
+            if !maps.isEmpty { try c.encode(maps, forKey: .maps) }
+            if !tilesets.isEmpty { try c.encode(tilesets, forKey: .tilesets) }
         }
     }
 

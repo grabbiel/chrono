@@ -137,3 +137,4 @@ re_workspace/tests/test_story.py::test_citations_name_isa_rows_and_chronoret_lin
 re_workspace/tests/test_story.py::test_code_outside_the_event_vm	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_story.py::test_world_graph_from_the_rom	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_story.py::test_handlers_change_the_recorded_bytes	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_map_tileset_build.py::test_checker_compares_every_unreported_map_and_tileset	local ROM not present (re_workspace/ct_clean.sfc)

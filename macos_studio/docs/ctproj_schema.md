@@ -59,7 +59,9 @@ MyGame.ctproj/
            "songs": [ { "song": 1, "listing": "audio/songs/song01.ctsong" } ],
            "characters": ["crono", "robo"],
            "techs": true,
-           "items": true }
+           "items": true,
+           "maps": ["loc_001"],
+           "tilesets": ["t12_02", "pal_00"] }
 }
 ```
 `flags` entries name a bit of `$7F:0000–$7F:01FF` for scenes (`bit` 0–7). Two
@@ -74,6 +76,10 @@ build` writes into the base ROM (see [ROM builder](rom_builder.md),
 be absent; `characters` names `characters/<id>.json` files that have a `pc` record.
 `techs` (absent = false) writes `tech_system.json`'s tables ([techs](techs.md)).
 `items` (absent = false) writes the ROM items and `item_tables.json` ([items](items.md)).
+`maps` names `maps/<id>.map.json` files with a `rom.location`, each written over
+that location ([maps](maps.md#writing-maps-back)). `tilesets` names
+`tilesets/<id>.tileset.json` files with a `rom` source: Tileset12, Tileset3 or
+palette sets ([tilesets](tilesets.md#writing-back)). Both are omitted when empty.
 
 ## `characters/<id>.json`
 ```json

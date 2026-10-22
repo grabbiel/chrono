@@ -68,7 +68,9 @@ No ROM bytes are kept here: everything is read from the user's ROM.
     ct_maps.py check [--rom PATH] [--run]               every evidence claim (exit 1 on a failure);
                                                         --run also runs LocLoad_UnkA33B, Map_LoadTreasureTiles
                                                         and Ppu_SetBgLayout in ChronoRET's interpreter
-    ct_maps.py verify-import <project> [--rom PATH]     a Studio import (maps/*) against decode
+    ct_maps.py verify-import <project> [--rom PATH] [--content]
+                                                        a Studio import (maps/*) against decode; --content
+                                                        skips the rom provenance (a ROM built from it)
     ct_maps.py vectors (--out | --check) P              synthetic vectors for the Swift twin
 """
 
@@ -1025,8 +1027,10 @@ def map_id(i):
     return f"loc_{i:03d}"
 
 
-def verify_import(rom, project, locations=None):
-    """A Studio import (maps/loc_NNN.map.json) against the decode: [(name, ok, detail)]."""
+def verify_import(rom, project, locations=None, content_only=False):
+    """A Studio import (maps/loc_NNN.map.json) against the decode: [(name, ok, detail)].
+    With `content_only` (a ROM built from the project) the `rom` provenance,
+    which a build may move, is not compared."""
     out = []
     root = Path(project)
     locations = range(LOC_COUNT) if locations is None else locations
@@ -1082,7 +1086,7 @@ def verify_import(rom, project, locations=None):
         check("treasure", [(t["x"], t["y"], t["contents"]) for t in tr]
               == [(t["x"], t["y"], t["contents"]) for t in d["treasure"]["records"]])
         r = m.get("rom") or {}
-        check("rom", (r.get("location"), r.get("mapProps"), r.get("packedAt"), r.get("packedBytes"),
+        check("rom", content_only or (r.get("location"), r.get("mapProps"), r.get("packedAt"), r.get("packedBytes"),
                       r.get("unpackedBytes"), r.get("staleTiles"), r.get("treasureList"))
               == (i, p["entry"], p["at"], p["packedBytes"], p["length"], p["staleTiles"], d["treasure"]["list"]))
         out.append((f"{map_id(i)}: {d['sizes']['1'][0]} x {d['sizes']['1'][1]}, {len(d['planes'])} layers, "
@@ -1118,6 +1122,7 @@ def main():
     v = sub.add_parser("verify-import")
     v.add_argument("project")
     v.add_argument("--rom", default=str(ROM_PATH))
+    v.add_argument("--content", action="store_true", help="skip the rom provenance (a ROM built from the project)")
     g = sub.add_parser("vectors")
     m = g.add_mutually_exclusive_group(required=True)
     m.add_argument("--out")
@@ -1140,7 +1145,7 @@ def main():
         print(json.dumps(out if args.planes else summary(out), indent=1))
         return 0
     if args.command == "verify-import":
-        return report(verify_import(rom, args.project))
+        return report(verify_import(rom, args.project, content_only=args.content))
     claims = asm_claims() + code_claims(rom) + data_claims(rom)
     if args.run:
         claims += run_claims(rom)

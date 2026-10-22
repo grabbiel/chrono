@@ -176,6 +176,11 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_items.py check --run >/tmp/verify_item_claims.log 2>&1
   RC=$?
   note "Item evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_item_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Maps and tilesets: CLI imports, identical rebuild, edits checked by ct_rom_check.py and
+  # re-decoded against the project, the ROM's own loaders run on the built ROM, damage, refusals.
+  $PY macos_studio/tools/verify_map_tileset_build.py >/tmp/verify_map_tileset_build.log 2>&1
+  RC=$?
+  note "Map and tileset write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_map_tileset_build.log | tail -1) run claims on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   # SFX Lab: a synth sample encoded into a fixture copy and checked on the S-DSP
   # (every frame = the decode), a render with vibrato, key-off and its envelope.
   SFX_DIR=$(mktemp -d)

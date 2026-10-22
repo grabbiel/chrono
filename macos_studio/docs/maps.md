@@ -13,8 +13,8 @@ the field's own register setup ([PPU](ppu.md#real-locations)).
   [Tilesets](tilesets.md). A map import also imports any of them the project
   lacks.
 - **ROM data.** None is stored in the repository: the import reads it from your
-  ROM into your project. Writing maps back to a ROM is designed at the end of
-  this page but not built.
+  ROM into your project. `chronoforge rom build` writes maps back
+  ([Writing maps back](#writing-maps-back)).
 
 ## The location header
 
@@ -248,28 +248,43 @@ The CLI renders the same pictures:
 chronoforge maps render P loc_001 --out a.png [--frame N] [--camera X,Y] [--hide bg3,obj,math]
 ```
 
-## Writing maps back (next slice, design only)
+## Writing maps back
 
-`CTROMBuilder` does not write maps yet. The plan:
+List the maps in `project.json`'s `rom.maps` and run `chronoforge rom build`
+(see [ROM builder](rom_builder.md)). Each map is written over the location in
+its `rom.location`; its `tileset` must be the one its location record loads.
 
-1. **Repack.** Pack each changed map's head, planes and triples with
-   `packProps`, which uses runs for equal stretches of 2–256 triples, then
-   LZSS-compress it in the entry's mode. A map that no longer ends early has
-   `staleTiles` = 0.
-2. **Share.** Locations that share a MapProps entry share the edit. A map
-   edited away from its sibling needs a new entry: `Map_PropsPtrs` has 256
-   slots and the ROM uses 197 of the first 201.
-3. **Relocate.** Keep an entry in place if it fits there. Otherwise move it to
-   free space reachable by the 24-bit pointer, and repoint `Map_PropsPtrs`
-   (`$F6:1E00 + 3·entry`), then the `MapProps` word in each LocRom record that
-   uses a new entry.
-4. **Exits and treasure.** Rewrite the `ExitRom` and `TreasureRom` record
-   blocks for all locations at once, since they are contiguous with word
-   offsets. Recompute the 513 and 512 offset words. Keep redirects, and keep
-   location 0's dummy record.
-5. **Header.** Write the LocRom record (14 B) in place.
-6. **Verify.** Run the interpreter checks (`check --run`) against the built
-   ROM.
+1. **Repack.** The builder packs the head, planes and triples with
+   `packProps` (runs for equal stretches of 2–256 triples), then compresses them
+   with the original packer (lz11). An unedited map packs to its old bytes.
+2. **Share.** Locations whose content still equals their base entry keep it.
+   When all the locations sharing an entry are listed with the same new content,
+   the entry is rewritten. When only some of them change, the changed ones take
+   a free `Map_PropsPtrs` slot (202–255: pointer 0, no record names them; 54 in
+   all) and their LocRom `MapProps` word is rewritten.
+3. **Place.** A pack stays in its old span if it fits and no unchanged entry
+   uses it; otherwise it goes into a reclaimed span or free space, never across
+   a bank, and `Map_PropsPtrs` (`$F6:1E00 + 3·entry`) is repointed. The report
+   lists each move under `relocations`.
+4. **Exits.** The `ExitRom` block (513 offset words and every location's
+   records) is rebuilt at once. It may grow into the confirmed padding that
+   begins right where it ends (`$E5:1A44`, 1,468 bytes). Unused bits stay 0, as
+   in every ROM exit.
+5. **Treasure.** Records are rewritten in place. A chest's flag number is its
+   record's position in `TreasureRom` (`(offset − word 0) / 4`), so adding or
+   removing a chest would renumber every later chest: a change in count is
+   refused. Two maps sharing one list must agree. The five redirects and
+   location 0's dummy record are kept; a first record on tile 0,0 (the redirect
+   marker) is refused.
+6. **Header.** The 14-byte LocRom record is written in place.
+
+**Checks.** Validate (gate 4) runs the same checks before a build. After it,
+`ct_rom_check.py` compares each reported map with the built ROM and every
+unreported location with the clean ROM; `ct_maps.py verify-import --content`
+decodes the built ROM against the project (the `--content` flag leaves out the
+`rom` provenance, which a build moves); and the ROM's own `LocLoad_UnkA33B` and
+`Map_LoadTreasureTiles` run on the built ROM in ChronoRET's interpreter
+(`macos_studio/tools/verify_map_tileset_build.py`).
 
 ## Limitations
 
@@ -285,3 +300,5 @@ chronoforge maps render P loc_001 --out a.png [--frame N] [--camera X,Y] [--hide
   slice.
 - **No undo.** The Studio has no undo stack for painting: edits stay in the
   editor until **Apply**.
+- **Write-back.** New locations are not created; a map keeps its number of
+  chests; the Studio has no button to list maps in `rom.maps` yet.
