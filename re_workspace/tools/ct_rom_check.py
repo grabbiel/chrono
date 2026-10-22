@@ -57,7 +57,13 @@ and tables' old spans and the tile-animation lists may change; each reported
 block unpacks (ChronoRET's Decomp_ToWram transcription) to its reported
 hash and is what its pointer names; forks take only numbers no loader names;
 every unreported Tileset12, Tileset3 and palette set, and the battle
-backgrounds' packs, decode as in the clean ROM.
+backgrounds' packs, decode as in the clean ROM. Enemies
+(tools/ct_enemies.py), when reported: only the reported enemies' stat
+records, reward records and names may change; each decodes to the reported
+values, in the ranges the battle code keeps (HP below $8000, level 0-99, an
+attack record that exists, item ids below $F2), and its name is the reported
+one (or unchanged); every other enemy, the attack and tech records, the
+effect records, the AI pointers and every AI script are as in the clean ROM.
 """
 
 import argparse
@@ -70,6 +76,7 @@ sys.path.insert(0, str(WS / "tools"))
 sys.path.insert(0, str(WS / "refs" / "ChronoRET" / "tools"))
 import c3pack  # noqa: E402
 import ct_characters as cc  # noqa: E402
+import ct_enemies as ce  # noqa: E402
 import ct_event_packs as packs  # noqa: E402
 import ct_items as ci  # noqa: E402
 import ct_maps as cm  # noqa: E402
@@ -216,6 +223,75 @@ def check_characters(clean, built, report):
             check(all(any(t >= cc.LEVEL_MAX for t, _ in g[k]) for k in ("hp", "mp")),
                   f"character {c['id']}: a growth row does not reach level 99")
     check(cc.exp_to_level(built) == cc.exp_to_level(clean), "ExpToLevel changed")
+
+
+def enemy_spans(e, named):
+    """The stat record, reward record and (when written) name of enemy number e."""
+    spans = [range(ce.STATS_PC + ce.STATS_SIZE * e, ce.STATS_PC + ce.STATS_SIZE * (e + 1)),
+             range(ce.REWARDS_PC + ce.REWARDS_SIZE * e, ce.REWARDS_PC + ce.REWARDS_SIZE * (e + 1))]
+    if named:
+        spans.append(range(ce.NAMES_PC + ce.NAME_SIZE * e, ce.NAMES_PC + ce.NAME_SIZE * (e + 1)))
+    return spans
+
+
+def enemy_zones(report):
+    """The spans the builder may write for each reported enemy."""
+    return [r for e in report.get("enemies") or [] for r in enemy_spans(e["enemyId"], e.get("name") is not None)]
+
+
+ENEMY_STAT_KEYS = ("stamina", "speed", "magic", "hit", "evade", "magicDefense", "attack", "defense")
+
+
+def report_enemy(e):
+    """A report enemy in ct_enemies.decode_stats / decode_reward form."""
+    r = e["enemy"]
+    stats = {"hp": r["hp"], "level": r["level"], "status": r["status"],
+             "stats": {s: r["stats"][k] for s, k in zip(ce.STAT_NAMES, ENEMY_STAT_KEYS)},
+             "affinity": {x: r["affinity"][x] for x in ce.ELEMENTS},
+             "immunity": r["immunity"], "flags15": r["flags15"], "attack_id": r["attackId"]}
+    w = r["reward"]
+    reward = {"exp": w["exp"], "gold": w["gold"], "drop": w["drop"], "charm": w["charm"], "tech_points": w["techPoints"]}
+    return stats, reward
+
+
+def check_enemies(clean, built, report):
+    reported = report.get("enemies") or []
+    by_id = {e["enemyId"]: e for e in reported}
+    check(len(by_id) == len(reported) and all(0 <= i < ce.EMPTY_ID for i in by_id), f"enemy ids {sorted(by_id)}")
+    glyphs = ce._glyphs()
+    for i in range(ce.ENEMIES):
+        e = by_id.get(i)
+        if e is None:
+            check(all(clean[r.start:r.stop] == built[r.start:r.stop] for r in enemy_spans(i, i < ce.NAMED)),
+                  f"enemy {i} changed but is not reported")
+            continue
+        stats, reward = report_enemy(e)
+        got = ce.decode_stats(ce.stats_record(built, i))
+        check(got == stats, f"enemy {e['id']}: the stat record is not the reported values")
+        check(ce.decode_reward(ce.reward_record(built, i)) == reward, f"enemy {e['id']}: the reward record is not the reported values")
+        check(got["hp"] < 0x8000 and got["level"] <= 99 and got["attack_id"] < ce.ATTACKS,
+              f"enemy {e['id']}: HP, level or attack id")
+        check(reward["drop"] < ce.ITEM_COUNT and reward["charm"] < ce.ITEM_COUNT, f"enemy {e['id']}: drop or charm")
+        name = e.get("name")
+        if name is None:
+            check(i >= ce.NAMED or ce.name_record(built, i) == ce.name_record(clean, i), f"enemy {e['id']}: the name changed")
+        else:
+            check(i < ce.NAMED and ce.decode_name(ce.name_record(built, i), glyphs) == name,
+                  f"enemy {e['id']}: the name is not {name!r}")
+    # Every other enemy table, from the names' end to the AI pointers' end, and every AI script.
+    start = ce.NAMES_PC + ce.NAME_SIZE * ce.NAMED
+    stop = ce.AI_PTRS_PC + 2 * ce.ENEMIES
+    check(clean[start:stop] == built[start:stop], "an enemy attack, tech, effect or AI pointer table changed")
+    lengths = ce.act_lengths(clean)
+    bank = ce.AI_BANK & 0x3F
+    for i in range(ce.ENEMIES):
+        at = clean[ce.AI_PTRS_PC + 2 * i] | clean[ce.AI_PTRS_PC + 2 * i + 1] << 8
+        try:
+            _, end = ce.parse_script(clean[bank << 16:(bank + 1) << 16], at, lengths)
+        except ce.ScriptError:
+            continue
+        check(clean[(bank << 16) + at:(bank << 16) + end] == built[(bank << 16) + at:(bank << 16) + end],
+              f"enemy {i}'s AI script changed")
 
 
 def check_techs(clean, built, report):
@@ -706,6 +782,7 @@ def main():
         check_layout_tables(clean, zones[:len(rom_layout["freeRegions"])])
     zones += map_zones(clean, report, zones[:len(rom_layout["freeRegions"])])
     zones += tileset_zones(clean, report)
+    zones += enemy_zones(report)
 
     def inside(r):
         return any(r.start >= z.start and r.stop <= z.stop for z in zones)
@@ -754,6 +831,7 @@ def main():
     check_items(clean, built, report)
     check_maps(clean, built, report, inside)
     check_tilesets(clean, built, report, inside)
+    check_enemies(clean, built, report)
 
     # New packs and tables.
     table_doc = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -809,7 +887,8 @@ def main():
           + (", techs" if report.get("techs") else "")
           + (f", {len(report['items'])} items" if report.get("items") is not None else "")
           + (f", {len(report['maps'])} maps" if report.get("maps") is not None else "")
-          + (f", {len(report['tilesets'])} tilesets" if report.get("tilesets") is not None else "") + ")")
+          + (f", {len(report['tilesets'])} tilesets" if report.get("tilesets") is not None else "")
+          + (f", {len(report['enemies'])} enemies" if report.get("enemies") is not None else "") + ")")
 
 
 if __name__ == "__main__":

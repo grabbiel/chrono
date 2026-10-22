@@ -214,6 +214,14 @@ if [ -f macos_studio/Package.swift ]; then
     --manifest re_workspace/manifests/event_pack_verification.json >/tmp/verify_scene_rom.log 2>&1
   RC=$?
   note "scene ROM round trip ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_scene_rom.log | tail -1) event packs)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Enemies: stat records, rewards, names and AI scripts decoded with evidence; the ROM's own
+  # loader and reward routine run for every id; import, write-back and the loader on the built ROM.
+  $PY re_workspace/tools/ct_enemies.py check --run >/tmp/verify_enemy_claims.log 2>&1
+  RC=$?
+  note "enemy claims ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_enemy_claims.log | tail -1) hold)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  $PY macos_studio/tools/verify_enemy_build.py >/tmp/verify_enemy_build.log 2>&1
+  RC=$?
+  note "Enemy write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_enemy_build.log | tail -1) loader runs on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi
