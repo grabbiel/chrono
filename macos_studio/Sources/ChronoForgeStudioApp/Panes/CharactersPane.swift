@@ -12,27 +12,30 @@ struct CharactersPane: View {
     @State private var pickBase = false
     @State private var buildResult = ""
     @State private var revision = 0          // re-seeds the editor after an import
-    @State private var techMatrix = false    // the Tech & Synergy Matrix tab
+    @State private var tab = 0               // 0 records, 1 the Tech & Synergy Matrix, 2 enemies (EnemyEditorViews.swift)
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $techMatrix) {
-                Text("Records").tag(false)
-                Text("Tech & Synergy Matrix").tag(true)
+            Picker("", selection: $tab) {
+                Text("Records").tag(0)
+                Text("Tech & Synergy Matrix").tag(1)
+                Text("Enemies").tag(2)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 360)
+            .frame(maxWidth: 460)
             .padding(6)
-            if techMatrix {
+            if tab == 1 {
                 TechMatrixPane(store: store, project: project)
+            } else if tab == 2 {
+                EnemiesPane(store: store, project: project)
             } else {
                 records
             }
         }
         .toolbar {
             Button("Build ROM…") { pickBase = true }
-                .disabled((project.project.rom?.characters ?? []).isEmpty && !(project.project.rom?.techs ?? false))
+                .disabled(nothingToBuild)
         }
         .fileImporter(isPresented: $pickBase, allowedContentTypes: [.data], allowsMultipleSelection: false) { picked in
             guard case .success(let urls) = picked, let base = urls.first else { return }
@@ -47,8 +50,15 @@ struct CharactersPane: View {
         } message: { Text(buildResult) }
     }
 
+    private var nothingToBuild: Bool {
+        let spec = project.project.rom
+        let characters = (spec?.characters ?? []).isEmpty, enemies = (spec?.enemies ?? []).isEmpty
+        return characters && enemies && !(spec?.techs ?? false)
+    }
+
+    /// Characters without an enemy record (enemies have their own tab).
     private var records: some View {
-        EntityListView(title: "Characters", ids: project.characters.keys.sorted(),
+        EntityListView(title: "Characters", ids: project.characters.filter { $0.value.enemy == nil }.keys.sorted(),
                        selection: $selection) { id in
             if let c = project.characters[id] {
                 EditorHost(entity: c, apply: { store.updateCharacter($0) }) { $c in

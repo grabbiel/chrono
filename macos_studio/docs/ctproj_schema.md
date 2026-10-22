@@ -62,7 +62,8 @@ MyGame.ctproj/
            "techs": true,
            "items": true,
            "maps": ["loc_001"],
-           "tilesets": ["t12_02", "pal_00"] }
+           "tilesets": ["t12_02", "pal_00"],
+           "enemies": ["enemy_005"] }
 }
 ```
 `flags` entries name a bit of `$7F:0000–$7F:01FF` for scenes (`bit` 0–7). Two
@@ -81,6 +82,9 @@ be absent; `characters` names `characters/<id>.json` files that have a `pc` reco
 that location ([maps](maps.md#writing-maps-back)). `tilesets` names
 `tilesets/<id>.tileset.json` files with a `rom` source: Tileset12, Tileset3 or
 palette sets ([tilesets](tilesets.md#writing-back)). Both are omitted when empty.
+`enemies` names `characters/<id>.json` files with an `enemy` record. Each
+enemy's stats, rewards and name are written over its `enemy.enemyId`
+([enemies](enemies.md)). The list is omitted when empty.
 
 ## `characters/<id>.json`
 ```json
@@ -107,6 +111,18 @@ palette sets ([tilesets](tilesets.md#writing-back)). Both are omitted when empty
 unchanged. `pc` is the decoded part of the game's record (`$CC:0000` + `charId` ×
 `$50`) and `growth` its HP/MP steps and per-level stat growth; both are absent for
 characters that are not PC records. The import keeps `level` equal to `pc.level`.
+
+An enemy (`kind: "enemy"`) can have an `enemy` record instead. It holds:
+
+- the decoded stat and reward records: `enemyId`, `hp`, `level`, `status`,
+  `stats`, `affinity`, `immunity`, `flags15`, `attackId` and `reward`;
+- `ai`, its AI script as text (or the parse error);
+- `attack`, its plain attack record.
+
+`chronoforge enemies import` writes `enemy_000` … `enemy_254`. See
+[enemies](enemies.md) for the layout. `ai` and `attack` are shown but never
+written. The import keeps `level` equal to `enemy.level`, and a placeholder name
+`Enemy NNN` (for an enemy without a ROM name) is not written.
 
 ## `sprites/<id>.sprite.json`
 ```json

@@ -2,7 +2,7 @@
 
 `chronoforge rom build` (and **Story → Build ROM…** or **Characters → Build ROM…**
 in Studio) writes a project's event packs, songs, playable-character records,
-tech tables, item tables, location maps and tilesets into a copy of the clean Chrono Trigger US 1.0 ROM and
+tech tables, item tables, location maps, tilesets and enemies into a copy of the clean Chrono Trigger US 1.0 ROM and
 fixes the header checksum. It starts from the unmodified ROM every time (SHA-256
 `06d1c2b0…829a9`; a 512-byte copier header is dropped); a built ROM is refused as
 a base. The output is game data: keep it local.
@@ -24,9 +24,16 @@ a base. The output is game data: keep it local.
   "techs": true,
   "items": true,
   "maps": ["loc_001", "loc_002"],
-  "tilesets": ["t12_02", "t3_00", "pal_00"]
+  "tilesets": ["t12_02", "t3_00", "pal_00"],
+  "enemies": ["enemy_005", "enemy_009"]
 }
 ```
+
+`enemies` names `characters/<id>.json` files with an `enemy` record. For each
+one, the builder writes the stat record, the reward record and (when changed)
+the name over the base ROM's enemy `enemy.enemyId`. See [enemies](enemies.md).
+`chronoforge enemies import` lists all 255. Studio sets the list with
+**Characters → Enemies → Write to ROM**.
 
 `maps` names `maps/<id>.map.json` files imported from the ROM (`chronoforge maps
 import`); each is written over the location in its `rom.location`. `tilesets`
@@ -99,7 +106,12 @@ ranges, the bit rules, the tileset a map names against its location record).
    target mode and the ItemBoosts table in place, and repacks the description
    table within its own span when a description changed, after the checks in
    [items](items.md).
-8. Writes the `Evt_PackPtrs` entries and the checksum and complement.
+8. With `rom.enemies`, writes each enemy's stat and reward records field by
+   field in place (`$CC:4700` + id × 23, `$CC:5E00` + id × 7). It writes the
+   name (`$CC:6500` + id × 11) only when it differs from the base ROM's. All of
+   this happens after the checks in [enemies](enemies.md). AI scripts, attack
+   and tech records are never written.
+9. Writes the `Evt_PackPtrs` entries and the checksum and complement.
 
 Maps and tilesets are applied first, right after the free space is set up, so
 the spans they free are known before the event packs are placed:
@@ -169,6 +181,12 @@ kind, the parts written, the packed blocks placed and a Tileset12's pack list
 after the build) and `relocations` (each block or table that moved or took a
 new slot: what, from, to, size). The CLI prints one line per changed map,
 tileset and relocation.
+
+With enemies, the report adds `enemies`. It gives each listed enemy's file id,
+enemy id, stat-record address, the record written and the name written (absent
+when the name was left as it was). Each changed field is one write, such as
+`enemy enemy_005 magic` or `enemy enemy_005 name`. The CLI prints how many
+enemies are listed and which ones changed.
 
 ## The packer
 
@@ -248,6 +266,18 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
 
   Nine damaged copies are rejected and ten bad edits are refused.
 
+- **Enemies** (`CTEnemiesTests`, `macos_studio/tools/verify_enemy_build.py`):
+  importing all 255 enemies and building gives the clean ROM with no write. An
+  edited build writes exactly the edited fields. Its checks:
+  - `ct_rom_check.py` checks it: only reported enemies' records and names
+    change, each decodes to the report and stays in range, and every other
+    enemy table and AI script is unchanged;
+  - `chronoforge enemies verify` accepts it against the project;
+  - the ROM's own `BattleFD_UnkB438` and `BattleFD_AddEnemyRewards`, run on the
+    built ROM in ChronoRET's interpreter, give the edited values.
+
+  Five damaged copies are rejected and four bad edits are refused.
+
 ## Limitations
 
 - No emulator run: the evidence is the ROM's own loader, decompressor and text
@@ -255,8 +285,9 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
 - Only event packs, message tables, song sequences (with their per-song table
   rows), the playable characters' records and growth rows, the tech tables'
   writable fields, the item tables' writable fields, and the maps and tilesets
-  of existing locations are written. New locations, overworld maps, sprites, samples, sound effects, new items or item ids, new
-  techs or tech names, enemies, ExpToLevel and other tables are not.
+  of existing locations, and enemies' stats, rewards and names, are written. New locations, overworld maps, sprites, samples, sound effects, new items or item ids, new
+  techs or tech names, enemy AI scripts, attack and tech records, ExpToLevel and other tables are not.
+  Enemies are written as their stat and reward records and names only.
 - Lowered packs cover the Studio statements in `event_bytecode.md`; cross-map calls
   are refused.
 - Maps keep their number of treasure records; animation lists keep their

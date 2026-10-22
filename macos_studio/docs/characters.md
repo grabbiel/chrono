@@ -153,6 +153,8 @@ character with a record, the editor shows:
 
 The editor also shows a range check, the level curve to 99 (chart and table),
 and a **Write to ROM** toggle (`rom.characters`). **Build ROM…** writes the build.
+The **Records** tab lists the characters without an enemy record. Enemies have
+their own **Enemies** tab, described in slice 3: [enemies](enemies.md).
 
 ## Building
 
@@ -206,7 +208,8 @@ is its own write, for example `character robo power`.
 - No emulator run. The evidence is the ROM's code, data and its own routine
   executed, not a booted game.
 - +$01, +$02 (but bit 4), +$19–26 and +$41–4F are not decoded. The derived
-  block is partial. The techs themselves are slice 2: [techs](techs.md).
+  block is partial. The techs themselves are slice 2 ([techs](techs.md)), and the
+  enemies are slice 3 ([enemies](enemies.md)).
 - ExpToLevel is shown and used, but not written. Item stats and names are not edited.
 - The Studio pane is compiled; its logic is in Core and tested there.
 - `chronoforge validate` (gate 4) checks `rom.characters`: each has a file with

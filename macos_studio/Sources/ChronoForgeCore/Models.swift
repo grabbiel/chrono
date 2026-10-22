@@ -19,8 +19,9 @@ public struct Project: Codable, Equatable, Sendable {
     /// songs by Audio_SongTable index (each assembled from a ct-song/1 listing),
     /// and playable characters by their `characters/<id>.json` (its `pc`
     /// record and `growth` rows; docs/characters.md), the tech tables, the
-    /// item tables (docs/items.md), and maps and tilesets by id over the
-    /// locations and sets they were imported from (docs/rom_builder.md).
+    /// item tables (docs/items.md), maps and tilesets by id over the
+    /// locations and sets they were imported from (docs/rom_builder.md), and
+    /// enemies by their `characters/<id>.json` `enemy` record (docs/enemies.md).
     public struct ROMBuild: Codable, Equatable, Sendable {
         public var eventPacks: [EventPack]
         public var songs: [Song]
@@ -29,6 +30,7 @@ public struct Project: Codable, Equatable, Sendable {
         public var items: Bool                 // write the ROM items and item_tables.json (absent = false)
         public var maps: [String] = []         // maps/<id>.map.json with a rom.location (absent = none)
         public var tilesets: [String] = []     // tilesets/<id>.tileset.json with a rom source (absent = none)
+        public var enemies: [String] = []      // characters/<id>.json with an enemy record (absent = none)
         public struct Song: Codable, Equatable, Sendable {
             public var song: Int
             public var listing: String         // project-relative path
@@ -43,11 +45,11 @@ public struct Project: Codable, Equatable, Sendable {
             }
         }
         public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = [], techs: Bool = false,
-                    items: Bool = false, maps: [String] = [], tilesets: [String] = []) {
+                    items: Bool = false, maps: [String] = [], tilesets: [String] = [], enemies: [String] = []) {
             self.eventPacks = eventPacks; self.songs = songs; self.characters = characters; self.techs = techs
-            self.items = items; self.maps = maps; self.tilesets = tilesets
+            self.items = items; self.maps = maps; self.tilesets = tilesets; self.enemies = enemies
         }
-        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items, maps, tilesets }
+        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items, maps, tilesets, enemies }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             eventPacks = try c.decodeIfPresent([EventPack].self, forKey: .eventPacks) ?? []
@@ -57,6 +59,7 @@ public struct Project: Codable, Equatable, Sendable {
             items = try c.decodeIfPresent(Bool.self, forKey: .items) ?? false
             maps = try c.decodeIfPresent([String].self, forKey: .maps) ?? []
             tilesets = try c.decodeIfPresent([String].self, forKey: .tilesets) ?? []
+            enemies = try c.decodeIfPresent([String].self, forKey: .enemies) ?? []
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -67,6 +70,7 @@ public struct Project: Codable, Equatable, Sendable {
             if items { try c.encode(items, forKey: .items) }
             if !maps.isEmpty { try c.encode(maps, forKey: .maps) }
             if !tilesets.isEmpty { try c.encode(tilesets, forKey: .tilesets) }
+            if !enemies.isEmpty { try c.encode(enemies, forKey: .enemies) }
         }
     }
 
@@ -120,11 +124,15 @@ public struct CharacterDef: Codable, Equatable, Sendable, Identifiable {
     public var pc: Record? = nil
     /// Its HP, MP and stat growth rows ($CC:258A, $CC:25C2, $CC:25FA).
     public var growth: Growth? = nil
+    /// An enemy's game data ($CC:4700 stats, $CC:5E00 rewards, name, AI;
+    /// CTEnemies.swift, docs/enemies.md), absent for other characters.
+    public var enemy: Enemy? = nil
 
     public init(id: String, name: String, kind: String, sprite: String? = nil, level: Int? = nil,
-                stats: Stats? = nil, palette: [String]? = nil, pc: Record? = nil, growth: Growth? = nil) {
+                stats: Stats? = nil, palette: [String]? = nil, pc: Record? = nil, growth: Growth? = nil,
+                enemy: Enemy? = nil) {
         self.id = id; self.name = name; self.kind = kind; self.sprite = sprite; self.level = level
-        self.stats = stats; self.palette = palette; self.pc = pc; self.growth = growth
+        self.stats = stats; self.palette = palette; self.pc = pc; self.growth = growth; self.enemy = enemy
     }
 
     /// The seven stats in the record's order (+$0B-$11). Also the growth base

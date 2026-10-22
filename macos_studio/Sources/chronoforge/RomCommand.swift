@@ -70,6 +70,11 @@ func cmdRom(_ args: [String]) -> Int32 {
                 print("tileset \(t.id): \(t.changed.joined(separator: ", "))" +
                       (t.blocks.isEmpty ? "" : "; " + t.blocks.map { "\($0.what) at \($0.address) (\($0.placement))" }.joined(separator: ", ")))
             }
+            if let enemies = report.enemies {
+                let edited = enemies.filter { e in report.writes.contains { $0.what.hasPrefix("enemy \(e.id) ") } }
+                print("enemies: \(enemies.count) listed, \(edited.count) changed" +
+                      (edited.isEmpty ? "" : " (" + edited.prefix(6).map(\.id).joined(separator: ", ") + (edited.count > 6 ? ", ..." : "") + ")"))
+            }
             for r in report.relocations ?? [] {
                 print("moved \(r.what): \(r.from ?? "new") -> \(r.to), \(r.bytes) bytes")
             }

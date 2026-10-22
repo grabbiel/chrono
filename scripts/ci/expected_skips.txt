@@ -72,3 +72,7 @@ ChronoForgeCoreTests.CTMapTilesetBuildTests/testEveryMapAndTilesetRebuildsFromIt
 ChronoForgeCoreTests.CTSceneDocumentTests/testEveryROMPackRaisesAndLowersByteExact                        skip      # local ROM
 ChronoForgeCoreTests.CTSceneDocumentTests/testEveryROMPackRunsOnTheTimeline                               skip      # local ROM
 ChronoForgeCoreTests.CTSceneDocumentTests/testROMLocationsFindTheirPacksAndMapObjects                     skip      # local ROM
+ChronoForgeCoreTests.CTEnemiesTests/testEveryROMScriptRoundTrips                                skip      # local ROM
+ChronoForgeCoreTests.CTEnemiesTests/testImportThenBuildIsIdentical                              skip      # local ROM
+ChronoForgeCoreTests.CTEnemiesTests/testEditedEnemyWritesOnlyItsFields                          skip      # local ROM
+ChronoForgeCoreTests.CTEnemiesTests/testBuilderEnemyRefusals                                    skip      # local ROM
