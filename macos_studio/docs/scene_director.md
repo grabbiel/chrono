@@ -33,7 +33,9 @@ states, including deadlocks. Optional party slots (for example `3,1,2`) bind
 party members 0–2 for `call_pc`; malformed or duplicate slots are rejected.
 Unbound party calls and raw `ct` opcodes are recorded without simulation.
 Loops stop after 1,000 statements or 10,000 frames in the UI. These are logical
-frames, not cycle-accurate SNES timing. This is not a playable game runtime.
+frames, not cycle-accurate SNES timing. This is not a playable game runtime: ROM
+locations play in the embedded runtime ([runtime.md](runtime.md)), which the
+Scenes pane opens with **Play…** in ROM mode.
 
 ## Language
 

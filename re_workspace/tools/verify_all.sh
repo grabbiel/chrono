@@ -247,6 +247,17 @@ if [ -f macos_studio/Package.swift ]; then
   $PY macos_studio/tools/verify_audio_build.py >/tmp/verify_audio_build.log 2>&1
   RC=$?
   note "Audio write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_audio_build.log | tail -1) samples through the driver on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Embedded runtime: every modelled opcode's handler in ChronoRET's interpreter against CTEventVM
+  # on the packs' operand sets (fails on any disagreement); the field loop talks at loc 7 and
+  # takes loc 74's exit to 77.
+  $PY re_workspace/tools/ct_event_vm.py check >/tmp/verify_event_vm.log 2>&1
+  RC=$?
+  note "event VM vs ROM handlers ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_event_vm.log | tail -1) pack instructions modelled)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  { macos_studio/.build/debug/chronoforge runtime run re_workspace/ct_clean.sfc 7 --frames 45 --input "0-19 up; 20 a"
+    macos_studio/.build/debug/chronoforge runtime run re_workspace/ct_clean.sfc 74 --frames 60 --input "0-59 up"; } >/tmp/verify_runtime.log 2>&1
+  RC=$?
+  grep -q "message 1 from obj 8 at frame 21" /tmp/verify_runtime.log && grep -q "warp at frame 32: 74 -> 77" /tmp/verify_runtime.log || RC=1
+  note "field runtime (loc 7 message, loc 74 exit)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

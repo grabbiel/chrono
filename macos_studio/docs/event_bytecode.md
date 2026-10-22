@@ -2,7 +2,9 @@
 
 ChronoForge can read, edit and write the event packs Chrono Trigger US 1.0
 loads for each location, and can lower a subset of Studio scenes to that
-bytecode. This is static tooling: there is no SNES VM or playable runtime yet.
+bytecode. This page covers the static tooling; the embedded runtime
+([runtime.md](runtime.md)) executes the packs: `CTEventVM` models 175 opcodes,
+each checked against the ROM's handler, and stops an object on any other.
 
 ## Pack format
 
