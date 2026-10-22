@@ -6,8 +6,8 @@ import Foundation
 
 extension CharacterDef {
     /// An enemy's game data (`kind: "enemy"`), imported from the ROM and
-    /// written back by `rom build` (docs/enemies.md). `ai` and `attack` are
-    /// shown, not written.
+    /// written back by `rom build` (docs/enemies.md). An edited `ai` text is
+    /// written too (CTEnemyAIPatch); `attack` is shown, not written.
     public struct Enemy: Codable, Equatable, Sendable {
         public var enemyId: Int                // 0-254 (255 is "no enemy" to the battle code)
         public var hp: Int                     // +$00 u16
@@ -58,12 +58,21 @@ extension CharacterDef {
             }
         }
         /// The AI script as text (CTEnemyAI.format), or why it does not parse.
+        /// `rom build` writes an edited `text` back (CTEnemyAIPatch); `size`,
+        /// `shared` and `sha256` record the imported script's length, the
+        /// enemies whose scripts overlap it and its bytes' hash, so the
+        /// budget can be checked without the ROM (absent in older files).
         public struct Script: Codable, Equatable, Sendable {
             public var address: String
             public var text: String?
             public var error: String?
-            public init(address: String, text: String? = nil, error: String? = nil) {
+            public var size: Int? = nil
+            public var shared: [Int]? = nil
+            public var sha256: String? = nil
+            public init(address: String, text: String? = nil, error: String? = nil,
+                        size: Int? = nil, shared: [Int]? = nil, sha256: String? = nil) {
                 self.address = address; self.text = text; self.error = error
+                self.size = size; self.shared = shared; self.sha256 = sha256
             }
         }
         /// An enemy attack or tech record (TechRec's layout, one part) and its effect record.
@@ -193,8 +202,11 @@ public enum CTEnemyROM {
         let at = value(rom, aiPointersPC + 2 * id, 2)
         let address = String(format: "$CC:%04X", at)
         let bank = Array(rom[aiBankPC..<(aiBankPC + 0x10000)])
-        do { return .init(address: address, text: try CTEnemyAI.text(bank, at: at, lengths: lengths)) }
-        catch { return .init(address: address, error: "\(error)") }
+        do {
+            let (parts, end) = try CTEnemyAI.parse(bank, at: at, lengths: lengths)
+            return .init(address: address, text: CTEnemyAI.format(parts), size: end - at,
+                         sha256: CTEventPack.sha256(Array(bank[at..<end])))
+        } catch { return .init(address: address, error: "\(error)") }
     }
 
     public static func action(rom: [UInt8], base: Int, id: Int, effects: Int, targets: Int?) -> CharacterDef.Enemy.Action {
@@ -287,6 +299,7 @@ public enum CTEnemyROM {
             throw CTROMBuildError("enemies import needs the unmodified Chrono Trigger US 1.0 ROM (SHA-256 06d1c2b0…829a9)")
         }
         let lengths = actLengths(rom: rom)
+        let sharers = CTEnemyAIPatch.sharers(CTEnemyAIPatch.spans(rom: rom, lengths: lengths))
         var byEnemy: [Int: String] = [:]
         for (key, c) in project.characters { if let n = c.enemy?.enemyId { byEnemy[n] = key } }
         var ids: [String] = []
@@ -298,6 +311,7 @@ public enum CTEnemyROM {
             c.kind = "enemy"
             c.name = shown
             c.enemy = decode(rom: rom, id: n, lengths: lengths)
+            if c.enemy!.ai?.text != nil { c.enemy!.ai!.shared = sharers[n] ?? [] }
             c.level = c.enemy!.level
             project.characters[id] = c
             ids.append(id)

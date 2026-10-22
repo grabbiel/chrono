@@ -86,8 +86,9 @@ that location ([maps](maps.md#writing-maps-back)). `tilesets` names
 `tilesets/<id>.tileset.json` files with a `rom` source: Tileset12, Tileset3 or
 palette sets ([tilesets](tilesets.md#writing-back)). Both are omitted when empty.
 `enemies` names `characters/<id>.json` files with an `enemy` record. Each
-enemy's stats, rewards and name are written over its `enemy.enemyId`
-([enemies](enemies.md)). The list is omitted when empty.
+enemy's stats, rewards and name are written over its `enemy.enemyId`, and its
+AI script when `enemy.ai.text` was edited ([enemies](enemies.md)). The list is
+omitted when empty.
 `sprites` names `sprites/<id>.sprite.json` files with a `rom` source of family
 `ct-pc`; each set is written in place ([sprites](sprites.md#writing-back)). The
 list is omitted when empty.
@@ -138,11 +139,16 @@ An enemy (`kind: "enemy"`) can have an `enemy` record instead. It holds:
 
 - the decoded stat and reward records: `enemyId`, `hp`, `level`, `status`,
   `stats`, `affinity`, `immunity`, `flags15`, `attackId` and `reward`;
-- `ai`, its AI script as text (or the parse error);
+- `ai`, its AI script: `address` (the base ROM's), `text` (or `error` when it
+  does not parse), and from the import `size` (its bytes), `shared` (the
+  enemies whose scripts overlap it) and `sha256` (its bytes' hash). The last
+  three let the Validator and Studio work out the bank `$CC` budget without
+  the ROM; files imported before them still load;
 - `attack`, its plain attack record.
 
 `chronoforge enemies import` writes `enemy_000` … `enemy_254`. See
-[enemies](enemies.md) for the layout. `ai` and `attack` are shown but never
+[enemies](enemies.md) for the layout. An edited `ai.text` is written back
+([enemies](enemies.md#writing-scripts-back)); `attack` is shown but never
 written. The import keeps `level` equal to `enemy.level`, and a placeholder name
 `Enemy NNN` (for an enemy without a ROM name) is not written.
 

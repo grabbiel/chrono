@@ -1,14 +1,15 @@
-# Enemies (Character & Party Architect, slice 3)
+# Enemies (Character & Party Architect, slices 3 and 4)
 
 Enemy stat records, rewards, names, attack and tech records, and AI scripts.
 Each one is decoded with evidence, imported into a project as
 `characters/<id>.json` with `kind: "enemy"`, and edited in **Characters →
-Enemies**. `chronoforge rom build` writes the stats, rewards and names back.
+Enemies**. `chronoforge rom build` writes the stats, rewards, names and edited
+AI scripts back.
 
 - The Python reference, with the check for every claim, is
   `re_workspace/tools/ct_enemies.py`.
-- The Swift twin is `CTEnemies.swift` (`CTEnemyROM`) and `CTEnemyAI.swift`
-  (`CTEnemyAI`).
+- The Swift twin is `CTEnemies.swift` (`CTEnemyROM`), `CTEnemyAI.swift`
+  (`CTEnemyAI`) and, for writing scripts, `CTEnemyAIPatch.swift`.
 
 The repository stores no ROM data. The import reads the enemies from your ROM
 into your project. The Swift tests use synthetic vectors
@@ -145,9 +146,126 @@ parsed script's bytes, and its text, assemble back to the same bytes (Python
 `check`, Swift `testEveryROMScriptRoundTrips`). Some scripts overlap: two
 enemies can share one.
 
-Scripts, attack records and tech records are **shown, not written**. Because
-scripts share bytes, editing one would change another enemy. A writer would
-need a relocating layout in bank `$CC`, which is the next slice.
+Attack records and tech records are **shown, not written**. Scripts are
+written back; see [Writing scripts back](#writing-scripts-back).
+
+## Writing scripts back
+
+### Where scripts live
+
+`ct_enemies.py check` proves each fact below (`region_claims`):
+
+- **The pointer.** Only `BattleAi_RunMainPart` and `BattleAi_FindReactPart`
+  read the pointer table. Both do `REP #$20; ASL A; TAX; LDA.l $CC8B08,X`: a
+  u16 per id at `$CC:8B08` + id × 2, for ids 0–255. Bank `$C1` holds the long
+  operand `$CC8B08` exactly twice, and ChronoRET's source has no other reader.
+- **The bank.** Every script byte the battle code reads (171 sites in
+  ChronoRET's source) is `LDA.l !BattleRom_ScriptBank+k,X` with k from 0 to
+  15 and a 16-bit X. A script is therefore addressed by its 16-bit offset in
+  bank `$CC` and must lie inside `$CC:0000`–`$CC:FFFF`. The scans for `$FE` and
+  `$FF` step X with `INX`; a script that ran off the bank's end would wrap to
+  `$CC:0000`. There is no other bound on a script's length.
+- **The region.** The two fixed scripts (`$CC:8D08`, `$CC:8D1E`) and the 255
+  parsed scripts fill `$CC:8D08`–`$CC:CBC8` (16,065 bytes), except the 50
+  bytes at enemy 127's pointer (`$CC:A3E0`), which do not parse as a script.
+  `BattleRom_ScriptMsgStrings` starts at `$CC:CBC9`, so the region cannot grow
+  in place.
+- **Sharing.** No two pointers share a start. Two pairs of scripts overlap,
+  where one script's tail is the next one's head: enemies 97 and 98 (13
+  bytes), and 244 and 245 (25 bytes). Editing either script of a pair in
+  place would change the other enemy.
+- **Free space.** `Padding_CCFC4F` (`$CC:FC4F`–`$CC:FFFF`, 945 × `$FF`) is the
+  only confirmed padding in bank `$CC`. It is a confirmed free region of
+  `manifests/rom_layout.json` (`CTROMLayout`), and it ends exactly at the end
+  of the bank.
+- **The ends.** `BattleAi_FindReactPart` takes the first `$FF` after a
+  script's start as the main part's end. A test record holding `$FF` would
+  move the reaction part. No ROM script has one, and none has a target code
+  past `BattleAi_TargetTable`.
+- **The length table.** The ROM's `BattleFD_AiActLength` equals the table
+  ChronoRET lists (`CTEnemyAIPatch.listedLengths`). The Validator and Studio
+  use it to check a script without the ROM.
+
+### How a script is written
+
+`rom build` assembles `enemy.ai.text` for each listed enemy
+(`CTEnemyAIPatch`):
+
+- **Unchanged.** Bytes equal to the base ROM's script write nothing. An
+  unedited import therefore rebuilds byte for byte, and enemy 127's unparsed
+  pointer is kept.
+- **In place.** When the script fits its old span and no other script
+  overlaps that span, it is written at the same address. Bytes left over at
+  the end of a shorter script are left as they were; nothing reads past the
+  reaction part's `$FF`.
+- **Moved.** A script that is shared, or that grows, goes into bank `$CC`'s
+  padding, and its pointer is rewritten. The old bytes stay where they were,
+  so an enemy that shared them (97 for 98) keeps its script byte for byte.
+  The scripts are placed right after maps and tilesets, before any other
+  write can take that padding.
+
+Before writing, the builder refuses:
+
+- text the parser does not accept: `$FE` or `$FF` inside a record, codes 3
+  and 5 (the length table cannot step them), unknown test or action codes,
+  a wrong number of bytes, a block without one or two tests;
+- text without an `end` line;
+- a test byte `$FF`;
+- a target code past `BattleAi_TargetTable` (`$39` or more);
+- moved scripts that do not fit the 945 bytes;
+- a script for an enemy whose pointer is not a script in the base ROM (enemy
+  127): its pointer is kept as it is;
+- an enemy id outside 0–254, and the same enemy twice.
+
+The import also records each script's `size`, `shared` (the enemies whose
+scripts overlap it) and `sha256`. With these, the Validator and Studio know
+which edits would move, and how much of the 945 bytes they take, without the
+ROM.
+
+### Evidence on the built ROM
+
+`macos_studio/tools/verify_enemy_ai_build.py` checks the write-back three
+ways:
+
+1. **The builder.** An unedited import, with all 254 parseable scripts listed
+   as text, builds the clean ROM with no writes. Three invented scripts are
+   then built:
+   - one in place (the first unshared enemy whose span is long enough);
+   - enemy 98's script, moved off the bytes it shares with enemy 97;
+   - one that grows past its span, which is moved too.
+
+   Exactly their spans and the two moved pointers are written.
+2. **The independent check.** `re_workspace/tools/ct_rom_check.py`
+   (`check_enemy_scripts`) re-decodes each reported script with the Python
+   twin and checks:
+   - the text, size and hash are as reported;
+   - the reaction part is where `FindReactPart`'s scan finds it;
+   - a script in place stays in its own unshared span, and a moved one in the
+     padding;
+   - only reported pointers change, and every other script is unchanged;
+   - nothing is written outside these spans.
+
+   `chronoforge enemies verify` accepts the built ROM and rejects the clean ROM
+   for the three edited scripts.
+3. **The game's code.** `ct_enemies.RomAi` runs the ROM's own
+   `BattleAi_RunMainPart` and `BattleAi_FindReactPart` on the built ROM in
+   ChronoRET's 65816 interpreter. Battle RAM is zeroed, PCs 0–2 are present,
+   and the enemy is entered as entry 0 and as entry 5. For each edited enemy
+   the run checks that:
+   - it reads only the new script and its pointer;
+   - it reads the test of every block up to the chosen one;
+   - it chooses what the script says (`expected_main`): the block whose test
+     holds, its first action's code and address, and the target slot of a
+     Self action;
+   - `FindReactPart` finds the new reaction part.
+
+   Enemy 97 (the sharer), enemies 244 and 245 (the other pair) and the edited
+   enemies' neighbours behave identically on the built and clean ROMs: the
+   same outcome, the same bytes read, the same RAM written. In all, 27 of 27
+   runs match.
+
+The checker rejects six damaged copies, and the CLI refuses eleven bad
+scripts and writes nothing.
 
 ## Project
 
@@ -162,7 +280,7 @@ need a relocating layout in bank `$CC`, which is the next slice.
     "affinity": { "lightning": 4, "shadow": 4, "water": 4, "fire": 4 },
     "immunity": 0, "flags15": 0, "attackId": 0,
     "reward": { "exp": 0, "gold": 0, "drop": 0, "charm": 0, "techPoints": 0 },
-    "ai": { "address": "$CC:0000", "text": "main\n…" },
+    "ai": { "address": "$CC:0000", "text": "main\n…", "size": 0, "shared": [], "sha256": "…" },
     "attack": { "id": 0, "flags": 0, "elementBits": 0, "part": 255, "effect": null }
   }
 }
@@ -190,8 +308,8 @@ chronoforge enemies verify <p.ctproj> <rom.sfc>
 
 - `show` prints the stats, affinities, status bytes, rewards (with item
   names), the attack record and the AI script.
-- `verify` checks that a ROM's stat records, rewards and names equal the
-  project's enemies, for example after `rom build`.
+- `verify` checks that a ROM's stat records, rewards, names and AI scripts
+  equal the project's enemies, for example after `rom build`.
 
 ## Studio
 
@@ -205,9 +323,18 @@ editors for:
 - rewards, with item pickers;
 - the name.
 
-The attack record and AI script text are read-only. The script view lists the
-enemy techs it names. **Write to ROM** adds the enemy to `rom.enemies`. A range
-problem shows under the header before a build.
+The attack record is read-only. The AI script is an editable text listing:
+
+- a parse or write error shows under it as you type, with its line number;
+- the line under it says how many bytes the script is and where a build would
+  put it: unchanged, in place, or moved (and why);
+- a bar shows how much of bank `$CC`'s 945 bytes the moved scripts take.
+
+**Tidy** rewrites the text with every record's names and labels, and **Apply**
+saves it to the project. The script view lists the enemy techs the script
+names. **Write to ROM** adds the enemy to `rom.enemies`. A range problem shows
+under the header before a build. `--select enemy_NNN` selects an enemy at
+launch.
 
 The view shows the enemy's battle sprite at rest once **Sprites → Import Sprites
 from ROM…** has imported it (`sprites/enemy_NNN.*`, read-only;
@@ -216,7 +343,9 @@ from ROM…** has imported it (`sprites/enemy_NNN.*`, read-only;
 ## Write-back
 
 `rom build` writes each listed enemy's stat and reward records field by field,
-in place, and the name when it differs from the base ROM's. Before writing, it
+in place, and the name when it differs from the base ROM's. An edited AI
+script is written as described in
+[Writing scripts back](#writing-scripts-back). Before writing, it
 refuses an enemy that:
 
 - has an id outside 0–254, or a name for an id above 250;
@@ -234,8 +363,8 @@ An unedited import rebuilds byte for byte.
 - only reported enemies' records and names change;
 - each changed record decodes to the report;
 - the values stay in range;
-- the other enemies, the attack, tech and effect tables, the AI pointers and
-  every script are unchanged.
+- the other enemies, the attack, tech and effect tables, and the AI pointers
+  and scripts the report does not write are unchanged.
 
 `macos_studio/tools/verify_enemy_build.py` runs the CLI end to end:
 

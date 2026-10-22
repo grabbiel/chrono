@@ -6,7 +6,7 @@ usage: chronoforge enemies import <rom.sfc> --project <project.ctproj>
        chronoforge enemies show <project.ctproj | rom.sfc> [<enemy>] [--json]
        chronoforge enemies verify <project.ctproj> <rom.sfc>
          <enemy>: an enemy id 0-254, a project file id (enemy_012) or a name
-         verify: the ROM's stat records, rewards and names equal the project's enemies (e.g. after rom build)
+         verify: the ROM's stat records, rewards, names and AI scripts equal the project's enemies (e.g. after rom build)
 """
 
 /// (file id, name, record) of every enemy, from a project's characters or a
@@ -116,6 +116,15 @@ func cmdEnemies(_ args: [String]) -> Int32 {
                 var want = e
                 want.ai = nil; want.attack = nil
                 if got != want { print("\(id): the ROM's stat or reward record differs"); differences += 1 }
+                if let text = e.ai?.text {
+                    let at = CTEnemyAIPatch.pointer(rom, n)
+                    let bank = Array(rom[CTEnemyAIPatch.bankPC..<(CTEnemyAIPatch.bankPC + 0x10000)])
+                    let want = try? CTEnemyAIPatch.assemble(text: text, lengths: CTEnemyROM.actLengths(rom: rom))
+                    let end = try? CTEnemyAI.parse(bank, at: at, lengths: CTEnemyROM.actLengths(rom: rom)).end
+                    if want == nil || end == nil || Array(bank[at..<end!]) != want! {
+                        print("\(id): the ROM's AI script at $CC:\(String(format: "%04X", at)) differs"); differences += 1
+                    }
+                }
                 if let name = CTEnemyROM.writableName(c), CTEnemyROM.name(rom: rom, id: n) != name {
                     print("\(id): the ROM's name is \(String(reflecting: CTEnemyROM.name(rom: rom, id: n) ?? ""))")
                     differences += 1

@@ -294,6 +294,22 @@ public enum Validator {
                 guard let e = c.enemy else { err(4, path, "no enemy record; import the ROM's enemies"); continue }
                 if !enemyIDs.insert(e.enemyId).inserted { err(4, path, "enemy \(e.enemyId) built twice") }
                 do { try CTEnemyROM.check(e, name: CTEnemyROM.writableName(c)) } catch { err(4, "characters/\(id).json", "\(error)") }
+                // The AI script `rom build` writes back: it parses, its codes are known, the game can step it.
+                if let text = e.ai?.text {
+                    do { _ = try CTEnemyAIPatch.assemble(text: text, lengths: CTEnemyAIPatch.listedLengths) }
+                    catch { err(4, "characters/\(id).json", "AI: \(error)") }
+                }
+            }
+            if !spec.enemies.isEmpty {
+                let budget = CTEnemyAIPatch.budget(p)
+                if budget.used > CTEnemyAIPatch.freeBytes {
+                    err(4, "project.json rom enemies", "edited AI scripts that are shared or grow need \(budget.used) bytes " +
+                        "of bank $CC's padding; it has \(CTEnemyAIPatch.freeBytes)")
+                }
+                if !budget.unknown.isEmpty {
+                    warn(4, "project.json rom enemies", "\(budget.unknown.count) AI scripts were imported without their size; " +
+                         "re-import the enemies to check the bank $CC budget before a build")
+                }
             }
             if spec.techs {
                 if let system = p.techSystem {
