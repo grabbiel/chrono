@@ -539,11 +539,13 @@ final class SNESPPUTests: XCTestCase {
         XCTAssertEqual(out.word(0, 238), bgr(31, 16, 1))
     }
 
-    func testOnlyModes0And1DrawBGs() {
+    func testMode3ReadsBG1TilesAt8bpp() {
+        // Slice 1 left modes 2-7 blank; slice 2 draws them (SNESPPUFeatureTests).
+        // Tile 1 at 8bpp is the 4bpp tiles 2 (planes 0-3) and 3 (planes 4-7).
         var f = PPUScene.frame()
-        f.cgram[1] = 0x1234
+        f.cgram[0x32] = 0x1234
         PPUScene.fillMap(&f, bg: 0, PPUFrame.tilemapEntry(tile: 1))
         f.setAllLines { $0.tm = 0x01; $0.bgmode = 0x03 }
-        XCTAssertEqual(PPUReferenceRenderer.render(f).word(0, 0), 0)
+        XCTAssertEqual(PPUReferenceRenderer.render(f).word(0, 0), 0x1234)
     }
 }
