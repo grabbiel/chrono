@@ -1,4 +1,5 @@
-// StoryPane.swift — dialogue strings, flags, encounters, techs.
+// StoryPane.swift — dialogue strings, flags, encounters, techs; Module 9's
+// story flag registry and era graph (StoryRegistryViews.swift).
 import SwiftUI
 import ChronoForgeCore
 import UniformTypeIdentifiers
@@ -10,8 +11,63 @@ struct StoryPane: View {
     @State private var selectedString: String?
     @State private var importROM = false
     @State private var showROMBuild = false
+    @State private var tab = StoryPane.launchTab
+    @State private var registry: CTStoryRegistry?
+    @State private var graph: CTEraGraph?
+    @State private var flagSelection: String? = StoryPane.launchSymbol
+    @State private var location: Int?
+    @State private var importStory = false
+
+    /// `--select registry|graph|<symbol>` opens that part of the pane at launch.
+    private static var launchTab: String {
+        switch LaunchArguments.value("--select") {
+        case "graph": return "Era Graph"
+        case .some(let s) where s == "registry" || s.hasPrefix("flag_") || s.hasPrefix("var_"): return "Flag Registry"
+        default: return "Dialogue"
+        }
+    }
+    private static var launchSymbol: String? {
+        LaunchArguments.value("--select").flatMap { $0.hasPrefix("flag_") || $0.hasPrefix("var_") ? $0 : nil }
+    }
 
     var body: some View {
+        Group {
+            switch tab {
+            case "Flag Registry":
+                if let registry {
+                    StoryFlagRegistryView(store: store, registry: Binding(get: { registry }, set: { self.registry = $0 }),
+                                          graph: graph, selection: $flagSelection, location: $location)
+                } else { storyMissing }
+            case "Era Graph":
+                if let graph {
+                    StoryEraGraphView(store: store, graph: Binding(get: { graph }, set: { self.graph = $0 }),
+                                      location: $location, showFlags: { _ in tab = "Flag Registry" })
+                } else { storyMissing }
+            default: dialogue
+            }
+        }
+        .navigationTitle("Story")
+        .toolbar {
+            Picker("Section", selection: $tab) {
+                ForEach(["Dialogue", "Flag Registry", "Era Graph"], id: \.self) { Text($0) }
+            }.pickerStyle(.segmented)
+            Button(registry == nil ? "Import Story from ROM…" : "Rescan Story from ROM…") { importStory = true }
+        }
+        .onAppear { (registry, graph) = store.loadStory() }
+        .onChange(of: project.url) { (registry, graph) = store.loadStory() }
+        .fileImporter(isPresented: $importStory, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first, let imported = store.importStory(rom: url) {
+                (registry, graph) = (imported.registry, imported.graph)
+            }
+        }
+    }
+
+    private var storyMissing: some View {
+        ContentUnavailableView("No story registry", systemImage: "flag",
+            description: Text("Import Story from ROM scans the event packs of your US 1.0 ROM into story/flags.json and story/graph.json."))
+    }
+
+    private var dialogue: some View {
         let keys = project.dialogue.strings.keys.sorted()
         return NavigationSplitView {
             List(selection: $selectedString) {
@@ -61,7 +117,6 @@ struct StoryPane: View {
             }
             .padding()
         }
-        .navigationTitle("Story")
         .toolbar {
             Button("Build ROM…") { showROMBuild = true }
             Button(project.textProfile == nil ? "Import ROM Text Dictionary…" : "Reimport ROM Text Dictionary…") {
