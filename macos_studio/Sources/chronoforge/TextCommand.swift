@@ -115,6 +115,9 @@ private func analysisOutput(_ r: CTTextAnalyzer.Report, json: Bool) throws -> Da
 let textBoxUsage = """
        chronoforge text preview <rom> <TABLE:INDEX | --text "..."> [--page N | --frame F] [--png out.png]
                     [--frames] [--layout-json] [--press N] [--place 1|2] [--style 0-7]
+                    [--opcode BB|C0-C4 [--speaker-y Y]] [--choice K]
+                    (--opcode: the box's place as that opcode sets it, by the speaker's screen Y for BB/C0;
+                     --choice: a choice message's cursor on box line K, from the end wait)
        chronoforge text preview <rom> --help-line item|tech <N | --text "..."> [--png out.png] [--layout-json]
                     (an item's or a tech's description in the menu's help line)
        chronoforge text font <rom> [--json]
@@ -152,7 +155,8 @@ func cmdTextBox(_ args: [String]) -> Int32 {
         if ["--frames", "--layout-json", "--json"].contains(a) {
             flags.insert(a)
             i += 1
-        } else if ["--text", "--page", "--frame", "--png", "--press", "--place", "--style", "--help-line"].contains(a) {
+        } else if ["--text", "--page", "--frame", "--png", "--press", "--place", "--style", "--help-line",
+                    "--opcode", "--speaker-y", "--choice"].contains(a) {
             guard i + 1 < args.count else { print("missing value for \(a)"); return 2 }
             options[a] = args[i + 1]
             i += 2
@@ -172,6 +176,23 @@ func cmdTextBox(_ args: [String]) -> Int32 {
           let style = int("--style", 0), (0...7).contains(style) else {
         print("--press takes a number, --place 1 or 2, --style 0-7"); return 2
     }
+    var boxPlace = place
+    if let op = options["--opcode"] {
+        guard options["--place"] == nil else { print("give --place or --opcode, not both"); return 2 }
+        guard let code = Int(op.hasPrefix("$") ? String(op.dropFirst()) : op, radix: 16),
+              let y = parseNumber(options["--speaker-y"] ?? "0"),
+              let p = CTBoxPlace.place(opcode: code, screenY: y) else {
+            print("--opcode takes a message opcode BB or C0-C4 (hex), --speaker-y a number"); return 2
+        }
+        boxPlace = p
+    } else if options["--speaker-y"] != nil {
+        print("--speaker-y needs --opcode"); return 2
+    }
+    var cursor: Int?
+    if let k = options["--choice"] {
+        guard let line = Int(k), (0...3).contains(line) else { print("--choice takes a box line 0-3"); return 2 }
+        cursor = line
+    }
     do {
         let rom = try boxROM(romPath)
         let mem = CTDialogueMemory(rom: rom)
@@ -184,7 +205,7 @@ func cmdTextBox(_ args: [String]) -> Int32 {
         default:
             break
         }
-        let settings = CTDialogueSettings.placeholder(press: press, place: place)
+        let settings = CTDialogueSettings.placeholder(press: press, place: boxPlace)
         if let where_ = options["--help-line"] {
             guard let helpPlace = CTHelpLine.Place(rawValue: where_) else { print("--help-line takes item or tech"); return 2 }
             return try helpLinePreview(rom, place: helpPlace, positional: Array(positional.dropFirst()), options: options,
@@ -222,10 +243,17 @@ func cmdTextBox(_ args: [String]) -> Int32 {
                 }
                 frame = at
             }
-            let rgba = CTDialogueBox(mem: mem, style: style).render(layout, at: frame)
+            let rgba = CTDialogueBox(mem: mem, style: style).render(layout, at: frame, cursor: cursor)
             let url = URL(fileURLWithPath: png)
             try PNG.writeRGBA(width: PPUFrame.width, height: 224, rgba: rgba).write(to: url, options: .atomic)
             print("wrote \(url.path) (frame \(min(frame, layout.frameCount - 1)))")
+        }
+        if let cursor {
+            let from = CTChoiceCursor.firstFrame(layout).map { "from frame \($0)" } ?? "no end wait: not drawn"
+            print("choice cursor: box line \(cursor), \(from)")
+        }
+        if options["--opcode"] != nil {
+            print("box place: \(boxPlace == CTBoxPlace.top ? "top (1)" : "bottom (2)")")
         }
         return 0
     } catch {

@@ -94,20 +94,24 @@ public struct CTDialogueBox: Sendable {
         return BGR555(word: r | g | b)
     }
 
-    /// The picture after `frame` of `layout` (clamped to its frames).
-    public func frame(_ layout: CTDialogueLayout, at frame: Int) -> PPUFrame {
+    /// The picture after `frame` of `layout` (clamped to its frames); `cursor`:
+    /// a choice message's cursor line (CTChoiceCursor), shown from the end wait.
+    public func frame(_ layout: CTDialogueLayout, at frame: Int, cursor: Int? = nil) -> PPUFrame {
         var f = blankFrame()
         guard !layout.frames.isEmpty else { return f }
         let t = min(max(0, frame), layout.frames.count - 1)
         Self.storeText(&f, layout, through: t)
         let s = layout.frames[t]
         Self.applyBand(&f, open: s.open, place: s.place)
+        if let cursor, let first = CTChoiceCursor.firstFrame(layout), t >= first {
+            CTChoiceCursor.apply(&f, row: cursor, mem: mem)
+        }
         return f
     }
 
     /// 256 x 224 RGBA8 of `frame`.
-    public func render(_ layout: CTDialogueLayout, at frame: Int) -> [UInt8] {
-        PPUReferenceRenderer.render(self.frame(layout, at: frame))
+    public func render(_ layout: CTDialogueLayout, at frame: Int, cursor: Int? = nil) -> [UInt8] {
+        PPUReferenceRenderer.render(self.frame(layout, at: frame, cursor: cursor))
     }
 
     /// The frame at which page `page` is fully drawn (nil past the last page).

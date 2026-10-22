@@ -245,7 +245,8 @@ private struct ItemForm: View {
             if let text = item.description, !text.isEmpty {
                 GridRow {
                     Text("In a dialogue box").foregroundStyle(.secondary)
-                    DialoguePreviewView(source: .text(text), romPath: romPath, scale: 1.5)
+                    DialoguePreviewView(source: .text(text), romPath: romPath, scale: 1.5,
+                                        names: CTDialogueSettings.projectNames(project))
                         .help("The text through the field's dialogue box (font, widths, frame, pacing); "
                               + "the menu draws descriptions in its own help line")
                 }
