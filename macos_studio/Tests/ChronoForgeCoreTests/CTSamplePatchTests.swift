@@ -323,6 +323,10 @@ final class CTSamplePatchTests: XCTestCase {
         XCTAssertThrowsError(try CTROMBuilder.build(base: rom, requests: [], samples: [big], textProfile: nil)) {
             XCTAssertTrue("\($0)".contains("into the echo buffer"), "\($0)")
         }
+        // The same id twice.
+        XCTAssertThrowsError(try CTROMBuilder.build(base: rom, requests: [], samples: [try request("d", replace: 3, songs: []),
+                                                                                        try request("d", replace: nil, songs: [])],
+                                                    textProfile: nil)) { XCTAssertTrue("\($0)".contains("listed twice"), "\($0)") }
         // A seventeenth sample does not fit a song's list.
         let full = try (0..<CTSongISA.romSongCount).first { CTSongTables.rom(rom, song: $0).samples?.count == 16 }
         if let full {

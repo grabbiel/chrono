@@ -297,10 +297,11 @@ public enum CTSamplePatch {
         throws -> (lists: [Int: [Int]], samples: [ReportSample], tables: ReportTables?) {
         let base = try CTSampleTables.locate(rom)
         guard base == CTSampleTables.rom else { throw CTROMBuildError("the base ROM's sample tables are not at $C7:0AEA") }
-        var replaced = Set<Int>()
+        var replaced = Set<Int>(), ids = Set<String>()
         for r in requests {
             try check(r)
             if let n = r.replace, !replaced.insert(n).inserted { throw CTROMBuildError("sample \(n) is replaced twice") }
+            if !ids.insert(r.id).inserted { throw CTROMBuildError("sample \(r.id) is listed twice") }
         }
         let appended = requests.filter { $0.replace == nil }
         let count = base.count + appended.count
@@ -308,10 +309,11 @@ public enum CTSamplePatch {
             throw CTROMBuildError("at most \(CTSampleTables.numberMax - base.count) samples can be appended")
         }
         var entries = try (1...base.count).map { try base.entry(rom, $0) }
-        // Old spans no other entry still uses become reclaimable.
+        // Old spans no other entry still uses become reclaimable, each once
+        // (replaced entries that share a span give it to the first of them).
         let kept = Set(entries.filter { !replaced.contains($0.number) }.map(\.pc))
-        var homes: [Int: Range<Int>] = [:]
-        for e in entries where replaced.contains(e.number) && !kept.contains(e.pc) {
+        var homes: [Int: Range<Int>] = [:], homed = Set<Int>()
+        for e in entries where replaced.contains(e.number) && !kept.contains(e.pc) && homed.insert(e.pc).inserted {
             homes[e.number] = e.pc..<(e.pc + 2 + e.length)
         }
 
