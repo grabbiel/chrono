@@ -52,3 +52,4 @@ ChronoForgeMetalTests.PPURendererTests/testMTKViewFramePath                     
 ChronoForgeMetalTests.PPURendererTests/testOffscreenFrameRenders                                may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testShaderLibraryCompiles                                may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testSNESPPUViewInits                                     may-skip  # Metal device availability on hosted runners
+ChronoForgeCoreTests.CTTilesetsTests/testImportFromTheROM                                       skip      # local ROM
