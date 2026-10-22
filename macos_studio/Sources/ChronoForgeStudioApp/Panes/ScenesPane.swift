@@ -12,8 +12,29 @@ struct ScenesPane: View {
     @State private var selection: String?
     @State private var newID = ""
     @State private var adding = false
+    /// `--select loc_NNN` at launch opens that ROM location.
+    @State private var mode = LaunchArguments.value("--select")?.hasPrefix("loc_") == true ? "rom" : "project"
+
+    private var launchLocation: Int? {
+        LaunchArguments.value("--select").flatMap { $0.hasPrefix("loc_") ? Int($0.dropFirst(4)) : nil }
+    }
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("Scenes", selection: $mode) {
+                Text("Project Scenes").tag("project")
+                Text("ROM Locations").tag("rom")
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 360).padding(.top, 8)
+            if mode == "rom" {
+                LocationScenesView(store: store, project: project, initial: launchLocation)
+            } else {
+                projectScenes
+            }
+        }
+    }
+
+    private var projectScenes: some View {
         EntityListView(title: "Scenes", ids: project.scenes.keys.sorted(), selection: $selection) { id in
             if let doc = project.scenes[id] {
                 SceneEditor(store: store, project: project, document: doc).id(project.url.path + "/" + id)
