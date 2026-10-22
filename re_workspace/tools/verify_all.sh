@@ -195,6 +195,15 @@ if [ -f macos_studio/Package.swift ]; then
   macos_studio/.build/debug/chronoforge music verify-model re_workspace/ct_clean.sfc --driver-steps 600 --songs 1,8,24,29 >/tmp/verify_music_driver.log 2>&1
   RC=$?
   note "music model vs driver key-ons ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_music_driver.log | tail -1) songs)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Story flags: every $7F:0000-$01FF access and location change in the event packs,
+  # reconciled with the decoder; the ROM's $65/$66/$56 handlers run on every operand set;
+  # the Swift scan agrees, and a flag-setting ROM path runs in the scene preview.
+  $PY re_workspace/tools/ct_story.py check --run >/tmp/verify_story.log 2>&1
+  RC=$?
+  note "story flags xref ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_story.log | tail -1) handler operand sets)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  macos_studio/.build/debug/chronoforge story check re_workspace/ct_clean.sfc >/tmp/verify_story_cli.log 2>&1
+  RC=$?
+  note "story CLI check ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_story_cli.log | tail -1) registry flags resolve)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

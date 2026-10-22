@@ -39,6 +39,8 @@ MyGame.ctproj/
 ├── maps/<id>.map.json            # location header, layers, exits, triggers
 ├── scenes/<id>.event.dsl         # human-readable event script (canonical source)
 ├── scenes/<id>.event.json        # compiled AST + visual node layout
+├── story/flags.json              # story flag registry (ct-story-flags/1, docs/story.md)
+├── story/graph.json              # world graph and inferred era groups (ct-story-graph/1)
 └── build/                        # compiler output (gitignored): .sfc, .app
 ```
 
@@ -60,6 +62,12 @@ MyGame.ctproj/
            "items": true }
 }
 ```
+`flags` entries name a bit of `$7F:0000–$7F:01FF` for scenes (`bit` 0–7). Two
+optional keys: `"origin": "story"` marks flags the story registry writes
+(`chronoforge story import`; a rescan replaces only those) and `notes`. Both are
+omitted when absent, so older projects load and save unchanged. A registry flag
+never replaces a maintainer's flag with the same symbol. See [Story Mode](story.md).
+
 `rom` is optional: the event packs, songs and playable characters `chronoforge rom
 build` writes into the base ROM (see [ROM builder](rom_builder.md),
 [song sequences](music_sequences.md) and [characters](characters.md)). Any list may
