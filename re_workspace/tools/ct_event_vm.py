@@ -49,6 +49,7 @@ SCRATCH = (range(0x7E01C1, 0x7E01EB), range(0x7E01EE, 0x7E01F8),
            range(0x7E0309, 0x7E0317),     # Decomp_ToWram's own working bytes (Decomp_OutLen is compared)
            range(0x7F3800, 0x7F4400))     # SprBuf: Spr_LoadLargeObj's tile buffer (presentation)
 STEP_LIMIT = 3_000_000
+EXTERNAL_PC = 0x070004                     # $C7:0004 Audio_DriverCommand, run as an external call
 OBJ_TABLES = (0x0C00, 0x0F00, 0x0F80, 0x1000, 0x1080, 0x1100, 0x1180, 0x1300, 0x1600, 0x1680, 0x1780,
               0x1800, 0x1880, 0x1900, 0x1980, 0x1A00, 0x1A80, 0x1B00, 0x1B80, 0x1C00, 0x1C80)
 TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E, 0x92, 0x96, 0x9C, 0xA0)
@@ -199,7 +200,9 @@ class Concrete:
                 else:
                     self.wmadd = self.wmadd & 0xFFFF | (v & 1) << 16
 
-        m = Machine(machine.image, machine.code, max_steps=STEP_LIMIT, callee_steps=STEP_LIMIT)
+        code = bytearray(machine.code)
+        code[EXTERNAL_PC] = 0               # Audio_DriverCommand: outside the model (the APU handshake)
+        m = Machine(machine.image, code, max_steps=STEP_LIMIT, callee_steps=STEP_LIMIT)
         interp.machine = m
         self.interp, self.absint, self.machine = interp, absint, m
 

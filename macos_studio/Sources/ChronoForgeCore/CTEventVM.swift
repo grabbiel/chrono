@@ -26,6 +26,13 @@ public final class CTEventVM {
     public private(set) var pack: CTEventPack
     /// Objects stopped for good, by slot (object x 2): the reason shown.
     public private(set) var stopped: [Int: String] = [:]
+    /// Sound-driver commands sent (Audio_DriverCommand), oldest first; the field drains them.
+    public var audio: [AudioCommand] = []
+
+    /// Audio_CmdId and Audio_CmdArg0-2 as Audio_DriverCommand found them.
+    public struct AudioCommand: Equatable, Sendable {
+        public var id: UInt8, arg0: UInt8, arg1: UInt8, arg2: UInt8
+    }
     /// Called when a handler leaves the field (`$E1`/`$DF` warp now, `$FF`
     /// below `$90`): the field runtime takes over.
     public var trace: ((TraceEvent) -> Void)?
@@ -260,6 +267,7 @@ public final class CTEventVM {
         "warps": [0xDC, 0xDD, 0xDE, 0xE0, 0xE2],
         "field": [0xD8, 0xE3, 0xE6, 0xE7, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4],
         "characters": [0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83],
+        "sound": [0xE8, 0xEA, 0xEB, 0xEC],
         "movement": [0x8F, 0x92, 0x94, 0x95, 0x96, 0x9C, 0xA0, 0xA8, 0xA9, 0xB5, 0xB6],
     ]
     public static let modelled: Set<UInt8> = Set(families.values.joined())
@@ -566,6 +574,7 @@ public final class CTEventVM {
         case 0xA9: return faceObject(y, target: Int(wram[WRAM.partyObjSlot + data(y + 1)]))
         case 0x82: return initNpcSprite(y)
         case 0x83: return initEnemySprite(y)
+        case 0xE8, 0xEA, 0xEB, 0xEC: return sound(op, y)
         case 0xE3: wram[WRAM.fieldControlEnabled] = UInt8(data(y + 1)); return .go(x: y + 2, carry: true)
         case 0xE6:
             let amount = dataWord(y + 1), layers = data(y + 3)
@@ -881,5 +890,37 @@ public final class CTEventVM {
         wram[WRAM.fadeFixedColor] = wram[WRAM.fadeFixedColor] & 0x1F | colour & 0xE0
         wram[WRAM.fieldFadeFlags] |= 0x18
         return .go(x: y + 3, carry: false)
+    }
+
+    /// Evt_OpE8/EA/EB/EC: the Audio_Cmd* block, then Audio_DriverCommand (the
+    /// APU handshake is the driver's; the command is queued in `audio`).
+    func sound(_ op: UInt8, _ y: Int) -> Outcome {
+        func send(_ id: UInt8, _ a0: UInt8, _ a1: UInt8) {
+            wram[0x7E1E00] = id; wram[0x7E1E01] = a0; wram[0x7E1E02] = a1   // Audio_CmdId, Arg0, Arg1
+            audio.append(AudioCommand(id: id, arg0: a0, arg1: a1, arg2: wram[0x7E1E03]))
+        }
+        switch op {
+        case 0xE8:
+            wram.setWord(WRAM.evtOpSavedPos, y + 1)
+            send(0x18, UInt8(data(y + 1)), 0x80)                        // Audio_Cmd18, Audio_Cmd18Arg1
+            return .go(x: y + 2, carry: false)
+        case 0xEA:
+            let track = UInt8(data(y + 1))
+            wram[0x7E29AE] = track                                      // Menu_Config1E
+            wram.setWord(WRAM.evtOpSavedPos, y + 1)
+            send(0x10, track, wram[0x7E1E02])                           // Audio_CmdPlayMusic
+            return .go(x: y + 2, carry: false)
+        case 0xEB:
+            wram[0x7E1E03] = 0xFF                                       // Audio_Cmd81Arg
+            wram.setWord(WRAM.evtOpSavedPos, y + 2)
+            send(0x81, UInt8(data(y + 1)), UInt8(data(y + 2)))         // Audio_CmdUnk81
+            send(0x82, 0, 0xFF)
+            send(0x83, 0, 0xFF)
+            return .go(x: y + 3, carry: false)
+        default:
+            wram.setWord(WRAM.evtOpSavedPos, y + 4)
+            send(UInt8(data(y + 1)), UInt8(data(y + 2)), UInt8(data(y + 3)))
+            return .go(x: y + 4, carry: false)
+        }
     }
 }
