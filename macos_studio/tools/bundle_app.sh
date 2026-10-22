@@ -35,6 +35,7 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
     <key>CFBundleName</key>              <string>ChronoForge Studio</string>
     <key>CFBundleDisplayName</key>       <string>ChronoForge Studio</string>
     <key>CFBundleExecutable</key>        <string>ChronoForgeStudio</string>
+    <key>CFBundleIconFile</key>          <string>AppIcon</string>
     <key>CFBundleIdentifier</key>        <string>com.chronoforge.studio</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
@@ -45,6 +46,18 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# ---- app icon: Assets/AppIcon.png (1024 px) -> Resources/AppIcon.icns ------
+# Original art generated with ChatGPT image generation (Codex CLI), 2026-10-22.
+echo "==> AppIcon.icns"
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+mkdir -p "$ICONSET"
+for SIZE in 16 32 128 256 512; do
+    sips -s format png -z "$SIZE" "$SIZE" "$PKG/Assets/AppIcon.png" --out "$ICONSET/icon_${SIZE}x${SIZE}.png" >/dev/null
+    sips -s format png -z $((SIZE * 2)) $((SIZE * 2)) "$PKG/Assets/AppIcon.png" --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$RES/AppIcon.icns"
+rm -rf "$(dirname "$ICONSET")"
 
 echo "==> PkgInfo"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
