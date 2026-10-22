@@ -221,6 +221,9 @@ With a text profile, it also compiles each description.
   - the category's record B fields; the accessory's status bits and battle flags are shown by bit number;
   - target mode, name and description, with the description's live dictionary analysis
     (bytes, raw bytes, entries used; [text codec](text_codec.md)) when the project has a text profile;
+  - **In a dialogue box**: the description through the field's dialogue box (ROM font,
+    widths, frame, pacing, overflow warnings; [dialogue box](dialogue.md)) when a ROM is chosen.
+    The game draws descriptions in the menu's help line, so this is a fit check, not that line;
 - **Preview**: the selected item in an imported character's slot, through `CTEquipStats`;
 - **Stat boosts**: ItemBoosts, a toggle per stat in the stat order and the amount.
 

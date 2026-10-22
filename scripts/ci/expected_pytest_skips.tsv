@@ -145,3 +145,8 @@ re_workspace/tests/test_enemies.py::test_chronoret_source_claims	local ROM not p
 re_workspace/tests/test_enemies.py::test_rom_loader_and_rewards_run_as_decoded	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_enemies.py::test_rom_loader_detects_a_changed_record	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_enemies.py::test_every_enemy_decodes	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_dialogue.py::test_chronoret_source_claims	local ChronoRET checkout not present (re_workspace/refs/ChronoRET)
+re_workspace/tests/test_dialogue.py::test_code_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_dialogue.py::test_data_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_dialogue.py::test_real_messages_run_as_modelled	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_dialogue.py::test_rom_routines_run_as_modelled	local ROM not present (re_workspace/ct_clean.sfc)

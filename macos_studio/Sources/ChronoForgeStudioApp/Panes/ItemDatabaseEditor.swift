@@ -23,7 +23,7 @@ struct ItemDatabaseEditor: View {
     let store: ProjectStore
     let project: CTProject
     @State private var page: Page = .category(0)
-    @State private var selection: ItemDef.ID?
+    @State private var selection: ItemDef.ID? = LaunchArguments.value("--select")   // e.g. --select 01_wood_sword
 
     var body: some View {
         HSplitView {
@@ -48,7 +48,7 @@ struct ItemDatabaseEditor: View {
                         ScrollView {
                             if let id = selection, let index = db.items.firstIndex(where: { $0.id == id }),
                                CTItemROM.category(of: db.items[index].rom!.itemId) == c {
-                                ItemForm(item: $db.items[index], tables: db.tables, project: project)
+                                ItemForm(item: $db.items[index], tables: db.tables, project: project, romPath: store.sceneROMPath)
                                     .padding(.vertical, 6)
                             } else {
                                 Text("Select an item.").foregroundStyle(.secondary).padding()
@@ -159,6 +159,8 @@ private struct ItemForm: View {
     @Binding var item: ItemDef
     let tables: ItemTablesDef?
     let project: CTProject
+    /// The ROM the dialogue box preview reads its font and frame from.
+    var romPath: String? = nil
 
     private var category: Int { CTItemROM.category(of: item.rom!.itemId) }
 
@@ -229,6 +231,14 @@ private struct ItemForm: View {
                 GridRow {
                     Text("")
                     DescriptionAnalysis(text: text, profile: profile)
+                }
+            }
+            if let text = item.description, !text.isEmpty {
+                GridRow {
+                    Text("In a dialogue box").foregroundStyle(.secondary)
+                    DialoguePreviewView(source: .text(text), romPath: romPath, scale: 1.5)
+                        .help("The text through the field's dialogue box (font, widths, frame, pacing); "
+                              + "the menu draws descriptions in its own help line")
                 }
             }
             if category < 4 { EquipPreview(item: item, tables: tables, project: project) }

@@ -1,11 +1,14 @@
 import Foundation
+import CryptoKit
 import ChronoForgeCore
 
 func cmdText(_ args: [String]) -> Int32 {
+    if let first = args.first, ["preview", "font", "fit"].contains(first) { return cmdTextBox(args) }
     let operations = ["profile", "encode", "decode", "message", "build", "verify-corpus", "analyze"]
     guard args.count >= 2, operations.contains(args[0]) else {
         print("usage: chronoforge text <profile|encode|decode|message|build|verify-corpus> <input> [--profile profile.json] [--out file]")
         print("       chronoforge text analyze <message.txt | dialogue.json> --profile profile.json [--json]")
+        print(textBoxUsage)
         return 2
     }
     let operation = args[0], input = URL(fileURLWithPath: args[1]).standardizedFileURL
@@ -105,4 +108,243 @@ private func analysisOutput(_ r: CTTextAnalyzer.Report, json: Bool) throws -> Da
     if r.entries.count > 20 { lines.append("  … \(r.entries.count - 20) more entries used") }
     lines.append("\(r.unusedEntries.count) of 127 entries unused")
     return Data((lines.joined(separator: "\n") + "\n").utf8)
+}
+
+// MARK: - The dialogue box (CTDialogueFont / CTDialogueLayout / CTDialogueBox)
+
+let textBoxUsage = """
+       chronoforge text preview <rom> <TABLE:INDEX | --text "..."> [--page N | --frame F] [--png out.png]
+                    [--frames] [--layout-json] [--press N] [--place 1|2] [--style 0-7]
+       chronoforge text font <rom> [--json]
+       chronoforge text fit <rom> <message.txt | dialogue.json> [--json]   (report only: lines past the frame)
+"""
+
+private func boxROM(_ path: String) throws -> [UInt8] {
+    var data = [UInt8](try Data(contentsOf: URL(fileURLWithPath: path)))
+    if data.count == CTROMBuilder.romSize + 512 { data.removeFirst(512) }
+    guard data.count == CTROMBuilder.romSize else { throw CTTextError("expected a 4 MiB Chrono Trigger ROM") }
+    return data
+}
+
+/// `[Messages_]D8D000:12` -> (table, index).
+func parseMessageLabel(_ s: String) -> (Int, Int)? {
+    let body = s.hasPrefix("Messages_") ? String(s.dropFirst(9)) : s
+    let parts = body.split(separator: ":")
+    guard parts.count == 2, parts[0].count == 6, let table = Int(parts[0], radix: 16), let index = Int(parts[1]),
+          table >> 16 >= 0xC0 else { return nil }
+    return (table, index)
+}
+
+private func jsonLine<T: Encodable>(_ value: T) throws -> Data {
+    let e = JSONEncoder()
+    e.outputFormatting = [.sortedKeys]
+    return try e.encode(value) + Data("\n".utf8)
+}
+
+func cmdTextBox(_ args: [String]) -> Int32 {
+    let operation = args[0]
+    var positional: [String] = [], options: [String: String] = [:], flags: Set<String> = []
+    var i = 1
+    while i < args.count {
+        let a = args[i]
+        if ["--frames", "--layout-json", "--json"].contains(a) {
+            flags.insert(a)
+            i += 1
+        } else if ["--text", "--page", "--frame", "--png", "--press", "--place", "--style"].contains(a) {
+            guard i + 1 < args.count else { print("missing value for \(a)"); return 2 }
+            options[a] = args[i + 1]
+            i += 2
+        } else if a.hasPrefix("--") {
+            print("unknown text \(operation) option \(a)"); return 2
+        } else {
+            positional.append(a)
+            i += 1
+        }
+    }
+    guard let romPath = positional.first else { print("usage:\n" + textBoxUsage); return 2 }
+    func int(_ key: String, _ fallback: Int) -> Int? {
+        guard let v = options[key] else { return fallback }
+        return Int(v)
+    }
+    guard let press = int("--press", 1), let place = int("--place", 1), [1, 2].contains(place),
+          let style = int("--style", 0), (0...7).contains(style) else {
+        print("--press takes a number, --place 1 or 2, --style 0-7"); return 2
+    }
+    do {
+        let rom = try boxROM(romPath)
+        let mem = CTDialogueMemory(rom: rom)
+        switch operation {
+        case "font":
+            return try textFont(mem, json: flags.contains("--json"))
+        case "fit":
+            guard positional.count == 2 else { print("usage:\n" + textBoxUsage); return 2 }
+            return try textFit(rom, URL(fileURLWithPath: positional[1]), json: flags.contains("--json"))
+        default:
+            break
+        }
+        let settings = CTDialogueSettings.placeholder(press: press, place: place)
+        let layout: CTDialogueLayout
+        if let text = options["--text"] {
+            guard positional.count == 1 else { print("give a message id or --text, not both"); return 2 }
+            let codec = try CTTextCodec(profile: CTTextProfile.fromROM(Data(rom)))
+            layout = try CTDialogueLayout.bytes(try codec.compileMessage(text), rom: rom, settings: settings)
+        } else {
+            guard positional.count == 2, let (table, index) = parseMessageLabel(positional[1]) else {
+                print("give a message id TABLE:INDEX (e.g. D8D000:12) or --text \"...\""); return 2
+            }
+            let at = CTDialogueLayout.messageAddress(rom: rom, table: table, index: index)
+            layout = try CTDialogueLayout(mem: mem, text: at, settings: settings)
+        }
+        if flags.contains("--layout-json") {
+            FileHandle.standardOutput.write(try jsonLine(layout.summary))
+            return 0
+        }
+        if flags.contains("--frames") {
+            FileHandle.standardOutput.write(Data(frameTimeline(layout).utf8))
+        } else {
+            FileHandle.standardOutput.write(Data(layoutReport(layout).utf8))
+        }
+        if let png = options["--png"] {
+            let frame: Int
+            if let f = options["--frame"] {
+                guard let n = Int(f) else { print("--frame takes a number"); return 2 }
+                frame = n
+            } else {
+                guard let page = int("--page", 0), let at = layout.pageFrame(page) else {
+                    print("no page \(options["--page"] ?? "0") (the message has \(layout.pageCount))"); return 1
+                }
+                frame = at
+            }
+            let rgba = CTDialogueBox(mem: mem, style: style).render(layout, at: frame)
+            let url = URL(fileURLWithPath: png)
+            try PNG.writeRGBA(width: PPUFrame.width, height: 224, rgba: rgba).write(to: url, options: .atomic)
+            print("wrote \(url.path) (frame \(min(frame, layout.frameCount - 1)))")
+        }
+        return 0
+    } catch {
+        print("text \(operation) failed: \(error)"); return 1
+    }
+}
+
+private func textFont(_ mem: CTDialogueMemory, json: Bool) throws -> Int32 {
+    struct Box: Encodable {
+        var lines: Int, lineHeight: Int, penLeft: Int, penIndent: Int, innerRight: Int, bandLines: Int
+        var framesPerGlyph: Int, waitUnitFrames: Int
+    }
+    struct Font: Encodable {
+        var schema: String, font: String, fontRight: String, glyphs: Int, glyphPixels: String, widthsAt: String
+        var glyphDigest: String, widths: [Int], frameDigests: [String], palettes: [[Int]], box: Box
+    }
+    var frames: [String] = [], palettes: [[Int]] = []
+    for k in 0..<CTDialogueROM.styles {
+        let (tiles, alt) = CTDialogueWindow.frameSet(mem, style: k)
+        frames.append(CTDialogueFont.hex(SHA256Digest(tiles + alt)))
+        palettes.append(CTDialogueWindow.palette(mem, style: k).dropFirst().map { Int($0 ?? 0) })
+    }
+    let widths: [Int] = (0xA0..<0x100).map { CTDialogueFont.width(mem, $0) }
+    let box = Box(lines: CTDialogueROM.lines, lineHeight: CTDialogueROM.lineHeight, penLeft: CTDialogueROM.penLeft,
+                  penIndent: CTDialogueROM.penIndent, innerRight: CTDialogueROM.innerRight,
+                  bandLines: CTDialogueROM.bandLines, framesPerGlyph: 1, waitUnitFrames: CTDialogueROM.waitUnit)
+    let font = Font(schema: "ct-dialogue-font/1", font: CTDialogueROM.snes(CTDialogueROM.font),
+                    fontRight: CTDialogueROM.snes(CTDialogueROM.fontRight), glyphs: CTDialogueFont.glyphCodes.count,
+                    glyphPixels: "12x12 2bpp", widthsAt: CTDialogueROM.snes(CTDialogueROM.widths),
+                    glyphDigest: CTDialogueFont.digest(mem), widths: widths, frameDigests: frames, palettes: palettes,
+                    box: box)
+    if json {
+        FileHandle.standardOutput.write(try jsonLine(font))
+        return 0
+    }
+    print("font \(font.font) + \(font.fontRight): \(font.glyphs) glyphs, 12x12 2bpp; widths at \(font.widthsAt)")
+    print("advances $A0-$FF: " + widths.map(String.init).joined(separator: " "))
+    print("glyph digest \(font.glyphDigest)")
+    print("box: 4 lines of 16 px, pen 8 (indent $14) to the frame edge at 248; 1 glyph a frame, waits of 15 frames")
+    print("\(CTDialogueROM.styles) frame styles (Menu_Config01 bits 0-2), colours 9-11 the text greys")
+    return 0
+}
+
+/// SHA-256 bytes of `bytes` (for hex()).
+private func SHA256Digest(_ bytes: [UInt8]) -> [UInt8] {
+    Array(SHA256.hash(data: Data(bytes)))
+}
+
+private func layoutReport(_ layout: CTDialogueLayout) -> String {
+    var out: [String] = []
+    let glyphs = layout.glyphs
+    out.append("\(layout.frameCount) frames (\(String(format: "%.2f", Double(layout.frameCount) / 60.0)) s at 60 fps), "
+               + "\(glyphs.count) glyphs, \(layout.pageCount) page(s), "
+               + "\(layout.events.filter { $0.kind == .key }.count) key wait(s)")
+    for p in 0..<layout.pageCount {
+        let mine = glyphs.filter { $0.page == p }
+        let at = layout.pageFrame(p).map(String.init) ?? "-"
+        out.append("page \(p): drawn by frame \(at)")
+        for line in 0..<CTDialogueROM.lines {
+            let g = mine.filter { $0.line == line }
+            guard !g.isEmpty else { continue }
+            let end = g.map { ($0.pen ?? 0) + $0.width }.max() ?? 0
+            out.append("  line \(line): \(g.count) glyphs, pen \(g.first?.pen ?? 0)-\(end)"
+                       + (end > CTDialogueROM.innerRight ? "  PAST THE FRAME (248)" : ""))
+        }
+    }
+    let codes = layout.events.filter { $0.kind == .code }.map { String(format: "$%02X", $0.value) }
+    if !codes.isEmpty { out.append("codes: " + codes.joined(separator: " ")) }
+    for o in layout.overflows.prefix(8) {
+        out.append(String(format: "overflow: page %d line %d glyph $%02X at pen %d ends at %d%@", o.page, o.line,
+                          o.glyph, o.pen, o.end, o.wraps ? " (the 8-bit pen wraps)" : ""))
+    }
+    return out.joined(separator: "\n") + "\n"
+}
+
+private func frameTimeline(_ layout: CTDialogueLayout) -> String {
+    var byFrame: [Int: [CTDialogueEvent]] = [:]
+    for e in layout.events { byFrame[e.frame, default: []].append(e) }
+    var out = ["frame state open page wait  events"]
+    for (n, s) in layout.frames.enumerated() {
+        let events = (byFrame[n] ?? []).map { e -> String in
+            switch e.kind {
+            case .glyph: return String(format: "glyph $%02X @%d", e.value, e.pen ?? 0)
+            case .code: return String(format: "code $%02X", e.value)
+            case .key: return "key"
+            }
+        }
+        out.append(String(format: "%5d %5d %4d %4d %4@  ", n, s.state, s.open, s.page, s.keyWait ? "key" : "")
+                   + events.joined(separator: ", "))
+    }
+    return out.joined(separator: "\n") + "\n"
+}
+
+/// Report-only: every message laid out with placeholder names, lines past the frame listed.
+private func textFit(_ rom: [UInt8], _ input: URL, json: Bool) throws -> Int32 {
+    let codec = try CTTextCodec(profile: CTTextProfile.fromROM(Data(rom)))
+    var texts: [(String, String)] = []
+    if input.pathExtension == "json" {
+        let dialogue = try CTProject.jsonDecoder.decode(Dialogue.self, from: Data(contentsOf: input))
+        texts = dialogue.strings.keys.sorted().map { ($0, dialogue.strings[$0]!) }
+    } else {
+        texts = [(input.lastPathComponent, try String(contentsOf: input, encoding: .utf8))]
+    }
+    struct Finding: Encodable { var id: String, page: Int, line: Int, pen: Int, end: Int, wraps: Bool }
+    struct Report: Encodable { var messages: Int, failed: [String], findings: [Finding] }
+    var report = Report(messages: texts.count, failed: [], findings: [])
+    for (id, text) in texts {
+        do {
+            let layout = try CTDialogueLayout.bytes(try codec.compileMessage(text), rom: rom, settings: .placeholder())
+            var seen = Set<[Int]>()
+            for o in layout.overflows where seen.insert([o.page, o.line]).inserted {
+                report.findings.append(Finding(id: id, page: o.page, line: o.line, pen: o.pen, end: o.end, wraps: o.wraps))
+            }
+        } catch {
+            report.failed.append("\(id): \(error)")
+        }
+    }
+    if json {
+        FileHandle.standardOutput.write(try jsonLine(report))
+        return 0
+    }
+    print("\(report.messages) message(s), \(report.findings.count) line(s) past the frame edge (x 248)"
+          + (report.failed.isEmpty ? "" : ", \(report.failed.count) not laid out"))
+    for f in report.findings {
+        print("  \(f.id): page \(f.page) line \(f.line) ends at \(f.end)" + (f.wraps ? " (the pen wraps)" : ""))
+    }
+    for f in report.failed { print("  \(f)") }
+    return 0
 }

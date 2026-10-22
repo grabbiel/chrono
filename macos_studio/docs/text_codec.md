@@ -104,8 +104,10 @@ decode re-encode to the original ROM bytes. The master gate runs all three.
 
 ## Limitations
 
-- Static encoding only: the variable-width font, window layout, pacing and
-  name substitution are not rendered or emulated yet.
+- The codec itself is static encoding. The variable-width font, the window, the
+  layout, the pacing and name substitution are modelled and rendered by the
+  dialogue box preview ([dialogue box](dialogue.md)), which reads the encoded
+  bytes and leaves the encoding unchanged.
 - Menu, name, credits and battle-message tables use other layouts and are not in
   the corpus.
 - Other ROM revisions and languages are rejected rather than guessed.
