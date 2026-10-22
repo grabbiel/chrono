@@ -4,7 +4,8 @@
 > implemented. The native app builder and a playable runtime remain outstanding.
 > The CT dialogue codec ([Text codec](text_codec.md)), event bytecode read/write and
 > scene lowering ([Event bytecode](event_bytecode.md)), the playable characters'
-> records and level curve ([Characters](characters.md)) and an `.sfc` builder that
+> records and level curve ([Characters](characters.md)), their sprite sets
+> (import and editing, [Sprites](sprites.md)) and an `.sfc` builder that
 > writes event packs, message tables, songs and character records
 > ([ROM builder](rom_builder.md)) are implemented. Passing the validation gates verifies the
 > current formats, not a complete or hardware-accurate game compiler.
@@ -85,6 +86,41 @@ unchanged. `pc` is the decoded part of the game's record (`$CC:0000` + `charId` 
 `$50`) and `growth` its HP/MP steps and per-level stat growth; both are absent for
 characters that are not PC records. The import keeps `level` equal to `pc.level`.
 
+## `sprites/<id>.sprite.json`
+```json
+{
+  "id": "crono", "sheet": "sprites/crono.png", "bpp": 4,
+  "frames": [
+    { "tiles": [ { "x": -8, "y": -32, "tile": 0, "hflip": false, "vflip": false, "pal": 0,
+                   "size16": true, "anchor": false, "priority": 2 }, "… 4 OBJs" ],
+      "cells": [ 0, "… 16 tile words" ],
+      "hitbox": { "x": -8, "y": -32, "w": 16, "h": 32 }, "weapon": { "x": 6, "y": -12 } }
+  ],
+  "animations": [ { "id": "r00.down", "frames": [0], "durations": [8], "loop": true, "row": 0, "facing": 1 } ],
+  "palettes": [ [ "0x0000", "… 16 BGR555 words" ] ],
+  "stream": { "columns": 8, "rows": 2, "baseTile": 8 },
+  "rom": { "family": "ct-pc", "set": 0, "tiles": "$D2:0000", "tileCount": 0, "frames": "$DC:0000",
+           "frameCount": 0, "palette": "$E4:0000", "frameIds": "$E4:0000", "durations": "$E4:0000", "rows": 0 }
+}
+```
+(Values elided; `chronoforge sprites import` fills them from your ROM.)
+`id`, `sheet`, `bpp`, `frames[].tiles` (`x, y, tile, hflip, vflip, pal, size16,
+anchor`), `frames[].large` and `animations` (`id, frames, durations, loop`) are the
+original fields; files with only those still load and save unchanged.
+- Sheet tile k is OBJ tile k (OBSEL 0: 8×8 and 16×16, name base 0): a 16×16 OBJ
+  shows tiles N, N+1, N+16, N+17, so sheets are 16 tiles wide.
+- `palettes[k]` is OBJ palette k (CGRAM 128 + 16k); without it, palette 0 is the
+  sheet's PLTE.
+- `stream`: each frame's `cells` (columns × rows tile words: bits 0–10 a sheet
+  tile, 0 blank; bit 14 mirrors it) are copied to OBJ tiles baseTile + 16r + c
+  before the frame shows, and an OBJ's `tile` counts from baseTile.
+- `priority` is the OAM priority (absent: 2). `row` and `facing` (0 up, 1 down,
+  2 left, 3 right) place an animation in the game's tables. `durations` are 60 Hz
+  frames.
+- `hitbox` and `weapon` are Studio fields about the origin; they are not
+  written to the ROM.
+- `rom` records where the import read the set (see [Sprites](sprites.md)).
+
 ## `party.json`
 ```json
 { "schema": "ct-party/1",
@@ -100,7 +136,9 @@ this file, and does not write `expToLevel`.
   (regenerated on load; BGR555 is authoritative).
 - **Coordinates**: SNES native pixels; map coords in 1/16-chip units where the ROM uses them.
 - **Sprites**: `frames[] -> tiles[] {x, y, tile, hflip, vflip, pal(0-7), size8|16, anchor}`
-  mapping 1:1 onto OAM entries (512 max per frame enforced by the validator).
+  mapping 1:1 onto OAM entries (512 max per frame enforced by the validator);
+  sheet tile k is OBJ tile k. Tiles are SNES planar (planes 0/1 interleaved per
+  row), as in VRAM.
 - **Metatiles**: 16x16 chips = 4 subtiles `{tile, pal, hflip, vflip, priority}`;
   32x32 blocks = 4 chips. Collision props: `{plane1: walk|solid|water|...,
   plane2: ..., plane_swap: bool, zmask: bool, conveyor: none|dir(0-7)}`.

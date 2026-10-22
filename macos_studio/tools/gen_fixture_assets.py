@@ -27,6 +27,12 @@ def wr(path, data):
         f.write(data)
 
 # ---- tile golden (independent python decoder) ----
+# SNES planar layout (fullsnes "Tile/Character Data"): planes 0 and 1 of
+# row r are bytes 2r and 2r+1; a 4bpp tile's planes 2 and 3 follow 16 bytes
+# later. Bit 7 is the leftmost pixel.
+def plane_byte(p, row):
+    return (16 if p >= 2 else 0) + 2 * row + (p & 1)
+
 def decode_4bpp(blob):
     out = []
     for t in range(len(blob) // 32):
@@ -35,7 +41,7 @@ def decode_4bpp(blob):
             for col in range(8):
                 idx = 0
                 for p in range(4):
-                    if blob[base + p * 8 + row] & (1 << (7 - col)):
+                    if blob[base + plane_byte(p, row)] & (1 << (7 - col)):
                         idx |= 1 << p
                 out.append(idx)
     return bytes(out)
@@ -48,7 +54,7 @@ def decode_2bpp(blob):
             for col in range(8):
                 idx = 0
                 for p in range(2):
-                    if blob[base + p * 8 + row] & (1 << (7 - col)):
+                    if blob[base + plane_byte(p, row)] & (1 << (7 - col)):
                         idx |= 1 << p
                 out.append(idx)
     return bytes(out)

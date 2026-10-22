@@ -24,6 +24,7 @@ ChronoForgeCoreTests.CTSongTests/testBuilderSongRefusals                        
 ChronoForgeCoreTests.CTSongTests/testEditedSongIsPlacedAndPointedTo                             skip      # local ROM
 ChronoForgeCoreTests.CTSongTests/testEveryROMSongIsByteExactThroughItsListing                   skip      # local ROM
 ChronoForgeCoreTests.CTSongTests/testRebuildingEverySongIsIdentical                             skip      # local ROM
+ChronoForgeCoreTests.CTSpritesTests/testImportFromTheROM                                        skip      # local ROM
 ChronoForgeCoreTests.CTTextCodecTests/testDialogueArchiveIsDeterministicAndRequiresProfile      skip      # local ROM
 ChronoForgeCoreTests.CTTextCodecTests/testEveryROMMessageRoundTripsByteExactly                  skip      # local ROM
 ChronoForgeCoreTests.CTTextCodecTests/testROMProfileAcceptsCopierHeaderAndMatchesGeneratedProfile skip      # local ROM

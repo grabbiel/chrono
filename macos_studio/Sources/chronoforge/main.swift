@@ -252,6 +252,7 @@ case "lzss":            exit(cmdLZSS(rest))
 case "rom":             exit(cmdRom(rest))
 case "music":           exit(cmdMusic(rest))
 case "characters":      exit(cmdCharacters(rest))
+case "sprites":         exit(cmdSprites(rest))
 default:
     print("""
     chronoforge — ChronoForge Studio CLI
@@ -262,6 +263,7 @@ default:
       chronoforge event <list|disasm|asm|verify-rom|lower> ...   (CT event packs)
       chronoforge rom <build|info|locations> ...                 (.sfc builder)
       chronoforge characters <import|show|curve> ...             (playable-character records)
+      chronoforge sprites <import|show> ...                      (playable-character sprites)
       chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]
                         [--entry 0] [--flag symbol] [--steps 1000]
