@@ -28,6 +28,8 @@ public final class CTEventVM {
     public private(set) var stopped: [Int: String] = [:]
     /// Sound-driver commands sent (Audio_DriverCommand), oldest first; the field drains them.
     public var audio: [AudioCommand] = []
+    /// The field's party routines, called by `$B0`/`$AF` (nil: the handler alone).
+    public var party: ((PartyRequest) -> Void)?
 
     /// Audio_CmdId and Audio_CmdArg0-2 as Audio_DriverCommand found them.
     public struct AudioCommand: Equatable, Sendable {
@@ -128,6 +130,8 @@ public final class CTEventVM {
         for a in WRAM.objVelX..<(WRAM.objVelX + 0x100) { wram[a] = 0 }
         for a in WRAM.objXSave..<(WRAM.objXSave + 0x15C0) { wram[a] = 0 }
         wram[WRAM.objQUnk74] = 0x80; wram[WRAM.objQUnk75] = 0x80
+        wram[WRAM.objQHead] = 0x80; wram[WRAM.objQTail] = 0x80
+        wram.setWord(WRAM.objQUnk71, 0x8000); wram[WRAM.objQUnk73] = 0     // ObjQ_Unk71Init
         wram.setWord(WRAM.evtObjSlotEnd, 2 * n)
         for o in 0..<n {
             let s = 2 * o
@@ -269,6 +273,7 @@ public final class CTEventVM {
         "characters": [0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83],
         "sound": [0xE8, 0xEA, 0xEB, 0xEC],
         "movement": [0x8F, 0x92, 0x94, 0x95, 0x96, 0x9C, 0xA0, 0xA8, 0xA9, 0xB5, 0xB6],
+        "party": [0xAF, 0xB0],
     ]
     public static let modelled: Set<UInt8> = Set(families.values.joined())
 
@@ -565,6 +570,11 @@ public final class CTEventVM {
             let t = op == 0x94 ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
             return walkToObject(y, target: t)
         case 0x8F: return followPartyMember(y)
+        case 0xB0: return partyControl(y)
+        case 0xAF:                                                     // Evt_OpAF_PartyControlOnce
+            let r = partyControl(y)
+            guard case .go(let x, _) = r else { return r }
+            return .go(x: x + 1, carry: false)
         case 0xB5, 0xB6:                                               // Evt_OpB5_FollowObj / Evt_OpB6_FollowPc
             wram.setWord(WRAM.evtUnk0920Key, y)                        // EvtFollow_SavedY
             let walked = dispatch(op == 0xB5 ? 0x94 : 0x95, y)

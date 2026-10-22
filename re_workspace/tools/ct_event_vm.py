@@ -49,7 +49,9 @@ SCRATCH = (range(0x7E01C1, 0x7E01EB), range(0x7E01EE, 0x7E01F8),
            range(0x7E0309, 0x7E0317),     # Decomp_ToWram's own working bytes (Decomp_OutLen is compared)
            range(0x7F3800, 0x7F4400))     # SprBuf: Spr_LoadLargeObj's tile buffer (presentation)
 STEP_LIMIT = 3_000_000
-EXTERNAL_PC = 0x070004                     # $C7:0004 Audio_DriverCommand, run as an external call
+EXTERNAL_PCS = (0x070004,                  # $C7:0004 Audio_DriverCommand (the APU handshake)
+                0x009E29, 0x00A26B, 0x00A2CE,  # Party_Unk9E29/A26B/A2CE: the field's party routines
+                0x003154)                  # Evt_StartTargetFunc2: the touch start the field runs
 OBJ_TABLES = (0x0C00, 0x0F00, 0x0F80, 0x1000, 0x1080, 0x1100, 0x1180, 0x1300, 0x1600, 0x1680, 0x1780,
               0x1800, 0x1880, 0x1900, 0x1980, 0x1A00, 0x1A80, 0x1B00, 0x1B80, 0x1C00, 0x1C80)
 TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E, 0x92, 0x96, 0x9C, 0xA0)
@@ -97,6 +99,9 @@ def state(rng, objects, op, e4):
                 t[k] = rng.randrange(8)
                 t[k + 1] = 0 if rng.random() < 0.75 else 1
         if base == 0x1600:                                  # Obj_Facing 0-3 (an index into Evt_InFrontTests)
+            for k in range(0, 32, 2):
+                t[k] = rng.randrange(4)
+        if base == 0x1100 and op in (0xAF, 0xB0):            # party kinds 0-2 and one other
             for k in range(0, 32, 2):
                 t[k] = rng.randrange(4)
         if base in (0x1800, 0x1880) and op in TILE_OPS:     # tiles inside the attribute block
@@ -201,7 +206,8 @@ class Concrete:
                     self.wmadd = self.wmadd & 0xFFFF | (v & 1) << 16
 
         code = bytearray(machine.code)
-        code[EXTERNAL_PC] = 0               # Audio_DriverCommand: outside the model (the APU handshake)
+        for pc in EXTERNAL_PCS:             # outside the handler models: run as external calls
+            code[pc] = 0
         m = Machine(machine.image, code, max_steps=STEP_LIMIT, callee_steps=STEP_LIMIT)
         interp.machine = m
         self.interp, self.absint, self.machine = interp, absint, m

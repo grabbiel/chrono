@@ -81,6 +81,7 @@ public enum WRAM {
     public static let objCur = dpField + 0x6D
     public static let objQUnk74 = dpField + 0x74, objQUnk75 = dpField + 0x75
     public static let objQUnk71 = dpField + 0x71, objQUnk73 = dpField + 0x73, objQUnk78 = dpField + 0x78
+    public static let objQHead = dpField + 0x76, objQTail = dpField + 0x77
     public static let chrObjSlot = dpField + 0x8D, partyObjSlot = dpField + 0x97
     public static let partyObjSlot1 = dpField + 0x99, partyObjSlot2 = dpField + 0x9B
     public static let fieldUnkAB = dpField + 0xAB, fieldUnkAEObj = dpField + 0xAE
