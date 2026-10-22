@@ -23,6 +23,7 @@ public struct Project: Codable, Equatable, Sendable {
         public var eventPacks: [EventPack]
         public var songs: [Song]
         public var characters: [String]
+        public var techs: Bool                 // write tech_system.json's tables (absent = false)
         public struct Song: Codable, Equatable, Sendable {
             public var song: Int
             public var listing: String         // project-relative path
@@ -36,21 +37,23 @@ public struct Project: Codable, Equatable, Sendable {
                 self.entry = entry; self.scenes = scenes; self.listing = listing
             }
         }
-        public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = []) {
-            self.eventPacks = eventPacks; self.songs = songs; self.characters = characters
+        public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = [], techs: Bool = false) {
+            self.eventPacks = eventPacks; self.songs = songs; self.characters = characters; self.techs = techs
         }
-        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters }
+        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             eventPacks = try c.decodeIfPresent([EventPack].self, forKey: .eventPacks) ?? []
             songs = try c.decodeIfPresent([Song].self, forKey: .songs) ?? []
             characters = try c.decodeIfPresent([String].self, forKey: .characters) ?? []
+            techs = try c.decodeIfPresent(Bool.self, forKey: .techs) ?? false
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(eventPacks, forKey: .eventPacks)
             if !songs.isEmpty { try c.encode(songs, forKey: .songs) }
             if !characters.isEmpty { try c.encode(characters, forKey: .characters) }
+            if techs { try c.encode(techs, forKey: .techs) }
         }
     }
 
@@ -144,8 +147,8 @@ public struct CharacterDef: Codable, Equatable, Sendable, Identifiable {
         public var stats: StatBlock            // +$0B-$11
         public var growthBase: StatBlock       // +$2F-$35
         public var equipment: Equipment        // +$27-$2A
-        public var techPoints: Int             // +$16 u24 (partial)
-        public var techPointsToNext: Int       // +$2D u16 (partial)
+        public var techPoints: Int             // +$16 u24 (verified: docs/techs.md)
+        public var techPointsToNext: Int       // +$2D u16 (verified: docs/techs.md)
         public struct Equipment: Codable, Equatable, Sendable {
             public var helmet: Int
             public var armor: Int

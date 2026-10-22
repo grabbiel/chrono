@@ -100,8 +100,12 @@ FIELDS = (
      "PcStatBlk.CharId: BattleSys_GrowHpMp ($C1:F871) indexes HpGrowth/MpGrowth by it x 8, "
      "BattleSys_LevelUpStep ($C1:F623) StatGrowth by it x 7, Menu_CanEquip ($C2:93A8) BankFF_CharBits, "
      "Menu_CharCalcStats ($C2:916E) the attack formula (AND 7); ROM: record n holds n (n = 0-6)"),
-    (0x01, 2, "unk01", "undecoded",
-     "PcStatBlk.Unk01 bit 3 picks a PC for target handler $14 (ram_battle.inc); +$02 not traced"),
+    (0x01, 1, "unk01", "undecoded",
+     "PcStatBlk.Unk01 bit 3 picks a PC for target handler $14 (ram_battle.inc)"),
+    (0x02, 1, "flags02", "partial",
+     "BattlerStats.Unk2F: bit 4 = all 8 single techs learned (BattleSys_LearnSingleTech sets it, "
+     "BattleSys_AwardTechPoints skips the PC; run in the interpreter by ct_techs.py check --run); "
+     "$80 in the 7 ROM records; the other bits not traced; written only by a tech build (bit 4)"),
     (0x03, 2, "hp", "verified",
      "BattlerStats.CurHp ($5E30 = block + $03); Menu_EquipStatCat3 ($C2:9295) lowers it to the max; "
      "ROM: equals max_hp in all 7 records"),
@@ -138,9 +142,10 @@ FIELDS = (
     (0x13, 3, "exp", "verified",
      "BattleSys_AddExp ($C1:F908) 24-bit add with carry, capped at $98967F (9,999,999); "
      "ROM: equals the sum of ExpToLevel[1..level-1] in all 7 records"),
-    (0x16, 3, "tech_points", "partial",
-     "BattlerStats.TechPtTotal ($5E43 = block + $16), 24-bit; BattleSys_SpendTechPoints ($C1:F39A) "
-     "adds a battle's tech points (ChronoRET: 'probably')"),
+    (0x16, 3, "tech_points", "verified",
+     "BattlerStats.TechPtTotal ($5E43 = block + $16), 24-bit: BattleSys_SpendTechPoints ($C1:F39A) adds the "
+     "battle's award, capped at $98:967F; ct_techs.py check --run executes BattleSys_AwardTechPoints against "
+     "its rule from the 7 records"),
     (0x19, 14, "unk19", "undecoded",
      "+$19 target bit, +$1D/+$1E status bytes (BattlerStats.Status/Status2), +$1F-$21 target bytes; "
      "zero in the ROM records; not edited"),
@@ -158,9 +163,10 @@ FIELDS = (
     (0x2B, 2, "exp_to_next", "verified",
      "PcStatBlk.ExpNeed: BattleSys_ApplyExpStep counts it down and reloads ExpToLevel[level] "
      "(LDA.l $CC2632,X), 0 at level 99; ROM: = ExpToLevel[level] in all 7 records"),
-    (0x2D, 2, "tech_points_to_next", "partial",
-     "BattlerStats.TechPtNeed ($5E5A = block + $2D): tech points still needed for the next single tech "
-     "(BattleSys_TryNextTech; ChronoRET: 'probably')"),
+    (0x2D, 2, "tech_points_to_next", "verified",
+     "BattlerStats.TechPtNeed ($5E5A = block + $2D): tech points still needed for the next single tech; "
+     "BattleSys_TryNextTech pays it, BattleSys_SpendTechPoints reloads it from TechTpCost; ROM: = TechTpCost"
+     "[id][the starting count] in all 7 records; executed by ct_techs.py check --run"),
     (0x2F, 7, "growth_base", "verified",
      "BattleSys_LevelUpStep: stat = growth_base[k] + growth[k] x (level - 1) / 100 for k = 0, 1, 3, 4, 5, 6 "
      "into stats 0, 1, 4, 5, 3, 6; Menu_ApplyStatItem ($C2:B2A7) raises the same pairs (MenuRom_StatItemStat, "

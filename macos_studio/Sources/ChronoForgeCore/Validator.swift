@@ -226,6 +226,32 @@ public enum Validator {
                     do { _ = try CTSongListing.assemble(text) } catch { err(4, path, "\(song.listing): \(error)") }
                 } else { err(4, path, "listing \(song.listing) not found") }
             }
+            // Characters: a file with a pc record each, no record twice, values in the game's ranges.
+            var characterIDs = Set<String>(), records = Set<Int>()
+            for id in spec.characters {
+                let path = "project.json rom character \(id)"
+                if !characterIDs.insert(id).inserted { err(4, path, "character built twice"); continue }
+                guard let c = p.characters[id] else { err(4, path, "no characters/\(id).json"); continue }
+                guard let r = c.pc else { err(4, path, "no pc record; import the ROM's characters"); continue }
+                if !records.insert(r.charId).inserted { err(4, path, "record \(r.charId) built twice") }
+                if let party = p.party {
+                    do { try CTCharacterROM.check(r, growth: c.growth, party: party) } catch { err(4, "characters/\(id).json", "\(error)") }
+                } else { warn(4, path, "no party.json: equipment and ranges are checked only by the build") }
+            }
+            if spec.techs {
+                if let system = p.techSystem {
+                    do { try CTTechROM.check(system) } catch { err(4, "tech_system.json", "\(error)") }
+                    // +$2D is the next single's cost when the new game starts (the ROM's own records agree).
+                    for id in spec.characters {
+                        guard let r = p.characters[id]?.pc, system.learned.counts.indices.contains(r.charId),
+                              system.tpCost.indices.contains(r.charId) else { continue }
+                        let n = system.learned.counts[r.charId]
+                        if n < 8, system.tpCost[r.charId].indices.contains(n), r.techPointsToNext != system.tpCost[r.charId][n] {
+                            warn(4, "characters/\(id).json", "tech points to next \(r.techPointsToNext) is not the cost of single \(n + 1) (\(system.tpCost[r.charId][n]))")
+                        }
+                    }
+                } else { err(4, "project.json rom techs", "no tech_system.json; import the ROM's techs") }
+            }
         }
 
         // ---------------- Gate 5: explicit ROM-backed text or legacy Studio format ----------------

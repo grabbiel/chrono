@@ -226,6 +226,6 @@ def test_characters_manifest_update_verifies(manifest_path, rom_path):
     updated = cs.characters_manifest_update(manifest)
     assert cs.verify_manifest(updated, "characters (updated)") == []
     char = next(rt for rt in updated["record_types"] if rt["name"] == "CharRec")
-    assert [f["name"] for f in char["fields"]][:3] == ["char_id", "unk01", "hp"]
+    assert [f["name"] for f in char["fields"]][:4] == ["char_id", "unk01", "flags02", "hp"]
     before, after = cs.field_stats(manifest), cs.field_stats(updated)
     assert after["verified"] >= 30 and after["undecoded"] < before["undecoded"]

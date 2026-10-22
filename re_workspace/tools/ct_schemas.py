@@ -398,7 +398,44 @@ def characters_manifest_update(manifest: dict) -> dict:
     return m
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["characters-update"]:
+def techs_manifest_update(manifest: dict) -> dict:
+    """The items-and-techs manifest with the tech record types as
+    tools/ct_techs.py decodes and checks them; types it lacks are added after
+    the last tech type. Everything else is kept. `ct_schemas.py techs-update
+    --out PATH` writes it (the manifest itself is local data)."""
+    import ct_techs as ct
+
+    m = json.loads(json.dumps(manifest))
+    types = m["record_types"]
+    by_name = {rt["name"]: rt for rt in types}
+    last = max((i for i, rt in enumerate(types) if rt["name"].startswith(("Tech", "Combo"))), default=len(types) - 1)
+    for name, addr, stride, count, role, fields in ct.MANIFEST_TYPES:
+        rt = by_name.get(name)
+        if rt is None:
+            rt = {"name": name}
+            last += 1
+            types.insert(last, rt)
+        rt.update({"addr": addr, "stride": stride, "count": count, "address_space": "rom", "role": role,
+                   "fields": fields, "checked_by": "tools/ct_techs.py check; re_workspace/tests/test_techs.py"})
+    return m
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["techs-update"]:
+    import argparse
+    _args = argparse.ArgumentParser(prog="ct_schemas.py techs-update")
+    _args.add_argument("--out", required=True)
+    _out = _args.parse_args(sys.argv[2:]).out
+    if os.path.realpath(_out) == os.path.realpath(os.path.join(_WS, "manifests", "items_and_techs_schema.json")):
+        raise SystemExit("write the proposal elsewhere; the manifest is local data")
+    _m = techs_manifest_update(load_manifest("items_and_techs_schema.json"))
+    _fails = verify_manifest(_m, "items and techs (updated)")
+    if _fails:
+        raise SystemExit("\n".join(_fails))
+    with open(_out, "w", encoding="utf-8") as _f:
+        json.dump(_m, _f, indent=2)
+        _f.write("\n")
+    print(f"{_out}: {field_stats(_m)}")
+elif __name__ == "__main__" and sys.argv[1:2] == ["characters-update"]:
     import argparse
     _args = argparse.ArgumentParser(prog="ct_schemas.py characters-update")
     _args.add_argument("--out", required=True)

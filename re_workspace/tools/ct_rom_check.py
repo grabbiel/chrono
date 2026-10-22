@@ -27,7 +27,14 @@ the decoded fields of reported records and their growth rows may change; each
 record decodes to the reported values, which are in the ranges the game's
 code keeps, with equipment of the slot's category that the character can
 equip in the clean ROM; the undecoded bytes of every record, the other
-characters' records and rows, and ExpToLevel are unchanged.
+characters' records and rows, and ExpToLevel are unchanged. Techs
+(tools/ct_techs.py), when reported: only the writable fields of the tech
+tables, the combination requirements, the new-game tech state and bit 4 of
+each record's +$02 may change; each decodes to the reported values, in the
+ranges the game's jump tables and tables allow; the read-only bits (user
+sets, flags, attributes, the animation's graphics), the combination records
+and every other table are unchanged; bit 4 of +$02 is set exactly for the
+characters with all 8 singles. Without techs, none of those bytes change.
 """
 
 import argparse
@@ -43,6 +50,7 @@ import ct_characters as cc  # noqa: E402
 import ct_event_packs as packs  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
 import ct_spc_seq as spc  # noqa: E402
+import ct_techs as ct  # noqa: E402
 import ct_text_profile  # noqa: E402
 
 TEXTWIN_INIT = 0xC257DF
@@ -127,6 +135,14 @@ def report_growth(g):
             "stats": {s: g["stats"][k] for s, k in zip(cc.STATS, STAT_KEYS)}}
 
 
+def tech_bytes(record, report):
+    """The record bytes a tech build may change: +$02 (bit 4) of records
+    0-6 and the tech state that begins the eighth."""
+    if not report.get("techs"):
+        return set()
+    return {2} if record < cc.CHARACTERS else set(range(ct.TECH_STATE_SIZE))
+
+
 def check_characters(clean, built, report):
     reported = report.get("characters") or []
     ids = [c["charId"] for c in reported]
@@ -136,11 +152,13 @@ def check_characters(clean, built, report):
     by_id = {c["charId"]: c for c in reported}
     for i in range(cc.INIT_RECORDS):
         before, after = cc.record(clean, i), cc.record(built, i)
+        techs = tech_bytes(i, report)
         if i not in by_id:
-            check(before == after, f"record {i} changed but is not reported")
+            check(all(before[b] == after[b] for b in range(cc.RECORD_SIZE) if b not in techs),
+                  f"record {i} changed but is not reported")
             continue
         c = by_id[i]
-        check(all(before[b] == after[b] for b in range(cc.RECORD_SIZE) if b not in writable),
+        check(all(before[b] == after[b] for b in range(cc.RECORD_SIZE) if b not in writable | techs),
               f"character {c['id']}: an undecoded byte changed")
         v = cc.decode_record(after)
         check(v == report_value(c), f"character {c['id']}: the record is not the reported values")
@@ -163,6 +181,63 @@ def check_characters(clean, built, report):
             check(all(any(t >= cc.LEVEL_MAX for t, _ in g[k]) for k in ("hp", "mp")),
                   f"character {c['id']}: a growth row does not reach level 99")
     check(cc.exp_to_level(built) == cc.exp_to_level(clean), "ExpToLevel changed")
+
+
+def check_techs(clean, built, report):
+    system = report.get("techs")
+    if not system:
+        for z in ct.write_zones(clean):
+            check(built[z.start:z.stop] == clean[z.start:z.stop], f"tech byte ${z.start:06X} changed but techs are not reported")
+        return
+    areas = ct.decode_areas(clean)
+    check(len(system["techs"]) == ct.TECHS and len(system["parts"]) == ct.PARTS, "the reported tables' sizes")
+    for t, want in enumerate(system["techs"]):
+        before, v = ct.decode_tech(clean, t), ct.decode_tech(built, t)
+        name = f"tech ${t:02X}"
+        for key in ("user_set", "flags", "unk2", "attr", "unk4"):
+            check(v[key] == before[key], f"{name}: {key} is read-only")
+        check(all(v["anim"][k] == before["anim"][k] for k in ct.ANIM_FIELDS if k not in ("script", "frames")),
+              f"{name}: only the animation's script and frames are writable")
+        check(want["id"] == t and v["target_mode"] == want["targetMode"] and v["field_menu"] == want["fieldMenu"]
+              and v["area"] == want["area"] and v["needs_unlock"] == want["needsUnlock"]
+              and ct.element_of(v["element_bits"] << 4) == want.get("element") and v["parts"] == want["parts"]
+              and v["modifiers"] == want["modifiers"] and v["anim"]["script"] == want["anim"]["script"]
+              and v["anim"]["frames"] == want["anim"]["frames"], f"{name}: not the reported values")
+        check(v["target_mode"] < ct.TARGET_MODES and v["area"] < ct.AREAS and (v["area"] == 0 or areas[v["area"]]),
+              f"{name}: target mode or area out of range")
+        check(v["element_bits"] & (v["element_bits"] - 1) == 0, f"{name}: more than one element bit")
+        check(all(p & 0x7F < ct.PARTS for p in v["parts"]) and all(m < ct.MODIFIERS for m in v["modifiers"]),
+              f"{name}: a part or modifier past its table")
+        check(v["anim"]["script"] < ct.SCRIPTS and v["anim"]["frames"] < ct.ANIM_FRAMES, f"{name}: animation out of range")
+    for p, want in enumerate(system["parts"]):
+        v = ct.decode_part(built, p)
+        check(want["id"] == p and v["mp"] == want["mp"]
+              and [v["effect"][k] for k in ct.EFFECT_FIELDS] == [want["effect"][k] for k in ct.SWIFT_EFFECT_FIELDS],
+              f"part {p}: not the reported values")
+        check((v["mp"] <= 99 or v["mp"] == 0xFF) and v["effect"]["type"] < ct.EFFECT_TYPES, f"part {p}: MP or type out of range")
+    check(ct.tp_words(built)[:-1] == [w for row in system["tpCost"] for w in row], "TechTpCost is not the reported table")
+    before, after = ct.decode_combos(clean), ct.decode_combos(built)
+    check(len(after) == len(before) == len(system["combos"]), "the combination records' count")
+    for b, a, want in zip(before, after, system["combos"]):
+        check((a["mask"], a["first"], a["count"], a["req_addr"]) == (b["mask"], b["first"], b["count"], b["req_addr"]),
+              f"combination ${b['first']:02X}: its record changed")
+        check(a["requirements"] == want["requirements"], f"combination ${b['first']:02X}: not the reported requirements")
+        n = len(ct.members(a["mask"]))
+        check(all(all(1 <= r <= 8 for r in row[:n]) and all(r == ct.NONE for r in row[n:]) for row in a["requirements"]),
+              f"combination ${b['first']:02X}: requirements out of range")
+    state = ct.decode_state(built)
+    learned = system["learned"]
+    check(state == {"counts": learned["counts"], "bits1": learned["bits1"], "combo_bits": learned["comboBits"]},
+          "the new-game tech state is not the reported one")
+    check(all(n <= 8 for n in state["counts"]) and all(b == (0xFF00 >> n) & 0xFF for b, n in zip(state["bits1"], state["counts"])),
+          "the new-game counts and single bits disagree")
+    for i, b in enumerate(state["combo_bits"]):
+        allowed = (0xFF00 >> after[i]["count"]) & 0xFF if i < len(after) else 0x80 if i >= 15 else 0
+        check(not b & ~allowed, f"combination byte {i}: a bit past its techs")
+    for c in range(ct.CHARACTERS):
+        at = ct.RECORDS_PC + ct.RECORD_SIZE * c + 2
+        check(built[at] & ~ct.ALL_TECHS == clean[at] & ~ct.ALL_TECHS
+              and bool(built[at] & ct.ALL_TECHS) == (state["counts"][c] >= 8), f"record {c} +$02")
 
 
 def main():
@@ -222,6 +297,8 @@ def main():
         for pc, row, _ in spc.table_rows(song_tables_of(s)):
             zones.append(range(pc + row * s["song"], pc + row * (s["song"] + 1)))
     zones += character_zones(report)
+    if report.get("techs"):
+        zones += ct.write_zones(clean)
 
     def inside(r):
         return any(r.start >= z.start and r.stop <= z.stop for z in zones)
@@ -266,6 +343,7 @@ def main():
         new_spans[pc] = range(pc, pc + 2 + len(data))
 
     check_characters(clean, built, report)
+    check_techs(clean, built, report)
 
     # New packs and tables.
     table_doc = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -317,7 +395,8 @@ def main():
     for a, b in zip(ordered, ordered[1:]):
         check(a.stop <= b.start, f"${a.start:06X} and ${b.start:06X} overlap")
     print(f"ROM build: {checks} checks passed ({len(report['packs'])} packs, {len(report['messageTables'])} message tables, "
-          f"{len(report.get('songs', []))} songs, {len(report.get('characters') or [])} characters)")
+          f"{len(report.get('songs', []))} songs, {len(report.get('characters') or [])} characters"
+          + (", techs" if report.get("techs") else "") + ")")
 
 
 if __name__ == "__main__":
