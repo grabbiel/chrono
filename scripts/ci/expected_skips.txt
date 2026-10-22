@@ -40,6 +40,7 @@ ChronoForgeMetalTests.PPUParityTests/testParityLayeredScene                     
 ChronoForgeMetalTests.PPUParityTests/testParityOBJLimits                                        may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPUParityTests/testParityPerLineScrollModeAndBrightness                   may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPUParityTests/testParityRandomFrames                                     may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParityWindows                                          may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testMTKViewFramePath                                     may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testOffscreenFrameRenders                                may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testShaderLibraryCompiles                                may-skip  # Metal device availability on hosted runners

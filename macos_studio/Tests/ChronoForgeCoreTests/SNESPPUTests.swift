@@ -394,6 +394,100 @@ final class SNESPPUTests: XCTestCase {
         XCTAssertEqual(out.word(2, 2), bgr(14, 15, 16))
     }
 
+    // MARK: Windows
+
+    /// BG1 (colour 1) over BG2 (colour 33) on the main screen; returns which
+    /// of x 0...63 show BG2 because a window hides BG1 there.
+    func hiddenBG1(_ configure: (inout PPURegisters) -> Void) -> [Int] {
+        var f = PPUScene.frame()
+        for i in 0..<64 { f.cgram[i] = UInt16(i) }
+        PPUScene.fillMap(&f, bg: 0, PPUFrame.tilemapEntry(tile: 1, palette: 0))
+        PPUScene.fillMap(&f, bg: 1, PPUFrame.tilemapEntry(tile: 1, palette: 2))
+        f.setAllLines { $0.tm = 0x03; $0.tmw = 0x01; configure(&$0) }
+        let out = PPUReferenceRenderer.render(f)
+        return (0..<64).filter { out.word($0, 0) == 33 }
+    }
+
+    func testWindowEdgesInvertAndEmpty() {
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x02; $0.wh0 = 10; $0.wh1 = 20 }, Array(10...20), "inclusive edges")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x03; $0.wh0 = 10; $0.wh1 = 20 }, Array(0...9) + Array(21...63), "inverted")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x02; $0.wh0 = 20; $0.wh1 = 10 }, [], "left > right is empty")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x03; $0.wh0 = 20; $0.wh1 = 10 }, Array(0...63), "inverted empty is everywhere")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x01; $0.wh0 = 10; $0.wh1 = 20 }, [], "invert without enable does nothing")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x08; $0.wh2 = 30; $0.wh3 = 31 }, [30, 31], "window 2 alone")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x20; $0.wh0 = 10; $0.wh1 = 20 }, [], "a BG2 window does not hide BG1")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x02; $0.wh0 = 10; $0.wh1 = 20; $0.tmw = 0 }, [], "TMW off: not applied")
+    }
+
+    func testWindowLogic() {
+        func logic(_ l: UInt8) -> [Int] {
+            hiddenBG1 { $0.w12sel = 0x0A; $0.wh0 = 10; $0.wh1 = 30; $0.wh2 = 20; $0.wh3 = 40; $0.wbglog = l }
+        }
+        XCTAssertEqual(logic(0), Array(10...40), "OR")
+        XCTAssertEqual(logic(1), Array(20...30), "AND")
+        XCTAssertEqual(logic(2), Array(10...19) + Array(31...40), "XOR")
+        XCTAssertEqual(logic(3), Array(0...9) + Array(20...30) + Array(41...63), "XNOR")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x0B; $0.wh0 = 10; $0.wh1 = 30; $0.wh2 = 20; $0.wh3 = 40; $0.wbglog = 1 },
+                       Array(31...40), "AND with window 1 inverted")
+        XCTAssertEqual(hiddenBG1 { $0.w12sel = 0x0A; $0.wh0 = 10; $0.wh1 = 30; $0.wh2 = 20; $0.wh3 = 40; $0.wbglog = 0x04 },
+                       Array(10...40), "BG2's logic bits do not apply to BG1")
+    }
+
+    func testWindowsOnSubScreenOBJAndColour() {
+        var f = PPUScene.frame()
+        f.cgram[1] = bgr(10, 10, 10)                 // BG1
+        f.cgram[2 * 16 + 1] = bgr(5, 6, 7)          // BG2, palette 2
+        f.cgram[128 + 1] = bgr(31, 0, 0)            // OBJ palette 0
+        PPUScene.fillMap(&f, bg: 0, PPUFrame.tilemapEntry(tile: 1, palette: 0))
+        PPUScene.fillMap(&f, bg: 1, PPUFrame.tilemapEntry(tile: 1, palette: 2))
+        f.setOBJ(0, x: 0, y: 0, tile: 1, priority: 3, large: true)   // 16x16 at x 0-15, lines 0-15
+        f.setAllLines { r in
+            r.tm = 0x11; r.ts = 0x02; r.cgwsel = 0x02; r.cgadsub = 0x01
+            r.wh0 = 4; r.wh1 = 7
+        }
+        // Line 0: OBJ window (window 1) on the main screen: BG1 + BG2 shows through.
+        f.lines[0].wobjsel = 0x02; f.lines[0].tmw = 0x10
+        // Line 1: BG2 windowed on the sub screen only: fixed colour (0) inside, no half.
+        f.lines[1].tm = 0x01; f.lines[1].w12sel = 0x20; f.lines[1].tsw = 0x02
+        // Line 2: colour window, force black inside it.
+        f.lines[2].tm = 0x01; f.lines[2].wobjsel = 0x20; f.lines[2].cgwsel = 0x82
+        // Line 3: colour window, math prevented outside it.
+        f.lines[3].tm = 0x01; f.lines[3].wobjsel = 0x20; f.lines[3].cgwsel = 0x12
+        // Line 4: the colour window is window 1 XOR window 2; math prevented inside it.
+        f.lines[4].tm = 0x01; f.lines[4].wobjsel = 0xA0; f.lines[4].wobjlog = 0x08
+        f.lines[4].wh2 = 6; f.lines[4].wh3 = 9; f.lines[4].cgwsel = 0x22
+        let out = PPUReferenceRenderer.render(f)
+        XCTAssertEqual(out.word(3, 0), bgr(31, 0, 0), "outside the OBJ window")
+        XCTAssertEqual(out.word(4, 0), bgr(15, 16, 17), "OBJ hidden: BG1 + BG2")
+        XCTAssertEqual(out.word(3, 1), bgr(15, 16, 17))
+        XCTAssertEqual(out.word(5, 1), bgr(10, 10, 10), "sub BG2 hidden: + fixed colour 0")
+        XCTAssertEqual(out.word(3, 2), bgr(15, 16, 17))
+        XCTAssertEqual(out.word(7, 2), bgr(5, 6, 7), "black + BG2")
+        XCTAssertEqual(out.word(8, 2), bgr(15, 16, 17))
+        XCTAssertEqual(out.word(3, 3), bgr(10, 10, 10), "outside: no math")
+        XCTAssertEqual(out.word(4, 3), bgr(15, 16, 17), "inside: math")
+        // XOR of [4,7] and [6,9] = 4, 5, 8, 9; math prevented there (region 2 = inside).
+        XCTAssertEqual((3...10).map { out.word($0, 4) == bgr(10, 10, 10) }, [false, true, true, false, false, true, true, false])
+    }
+
+    func testPerLineWindowShape() {
+        var f = PPUScene.frame()
+        for i in 0..<64 { f.cgram[i] = UInt16(i) }
+        PPUScene.fillMap(&f, bg: 0, PPUFrame.tilemapEntry(tile: 1, palette: 0))
+        f.setAllLines { $0.tm = 0x01; $0.tmw = 0x01; $0.w12sel = 0x02 }
+        // A triangle: line y hides x 100-y ... 100+y.
+        for y in 0..<50 { f.lines[y].wh0 = UInt8(100 - y); f.lines[y].wh1 = UInt8(100 + y) }
+        f.lines[50].wh0 = 1; f.lines[50].wh1 = 0
+        let out = PPUReferenceRenderer.render(f)
+        for y in [0, 10, 49] {
+            XCTAssertEqual(out.word(100 - y - 1, y), 1)
+            XCTAssertEqual(out.word(100 - y, y), 0)
+            XCTAssertEqual(out.word(100 + y, y), 0)
+            XCTAssertEqual(out.word(100 + y + 1, y), 1)
+        }
+        XCTAssertEqual(out.word(100, 50), 1, "empty window")
+    }
+
     // MARK: Per-line tables and output
 
     func testPerLineScrollAndFixedColour() {

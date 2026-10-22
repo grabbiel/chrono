@@ -148,6 +148,24 @@ final class PPUParityTests: XCTestCase {
         }
     }
 
+    func testParityWindows() throws {
+        let r = try renderer()
+        var f = ParityScenes.layered()
+        // Every select/logic/apply combination over per-line window shapes.
+        for line in 0..<224 {
+            var w = f.lines[line]
+            w.wh0 = UInt8(abs(112 - line)); w.wh1 = UInt8(255 - abs(112 - line))
+            w.wh2 = UInt8((line * 3) & 255); w.wh3 = UInt8((line * 3 + 60) & 255)
+            w.w12sel = UInt8(truncatingIfNeeded: line &* 0x3B); w.w34sel = UInt8(truncatingIfNeeded: line &* 0x6D)
+            w.wobjsel = UInt8(truncatingIfNeeded: line &* 0xC5)
+            w.wbglog = UInt8(truncatingIfNeeded: line &* 0x27); w.wobjlog = UInt8(line & 15)
+            w.tmw = UInt8(line & 0x1F); w.tsw = UInt8((line >> 2) & 0x1F)
+            w.cgwsel = UInt8((line & 0x0F) << 4) | 0x02; w.cgadsub = 0x3F | UInt8((line >> 4) & 3) << 6
+            f.lines[line] = w
+        }
+        try assertParity(r, f, "windows")
+    }
+
     func testParity239Lines() throws {
         let r = try renderer()
         let base = ParityScenes.layered()
@@ -177,6 +195,11 @@ final class PPUParityTests: XCTestCase {
                 if all || rng.chance(20) { r.writeCOLDATA(rng.byte()) }
                 if all || rng.chance(5) { r.obsel = rng.byte(); r.objFirst = rng.chance(50) ? 0 : UInt8(rng.int(128)) }
                 if all || rng.chance(5) { r.inidisp = rng.chance(10) ? 0x80 : UInt8(rng.int(16)) | (rng.chance(80) ? 0x0F : 0) }
+                if all || rng.chance(10) {
+                    r.w12sel = rng.byte(); r.w34sel = rng.byte(); r.wobjsel = rng.byte()
+                    r.wbglog = rng.byte(); r.wobjlog = rng.byte(); r.tmw = rng.byte(); r.tsw = rng.byte()
+                }
+                if all || rng.chance(40) { r.wh0 = rng.byte(); r.wh1 = rng.byte(); r.wh2 = rng.byte(); r.wh3 = rng.byte() }
             }
             randomize(&base, all: true)
             for line in 0..<f.height {

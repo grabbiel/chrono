@@ -20,6 +20,7 @@ The rules come from written documentation only, not from emulator code:
   - [Sprites](https://snes.nesdev.org/w/index.php?oldid=1204) (rev 1204)
   - [Color math](https://snes.nesdev.org/w/index.php?oldid=1387) (rev 1387)
   - [Timing](https://snes.nesdev.org/w/index.php?oldid=1467) (rev 1467)
+  - [Windows](https://snes.nesdev.org/w/index.php?oldid=1167) (rev 1167)
 
 ## Input: `PPUFrame`
 
@@ -42,7 +43,9 @@ visible line `i` is drawn.
 - the character-base nibbles (`writeBG12NBA` and `writeBG34NBA` set them).
 
 The registers are INIDISP, OBSEL, BGMODE, BGnSC, BG12NBA/BG34NBA, BGnHOFS/VOFS,
-TM, TS, CGWSEL, CGADSUB, COLDATA and the OBJ priority rotation (`objFirst`).
+TM, TS, the window registers (W12SEL, W34SEL, WOBJSEL, WH0–WH3, WBGLOG,
+WOBJLOG, TMW, TSW), CGWSEL, CGADSUB, COLDATA and the OBJ priority rotation
+(`objFirst`).
 
 ## Rules and evidence
 
@@ -151,6 +154,9 @@ These rules come from fullsnes "SNES PPU Color-Math" and the Wiki's
   from. OBJs use math only with palettes 4–7 on the main screen. On the sub
   screen, any OBJ palette is an addend.
 - **Addend.** CGWSEL bit 1 selects the addend: the sub screen, or the fixed color.
+  fullsnes calls the same bit "Sub Screen BG/OBJ Enable (0=Backdrop only)".
+  With it clear, the sub screen is only its backdrop, the fixed color, so the two
+  descriptions have the same effect.
 - **Arithmetic.** For each channel, the PPU adds or subtracts, optionally halves,
   then clamps to 0…31. Subtraction below 0 gives 0.
 - **When half is skipped.** Half is skipped on pixels where the main screen is
@@ -160,7 +166,9 @@ These rules come from fullsnes "SNES PPU Color-Math" and the Wiki's
 - **CGWSEL regions.** These are the main "force black" region (bits 7–6) and the
   math-prevent region (bits 5–4), each meaning nowhere, outside the color window,
   inside it, or everywhere. With no color window enabled, every pixel is outside
-  it (Wiki CGWSEL).
+  it (Wiki CGWSEL). fullsnes names bits 5–4 "Color Math Enable" (0=Always,
+  1=MathWindow, 2=NotMathWin, 3=Never); the Wiki names them the sub-screen
+  "transparent region" that masks math. Both map the four values the same way.
 - **Forced black.** A forced-black main screen keeps its layer identity, so math
   still applies to it.
 
@@ -175,6 +183,30 @@ These rules come from fullsnes "SNES PPU Color-Math" and the Wiki's
 - a layer combined with itself.
 
 `testOBJMathOnlyForPalettes4To7OnMain` covers the OBJ palette rule.
+
+### Windows
+
+These rules come from the Wiki's *Windows* page and its PPU registers window
+section; fullsnes "SNES PPU Window" agrees.
+
+- **Window edges.** Window 1 is WH0…WH1 and window 2 is WH2…WH3, both edges
+  inclusive. A window whose left edge is greater than its right edge covers
+  nothing.
+- **Per-area settings.** Each area (BG1–BG4, OBJ, and the color window) has, per
+  window, an enable bit and an invert bit (W12SEL, W34SEL, WOBJSEL). A disabled
+  window has no effect, whether or not its invert bit is set. An inverted empty
+  window covers everything.
+- **Combining.** When both windows are enabled for an area, they combine with
+  that area's logic: OR, AND, XOR or XNOR (WBGLOG, WOBJLOG). When one is enabled,
+  it is used as is. When none is, the area is not covered.
+- **Applying.** TMW and TSW apply the windows to the main and sub screen layers:
+  a covered layer is removed from that screen at that pixel, and the next layer
+  shows. For OBJ, the whole OBJ-layer pixel is removed.
+- **The color window** decides "inside" for the CGWSEL regions.
+
+Tests: `testWindowEdgesInvertAndEmpty`, `testWindowLogic`,
+`testWindowsOnSubScreenOBJAndColour`, and `testPerLineWindowShape` (an
+HDMA-style per-line shape).
 
 ### Output
 
@@ -205,8 +237,12 @@ HOFS and COLDATA, as HDMA gradients use).
 5. **16×16 BG tile carry past 3FFh.** The tile number wraps within 10 bits.
 6. **OBJ timing.** The hardware evaluates a line's OBJs during the previous
    line. We evaluate line `i` with line `i`'s OBSEL and `objFirst`.
-7. **Priority rotation** is modelled only as "this OBJ is in front". No other
-   rotation quirk is modelled.
+7. **Priority rotation** makes `objFirst` the front OBJ. The Wiki describes
+   the 32-OBJ and 34-sliver evaluation in OAM index order and notes that
+   OAMADD rotation adjusts the order. It does not say whether rotation also
+   moves where that evaluation starts. We evaluate in the rotated order, so the
+   OBJs dropped first are the last ones in priority order. No other rotation
+   quirk is modelled.
 8. **Rectangular OBJ sizes 6 and 7** flip as rectangles. No documented source
    describes a different vertical flip for them.
 9. **Range over** is decided when a 33rd in-range OBJ is found. Time over is
@@ -221,7 +257,6 @@ HOFS and COLDATA, as HDMA gradients use).
 
 These are the remaining work:
 
-- windows (W12SEL…WOBJLOG, TMW, TSW, and the color window);
 - mosaic;
 - BG modes 2–7, offset-per-tile, direct color, Mode 7 and EXTBG;
 - hi-res (modes 5/6 and pseudo-512), interlace, and OBJ interlace;
@@ -229,8 +264,7 @@ These are the remaining work:
 - the overscan border.
 
 For modes 2–7, BGs are transparent; OBJs and the backdrop still draw with the
-mode 1 OBJ ranks. A color window would plug into the `inRegion` hook in both
-renderers.
+mode 1 OBJ ranks.
 
 ## Metal renderer
 
@@ -244,12 +278,12 @@ reference pipeline in integer arithmetic:
 
 1. BG fetch;
 2. OBJ sliver lookup;
-3. rank-table layering for the main and sub screens;
+3. windows, then rank-table layering for the main and sub screens;
 4. color math;
 5. brightness.
 
 It writes an RGBA8 texture of 256 × 224 or 256 × 239. The register table goes in
-a buffer of 24 words per line. The OBJ slivers go in 34 `uint4` per line.
+a buffer of 32 words per line. The OBJ slivers go in 34 `uint4` per line.
 
 `sync` uploads only the memory that changed:
 
@@ -272,12 +306,30 @@ a buffer of 24 words per line. The OBJ slivers go in 34 `uint4` per line.
 | `testParityColorMath` | 224 CGWSEL/CGADSUB/COLDATA combinations, also with an empty sub screen |
 | `testParityPerLineScrollModeAndBrightness` | per-line scroll, mode, BG3 bit, brightness, forced blank, rotation |
 | `testParityOBJLimits` | 128 OBJs with range and time over, X = −256, five OBSEL settings |
+| `testParityWindows` | per-line window shapes over 224 select, logic, TMW/TSW and CGWSEL combinations |
 | `testParity239Lines` | the 239-line picture |
-| `testParityRandomFrames` | eight seeded random frames: random VRAM, CGRAM and OAM, and per-line random registers over the supported space |
+| `testParityRandomFrames` | eight seeded random frames: random VRAM, CGRAM and OAM, and per-line random registers (windows included) over the supported space |
 | `testPaletteCyclingRewritesOnlyTheLUT` | parity after a palette rotation, with no VRAM upload |
 
-Changing one rule in the shader alone (half on a transparent sub screen, OBJ
-X flip, brightness 0) fails every parity test that exercises it.
+Changing one rule in the shader alone fails every parity test that exercises
+it. The rules tried were half on a transparent sub screen, OBJ X flip,
+brightness 0, XNOR window logic, and TSW.
+
+## Studio previews
+
+`PPUPreviewScenes` in ChronoForgeCore builds the Studio's tileset and map
+previews as real PPU pictures. `MetalViews.swift` shows them in `SNESPPUView`,
+and the scroll wheel pans through HOFS and VOFS.
+
+- **Tile bank.** Up to 1024 tiles sit on BG1, 32 per row, in a 32×64 tilemap.
+  Entries past the last tile point at a blank tile.
+- **Maps.** Map layers go on BG1–BG3 in mode 1. The 32×32-metatile window at
+  the camera is written into 64×64 tilemaps, the way a game streams a large
+  map. Tile 1023 (BG1/BG2) and tile 511 (BG3's 2bpp copy) stay blank for empty
+  cells.
+
+The project format has no palettes yet, so the previews use gray ramps.
+`PPUPreviewScenesTests` checks the layouts through the reference renderer.
 
 These tests need a Metal device. On hosted runners without one they skip, and
 they are listed as `may-skip` in `scripts/ci/expected_skips.txt`.

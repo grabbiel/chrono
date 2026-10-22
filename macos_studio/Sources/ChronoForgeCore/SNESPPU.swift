@@ -48,6 +48,23 @@ public struct PPURegisters: Equatable, Sendable {
     public var cgadsub: UInt8 = 0
     /// The fixed color COLDATA ($2132) writes build up (sub-screen backdrop).
     public var fixedColor: BGR555 = BGR555(word: 0)
+    /// W12SEL / W34SEL / WOBJSEL ($2123-$2125): per BG1-BG4, OBJ and the color
+    /// window, a nibble of window 1 invert/enable (bits 0/1) and window 2 (bits 2/3).
+    public var w12sel: UInt8 = 0
+    public var w34sel: UInt8 = 0
+    public var wobjsel: UInt8 = 0
+    /// WH0-WH3 ($2126-$2129): window 1 and window 2 left/right edges, inclusive.
+    public var wh0: UInt8 = 0
+    public var wh1: UInt8 = 0
+    public var wh2: UInt8 = 0
+    public var wh3: UInt8 = 0
+    /// WBGLOG / WOBJLOG ($212A/$212B): 2-bit window 1/2 logic (OR, AND, XOR,
+    /// XNOR) per BG1-BG4, and for OBJ (bits 1-0) and the color window (bits 3-2).
+    public var wbglog: UInt8 = 0
+    public var wobjlog: UInt8 = 0
+    /// TMW / TSW ($212E/$212F): apply the windows to main / sub screen layers.
+    public var tmw: UInt8 = 0
+    public var tsw: UInt8 = 0
 
     public init() {}
 
@@ -254,6 +271,45 @@ public enum PPUOBJEvaluator {
     }
 }
 
+// MARK: - Windows
+
+public enum PPUWindows {
+    /// Whether the combined window of `area` (0-3 BG1-BG4, 4 OBJ, 5 the color
+    /// window) covers x: each enabled window is left <= x <= right (empty when
+    /// left > right), optionally inverted; two enabled windows combine with the
+    /// area's logic; no enabled window covers nothing.
+    public static func covers(_ r: PPURegisters, area: Int, x: Int) -> Bool {
+        let sel: UInt8, logic: UInt8
+        switch area {
+        case 0, 1: sel = r.w12sel >> (area * 4); logic = r.wbglog >> (area * 2)
+        case 2, 3: sel = r.w34sel >> ((area - 2) * 4); logic = r.wbglog >> (area * 2)
+        default: sel = r.wobjsel >> ((area - 4) * 4); logic = r.wobjlog >> ((area - 4) * 2)
+        }
+        let enable1 = sel & 2 != 0, enable2 = sel & 8 != 0
+        let w1 = (x >= Int(r.wh0) && x <= Int(r.wh1)) != (sel & 1 != 0)
+        let w2 = (x >= Int(r.wh2) && x <= Int(r.wh3)) != (sel & 4 != 0)
+        switch (enable1, enable2) {
+        case (true, true):
+            switch logic & 3 {
+            case 0: return w1 || w2
+            case 1: return w1 && w2
+            case 2: return w1 != w2
+            default: return w1 == w2
+            }
+        case (true, false): return w1
+        case (false, true): return w2
+        default: return false
+        }
+    }
+
+    /// Bits 0-4 (BG1-BG4, OBJ) of the layers the windows cover at x.
+    public static func layerMask(_ r: PPURegisters, x: Int) -> UInt8 {
+        var mask: UInt8 = 0
+        for area in 0..<5 where covers(r, area: area, x: x) { mask |= 1 << area }
+        return mask
+    }
+}
+
 // MARK: - Layering
 
 /// Which layer a screen pixel came from; the raw values are the CGADSUB bits.
@@ -363,9 +419,8 @@ public enum PPUReferenceRenderer {
     }
 
     /// Whether a CGWSEL region (0 nowhere, 1 outside, 2 inside, 3 everywhere
-    /// the color window) covers a pixel. Windows are not modelled, so every
-    /// pixel is outside the color window.
-    static func inRegion(_ region: UInt8, insideColorWindow: Bool = false) -> Bool {
+    /// the color window) covers a pixel.
+    static func inRegion(_ region: UInt8, insideColorWindow: Bool) -> Bool {
         switch region & 3 {
         case 0: return false
         case 1: return !insideColorWindow
@@ -375,12 +430,12 @@ public enum PPUReferenceRenderer {
     }
 
     /// Main/sub composition and color math for one pixel; returns BGR555.
-    static func compose(main: Pixel, sub: Pixel?, _ r: PPURegisters) -> UInt16 {
-        let forceBlack = inRegion(r.cgwsel >> 6)
+    static func compose(main: Pixel, sub: Pixel?, _ r: PPURegisters, colorWindow: Bool) -> UInt16 {
+        let forceBlack = inRegion(r.cgwsel >> 6, insideColorWindow: colorWindow)
         let mainColor = forceBlack ? 0 : main.color
         let layerMath = r.cgadsub & (1 << main.layer.rawValue) != 0
             && (main.layer != .obj || main.objPalette >= 4)
-        guard layerMath, !inRegion(r.cgwsel >> 4) else { return mainColor }
+        guard layerMath, !inRegion(r.cgwsel >> 4, insideColorWindow: colorWindow) else { return mainColor }
         let addend: UInt16
         var halve = r.cgadsub & 0x40 != 0 && !forceBlack
         if r.cgwsel & 0x02 != 0 {
@@ -420,10 +475,11 @@ public enum PPUReferenceRenderer {
             for x in 0..<PPUFrame.width {
                 let bgs = (0..<4).map { bgPixel(f, r, bg: $0, x: x, line: line) }
                 let obj = objPixel(f, objs, x: x)
-                let main = front(f, r, ranks: ranks, mask: r.tm, bgs: bgs, obj: obj)
+                let windows = PPUWindows.layerMask(r, x: x)
+                let main = front(f, r, ranks: ranks, mask: r.tm & ~(r.tmw & windows), bgs: bgs, obj: obj)
                     ?? Pixel(color: f.cgram[0] & 0x7FFF, layer: .backdrop, objPalette: 0)
-                let sub = front(f, r, ranks: ranks, mask: r.ts, bgs: bgs, obj: obj)
-                let c = compose(main: main, sub: sub, r)
+                let sub = front(f, r, ranks: ranks, mask: r.ts & ~(r.tsw & windows), bgs: bgs, obj: obj)
+                let c = compose(main: main, sub: sub, r, colorWindow: PPUWindows.covers(r, area: 5, x: x))
                 let o = row + x * 4
                 out[o] = output8(Int(c & 31), brightness: r.brightness)
                 out[o + 1] = output8(Int((c >> 5) & 31), brightness: r.brightness)

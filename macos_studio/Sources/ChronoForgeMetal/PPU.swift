@@ -2,7 +2,7 @@
 //
 // One compute thread per output pixel runs the PPU pipeline of
 // ChronoForgeCore's PPUReferenceRenderer: BG fetches from a VRAM texture, OBJ
-// slivers from the shared OAM evaluator, main/sub layering, color math, master
+// slivers from the shared OAM evaluator, windows, main/sub layering, color math, master
 // brightness. Palettes are a BGR555 LUT texture (CGRAM), so palette cycling
 // rewrites 512 bytes and never touches the tile data. Its output must equal
 // the reference pixel for pixel (ChronoForgeMetalTests). Shader source is a
@@ -15,7 +15,7 @@ import ChronoForgeCore
 
 public enum PPUShaders {
     /// 32-bit words per line in the register buffer.
-    static let registerStride = 24
+    static let registerStride = 32
     static let maxSlivers = PPUOBJEvaluator.maxSliversPerLine
 
     public static let source = """
@@ -24,7 +24,9 @@ using namespace metal;
 
 // Register buffer, \(PPUShaders.registerStride) words per line:
 // 0 INIDISP, 1 BGMODE, 2 TM, 3 TS, 4 CGWSEL, 5 CGADSUB, 6 fixed color,
-// 7 sliver count, 8-11 BGnSC, 12-15 char base, 16-19 HOFS, 20-23 VOFS.
+// 7 sliver count, 8-11 BGnSC, 12-15 char base, 16-19 HOFS, 20-23 VOFS,
+// 24 W12SEL, 25 W34SEL, 26 WOBJSEL, 27 WBGLOG, 28 WOBJLOG, 29 TMW, 30 TSW,
+// 31 WH0 | WH1 << 8 | WH2 << 16 | WH3 << 24.
 constant uint REG_STRIDE = \(PPUShaders.registerStride);
 constant uint MAX_SLIVERS = \(PPUShaders.maxSlivers);
 
@@ -105,10 +107,32 @@ static Front front(texture2d<uint, access::read> cgram, constant uchar* ranks, u
     return f;
 }
 
-static bool in_region(uint region) {
-    // Windows are not modelled: every pixel is outside the color window.
+// Whether the combined window of an area (0-3 BG1-BG4, 4 OBJ, 5 color) covers x.
+static bool window_covers(const device uint* R, uint area, uint x) {
+    uint sel, logic;
+    if (area < 2u) { sel = R[24] >> (area * 4u); logic = R[27] >> (area * 2u); }
+    else if (area < 4u) { sel = R[25] >> ((area - 2u) * 4u); logic = R[27] >> (area * 2u); }
+    else { sel = R[26] >> ((area - 4u) * 4u); logic = R[28] >> ((area - 4u) * 2u); }
+    uint wh = R[31];
+    bool enable1 = (sel & 2u) != 0u, enable2 = (sel & 8u) != 0u;
+    bool w1 = (x >= (wh & 255u) && x <= ((wh >> 8) & 255u)) != ((sel & 1u) != 0u);
+    bool w2 = (x >= ((wh >> 16) & 255u) && x <= (wh >> 24)) != ((sel & 4u) != 0u);
+    if (enable1 && enable2) {
+        switch (logic & 3u) {
+        case 0u: return w1 || w2;
+        case 1u: return w1 && w2;
+        case 2u: return w1 != w2;
+        default: return w1 == w2;
+        }
+    }
+    if (enable1) { return w1; }
+    if (enable2) { return w2; }
+    return false;
+}
+
+static bool in_region(uint region, bool insideColorWindow) {
     region &= 3u;
-    return region == 1u || region == 3u;
+    return region == 3u || (region == 1u && !insideColorWindow) || (region == 2u && insideColorWindow);
 }
 
 static uint output8(uint c5, uint brightness) {
@@ -151,15 +175,20 @@ kernel void ppu_frame(texture2d<uint, access::read> vram [[texture(0)]],
     uint mode = R[1] & 7u;
     uint table = mode == 0u ? 0u : (mode == 1u ? (((R[1] & 8u) != 0u) ? 2u : 1u) : 3u);
     constant uchar* ranks = RANKS[table];
-    Front main = front(cgram, ranks, R[2], bgs, obj);
+    uint windows = 0u;
+    for (uint area = 0u; area < 5u; area++) {
+        if (window_covers(R, area, x)) { windows |= 1u << area; }
+    }
+    bool colorWindow = window_covers(R, 5u, x);
+    Front main = front(cgram, ranks, R[2] & ~(R[29] & windows), bgs, obj);
     if (!main.found) { main.color = cgram.read(uint2(0u, 0u)).r & 0x7FFFu; main.layer = 5u; }
-    Front sub = front(cgram, ranks, R[3], bgs, obj);
+    Front sub = front(cgram, ranks, R[3] & ~(R[30] & windows), bgs, obj);
 
     uint cgwsel = R[4], cgadsub = R[5];
-    bool forceBlack = in_region(cgwsel >> 6);
+    bool forceBlack = in_region(cgwsel >> 6, colorWindow);
     uint color = forceBlack ? 0u : main.color;
     bool layerMath = (cgadsub & (1u << main.layer)) != 0u && (main.layer != 4u || main.objPalette >= 4u);
-    if (layerMath && !in_region(cgwsel >> 4)) {
+    if (layerMath && !in_region(cgwsel >> 4, colorWindow)) {
         uint addend = R[6];
         bool halve = (cgadsub & 0x40u) != 0u && !forceBlack;
         if ((cgwsel & 2u) != 0u) {
@@ -305,6 +334,14 @@ public final class PPURenderer {
                 registers[o + 16 + n] = UInt32(r.bg[n].hofs & 0x3FF)
                 registers[o + 20 + n] = UInt32(r.bg[n].vofs & 0x3FF)
             }
+            registers[o + 24] = UInt32(r.w12sel)
+            registers[o + 25] = UInt32(r.w34sel)
+            registers[o + 26] = UInt32(r.wobjsel)
+            registers[o + 27] = UInt32(r.wbglog)
+            registers[o + 28] = UInt32(r.wobjlog)
+            registers[o + 29] = UInt32(r.tmw)
+            registers[o + 30] = UInt32(r.tsw)
+            registers[o + 31] = UInt32(r.wh0) | UInt32(r.wh1) << 8 | UInt32(r.wh2) << 16 | UInt32(r.wh3) << 24
             for (k, s) in objs.enumerated() {
                 let so = (line * maxSlivers + k) * 4
                 slivers[so] = UInt32(bitPattern: Int32(s.x))
