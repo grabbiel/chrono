@@ -52,11 +52,34 @@ extension ProjectStore {
         return rom
     }
 
-    /// The song's instruments for a sample list, with the ROM's words.
+    /// The song's instruments for a sample list, with the ROM's words, or
+    /// the project's for the samples rom.samples writes.
     public func instrumentRack(samples: [Int]) -> [CTSongInstrument]? {
-        guard let rom = musicROM() else { return nil }
-        do { return try CTSongInstrument.rack(rom: rom, samples: samples) } catch {
+        guard let rom = musicROM(), let project else { return nil }
+        do { return try CTProjectSamples.rack(rom: rom, samples: samples, project: project) } catch {
             statusMessage = "instruments: \(error)"
+            statusIsError = true
+            return nil
+        }
+    }
+
+    /// Starts song `song` from the template (CTSongTemplate): writes a new
+    /// listing under audio/songs and lists it in rom.songs; returns its path.
+    public func newSong(_ song: Int, options: CTSongTemplate.Options) -> String? {
+        guard let project else { return nil }
+        do {
+            let text = try CTSongTemplate.listing(options, title: String(format: "new song $%02X", song))
+            var rel = String(format: "%@/song%02X.ctsong", Self.songDirectory, song), n = 2
+            while FileManager.default.fileExists(atPath: project.fileURL(relative: rel).path) {
+                rel = String(format: "%@/song%02X_%d.ctsong", Self.songDirectory, song, n); n += 1
+            }
+            guard writeSongListing(rel, text), setSongTarget(rel, song: song) else { return nil }
+            statusMessage = String(format: "new song %@ (%d tracks, %d steps) → $%02X", (rel as NSString).lastPathComponent,
+                                   options.tracks.count, options.steps, song)
+            statusIsError = false
+            return rel
+        } catch {
+            statusMessage = "new song: \(error)"
             statusIsError = true
             return nil
         }

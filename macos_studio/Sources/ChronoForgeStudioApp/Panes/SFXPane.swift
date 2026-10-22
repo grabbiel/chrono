@@ -111,6 +111,7 @@ struct SFXLabEditor: View {
                 }
                 GroupBox("Envelope") { EnvelopeShaper(setting: $envelope, fx: $meta.fx) }
                 GroupBox("Pitch, vibrato and noise") { VoiceFXControls(meta: $meta) }
+                GroupBox("Use in game") { SampleUseInGameView(store: store, id: id, unsaved: edited != saved) }
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)

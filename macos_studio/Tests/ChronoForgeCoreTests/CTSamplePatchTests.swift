@@ -289,6 +289,33 @@ final class CTSamplePatchTests: XCTestCase {
         }
     }
 
+    func testStudioBudgetAndRackAreTheBuilds() throws {
+        let rom = try clean()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ctsamples-\(UUID().uuidString).ctproj")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.copyItem(at: fixtureURL(), to: dir)
+        var project = try CTProject.load(from: dir)
+        let (file, meta) = try tone(rate: 16000)
+        var m = meta
+        m.brr = "audio/samples/tone.brr"
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("audio/samples"), withIntermediateDirectories: true)
+        try Data(file).write(to: dir.appendingPathComponent(m.brr))
+        project.samples["tone"] = m
+        var spec = Project.ROMBuild()
+        spec.samples = [.init(id: "tone", songs: [2, 0x10], rootNote: 48)]
+        project.project.rom = spec
+        // Before the build: the clean ROM and the project.
+        let planned: [CTSongBudget] = try [2, 0x10].map { try CTProjectSamples.budget(rom: rom, project: project, song: $0) }
+        let rack = try CTProjectSamples.rack(rom: rom, samples: planned[0].samples, project: project)
+        // The build, and the built ROM's own tables.
+        let (built, report) = try CTROMBuilder.build(base: rom, project: project)
+        XCTAssertEqual(report.budgets, planned)
+        let after: [CTSongBudget] = try [2, 0x10].map { try CTSongBudget.of(rom: built, song: $0) }
+        XCTAssertEqual(after, planned)
+        XCTAssertEqual(rack, try CTSongInstrument.rack(rom: built, samples: planned[0].samples))
+        XCTAssertEqual(rack.last?.sample, 63)
+    }
+
     func testOverBudgetEditsAreRefused() throws {
         let rom = try clean()
         // Song $27 leaves 16 bytes below its echo buffer.
