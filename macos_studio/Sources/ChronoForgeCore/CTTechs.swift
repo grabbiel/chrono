@@ -286,6 +286,7 @@ public enum CTTechROM {
     /// The read-only fields must be the base ROM's (names aside: never written).
     public static func check(_ s: TechSystemDef, against base: TechSystemDef) throws {
         func need(_ ok: Bool, _ what: @autoclosure () -> String) throws { if !ok { throw CTROMBuildError("techs: \(what())") } }
+        try need(s.techs.count == base.techs.count, "need techs 0-$74 in order")
         for (t, b) in zip(s.techs, base.techs) {
             let name = String(format: "tech $%02X", t.id)
             try need(t.kind == b.kind && t.userSet == b.userSet, "\(name): kind and user set are read-only")

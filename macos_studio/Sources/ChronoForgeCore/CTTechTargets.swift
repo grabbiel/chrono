@@ -80,6 +80,8 @@ public enum CTTechTargets {
         let variant = (p == 0 || p == 6) && entry.size & 0x80 != 0
         let centre = [user(0), target, entry.size & 0x7F, target, user(1), caster, caster][min(p, 6)]
         let aim = [target, 0xFF, 0xFF, user(1), 0xFF, 0xFF, target][min(p, 6)]
+        // Set 3 takes the side from user 0's slot; the others take DP $0A, which
+        // the target-mode handler sets. Approximated here by the target's side.
         let scansParty = p == 3 ? user(0) != 0 : partySlots.contains(target)
         let shape: Shape
         switch entry.shape {
@@ -93,7 +95,8 @@ public enum CTTechTargets {
 
     /// The slots a zone takes in, given each slot's screen position (nil:
     /// absent). Circle and row are the routines' arithmetic; the line's strip
-    /// and box are their inferred geometry (BattleTgt_AreaLine).
+    /// and box are their inferred geometry (BattleTgt_AreaLine); the triangle
+    /// is exact where the routine compares 8-bit angles from each corner.
     public static func hits(_ zone: Zone, positions: [Point?]) -> [Int] {
         let side = zone.scansParty ? Array(partySlots) : Array(enemySlots)
         let present = side.filter { positions.indices.contains($0) && positions[$0] != nil }

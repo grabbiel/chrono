@@ -212,9 +212,10 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-techs-') as directory:
 
     def claim_lightning(d):
         d['techs']['techs'][plain['id']]['element'] = 'lightning'
-    # Each damaged byte but the second is inside a write the report names.
+    # Each damaged byte but the second and third is inside a write the report names.
     cases = ((dict(where=rec(locked['id'])), f'tech ${locked["id"]:02X}: user_set is read-only'),
              (dict(where=rec(5) + 2), 'not in a report write'),
+             (dict(where=ct.CHAR_TECHS_PC + 1), 'not in a report write'),
              (dict(where=rec(plain['id']) + 3), f'tech ${plain["id"]:02X}: attr is read-only'),
              (dict(where=rec(plain['id']) + 3, bit=0x80, change=claim_lightning), 'more than one element bit'),
              (dict(where=ct.MP_COST_PC + part), f'part {part}: not the reported values'),

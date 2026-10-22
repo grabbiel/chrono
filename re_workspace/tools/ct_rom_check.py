@@ -184,6 +184,8 @@ def check_characters(clean, built, report):
 
 
 def check_techs(clean, built, report):
+    # Every byte inside ct.write_zones is compared below; main()'s span check
+    # rejects changed bytes outside them (CharTechs, the TP word after the rows).
     system = report.get("techs")
     if not system:
         for z in ct.write_zones(clean):

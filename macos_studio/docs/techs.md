@@ -157,7 +157,12 @@ positions:
 
 Entry byte 1, bits 6–0, picks the centre and the aim (`BattleSys_AreaParamTable`):
 user 1 or 2, the target, or the caster. Bit 7 makes the entry a position query
-with no area. Byte 2 holds the size (bits 6–0) and the line variant (bit 7).
+with no area. Byte 2 holds the size (bits 6–0) and the line variant (bit 7);
+only sets 0 and 6 pass the variant on (`BattleSys_UnkC1DD`).
+
+The scanned side is user 0's slot for set 3. For the other sets it is DP `$0A`,
+which the target-mode handler sets for the caster and mode. `CTTechTargets`
+approximates it by the target's side.
 
 The menu's area modes all scan the enemy side:
 - the lines `$0B`–`$0D` use size 2;
@@ -276,7 +281,7 @@ character's +$2D is not its next single's cost.
   - an edited build (11 writes) passes `re_workspace/tools/ct_rom_check.py`;
   - the ROM's own `AwardTechPoints`, run on the built ROM, learns as the rule
     does on the edited tables;
-  - the checker rejects 9 damaged copies;
+  - the checker rejects 10 damaged copies;
   - the CLI refuses 6 out-of-range or read-only edits.
 
   The checker decodes the built tables independently. It compares them with
@@ -293,5 +298,8 @@ character's +$2D is not its next single's cost.
   the per-type meaning of the rest is partial.
 - The line area's strip and box are inferred geometry. The Studio's preview uses
   sample positions.
+- The preview's scanned side follows the target, an approximation of the
+  side the target-mode handler sets. Its triangle is exact, where the routine
+  compares 8-bit angles, so an enemy on an edge may differ.
 - The Studio pane is compiled, not UI-tested. Its logic (the codec, the checks,
   the rule and the zones) is in Core and tested there.

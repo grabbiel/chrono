@@ -140,7 +140,7 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
   is checked by `ct_rom_check.py` (the tables decoded independently and compared
   with the report, read-only bytes, ranges, combination records, the new-game
   state and +$02), and the ROM's own `AwardTechPoints` learns from the built
-  tables as the rule says; nine damaged copies are rejected.
+  tables as the rule says; ten damaged copies are rejected.
 
 ## Limitations
 
