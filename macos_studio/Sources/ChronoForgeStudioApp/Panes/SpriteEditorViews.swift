@@ -43,6 +43,7 @@ struct SpriteEditor: View {
                 VStack(alignment: .leading, spacing: 6) {
                     stage
                     Text(budgetText).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                    if sprite.rom != nil { romPanel }
                 }
                 ScrollView {
                     Group {
@@ -87,6 +88,70 @@ struct SpriteEditor: View {
         if let r = sprite.rom { parts.append("set \(r.set) from \(r.frames)") }
         if sheetDirty { parts.append("sheet modified") }
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: ROM write-back
+
+    private var listed: Bool { store.project?.project.rom?.sprites.contains(sprite.id) ?? false }
+
+    /// rom.sprites, the pack budget, the sharers and (enemies) the record's battle fields.
+    private var romPanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Write to the ROM (rom.sprites)", isOn: Binding(get: { listed },
+                                                                   set: { _ = store.setROMSprite(sprite.id, listed: $0) }))
+            if let b = CTEnemySpritePatch.packBudget(sprite, sheet: sheetTiles) {
+                Text(b.packed <= b.budget ? "pack \(b.packed) of \(b.budget) bytes: written in place"
+                                          : "pack \(b.packed) bytes, over its \(b.budget)-byte span: moved into free space")
+                    .foregroundStyle(b.packed <= b.budget ? Color.secondary : Color.orange)
+            }
+            let sharers = CTEnemySpritePatch.sharers(of: sprite, in: store.project?.sprites ?? [:])
+            if !sharers.isEmpty {
+                let names = sharers.prefix(8).map { s in "\(s.id) (\(s.parts.joined(separator: ", ")))" }
+                Text("shared with " + names.joined(separator: ", ") + (sharers.count > 8 ? ", …" : ""))
+                    .foregroundStyle(.secondary)
+                Text("an edit to a shared part needs every sharer listed with the same edit")
+                    .foregroundStyle(.secondary)
+            }
+            if sprite.battle != nil { battleFields }
+        }
+        .font(.caption)
+        .frame(maxWidth: 512, alignment: .leading)
+    }
+
+    private func battleField(_ label: String, _ key: WritableKeyPath<SpriteDef.Battle, Int>, _ range: ClosedRange<Int>) -> some View {
+        Stepper("\(label) \(sprite.battle?[keyPath: key] ?? 0)", value: Binding(
+            get: { sprite.battle?[keyPath: key] ?? 0 },
+            set: { sprite.battle?[keyPath: key] = $0 }), in: range)
+    }
+
+    private func setFlag(_ bit: Int, _ on: Bool) {
+        let flags: Int = sprite.battle?.flags ?? 0
+        sprite.battle?.flags = on ? flags | bit : flags & ~bit
+    }
+
+    private var battleFields: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Battle record").font(.caption.bold())
+            HStack {
+                battleField("offset x", \.screenOffsetX, 0...255)
+                battleField("offset y", \.screenOffsetY, 0...255)
+            }
+            HStack {
+                battleField("half width", \.halfWidth, 0...255)
+                battleField("height", \.height, 0...255)
+            }
+            HStack {
+                battleField("move speed", \.moveSpeed, 0...7)
+                battleField("move delay", \.moveDelay, 0...15)
+            }
+            HStack {
+                ForEach([0x04, 0x08, 0x20, 0x80], id: \.self) { bit in
+                    Toggle(String(format: "flag $%02X", bit), isOn: Binding(
+                        get: { (sprite.battle?.flags ?? 0) & bit != 0 },
+                        set: { setFlag(bit, $0) }))
+                }
+            }
+        }
     }
 
     private var frameBinding: Binding<Int> {
@@ -712,3 +777,4 @@ extension Color {
         self.init(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255)
     }
 }
+

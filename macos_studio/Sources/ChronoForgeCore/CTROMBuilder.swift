@@ -148,6 +148,8 @@ public enum CTROMBuilder {
         public var enemies: [Enemy]? = nil                        // absent: none requested
         public var enemyScripts: [CTEnemyAIPatch.ReportScript]? = nil // absent: no script written
         public var sprites: [CTSpritePatch.ReportSprite]? = nil   // absent: none requested
+        public var enemySprites: [CTEnemySpritePatch.ReportSprite]? = nil // absent: no ct-enemy sprite requested
+        public var spriteWarnings: [String]? = nil                 // absent: none (stale enemy views of PC parts)
         public var samples: [CTSamplePatch.ReportSample]? = nil   // absent: none requested
         public var sampleTables: CTSamplePatch.ReportTables? = nil // absent: the tables were not moved
         /// The ARAM budget of every song whose data or sample list was written.
@@ -384,7 +386,9 @@ public enum CTROMBuilder {
             enemyWrites += try CTEnemyROM.writes(e.enemy, id: e.id, name: e.name, base: rom)
         }
         // Sprites: checked and decoded back before anything is written (docs/sprites.md).
-        let (spriteWrites, spriteReport) = try CTSpritePatch.writes(spriteRequests, base: rom)
+        let enemySpriteRequests = spriteRequests.filter { $0.sprite.rom?.family == CTEnemySpritePatch.family }
+        let pcSpriteRequests = spriteRequests.filter { $0.sprite.rom?.family != CTEnemySpritePatch.family }
+        let (spriteWrites, spriteReport) = try CTSpritePatch.writes(pcSpriteRequests, base: rom)
         var itemWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
         if let items {
             try CTItemROM.check(items.items, tables: items.tables)
@@ -452,6 +456,15 @@ public enum CTROMBuilder {
         let scriptReport = try CTEnemyAIPatch.apply(
             scriptRequests, base: base, space: &space, write: { write($0, at: $1, $2) },
             relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
+        // Enemy sprites over the PC write-back's result: a pack that outgrows its span needs free space.
+        var afterPCSprites = base
+        for w in spriteWrites { afterPCSprites.replaceSubrange(w.pc..<(w.pc + w.bytes.count), with: w.bytes) }
+        var pcListed: [Int: String] = [:]
+        for r in spriteReport { pcListed[r.set] = r.id }
+        let enemySpriteReport = try CTEnemySpritePatch.apply(
+            enemySpriteRequests, base: base, built: afterPCSprites, pcListed: pcListed, space: &space,
+            write: { write($0, at: $1, $2) }, relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
+        let spriteWarnings = CTEnemySpritePatch.staleViews(spriteReport, base: base, listed: Set(enemySpriteReport.map(\.set)))
 
         // Message tables first: their addresses go inside the packs.
         let codec = try textProfile.map { try CTTextCodec(profile: $0) }
@@ -644,7 +657,9 @@ public enum CTROMBuilder {
                             relocations: relocations.isEmpty ? nil : relocations)
         report.enemies = enemyReport.isEmpty ? nil : enemyReport
         report.enemyScripts = scriptReport.isEmpty ? nil : scriptReport
-        report.sprites = spriteRequests.isEmpty ? nil : spriteReport
+        report.sprites = pcSpriteRequests.isEmpty ? nil : spriteReport
+        report.enemySprites = enemySpriteRequests.isEmpty ? nil : enemySpriteReport
+        report.spriteWarnings = spriteWarnings.isEmpty ? nil : spriteWarnings
         report.samples = sampleRequests.isEmpty ? nil : sampleReport
         report.sampleTables = sampleTables
         report.budgets = budgets.isEmpty ? nil : budgets
@@ -735,6 +750,11 @@ struct FreeSpace {
         let start = ranges[i].range.lowerBound
         take(i, start..<(start + size))
         return start
+    }
+
+    /// The starts of the ranges of the kind with room for `size`, lowest first (nothing is taken).
+    func starts(_ size: Int, reclaimed: Bool) -> [Int] {
+        ranges.filter { $0.reclaimed == reclaimed && $0.range.count >= size }.map(\.range.lowerBound)
     }
 
     /// Exactly at `start`, when free.

@@ -71,14 +71,22 @@ public enum CTSpritePatch {
             problems += frameProblems(f, tileCount: src.tileCount).map { "frame \(i): \($0)" }
         }
         problems += paletteProblems(s)
+        problems += animationProblems(s.animations, rows: src.rows, frameCount: src.frameCount)
+        return problems
+    }
+
+    /// The game's lists are by row and facing, always loop, and step through
+    /// frames below the block's count (and below $FF, the field's end marker).
+    static func animationProblems(_ animations: [SpriteDef.Animation], rows: Int, frameCount: Int) -> [String] {
+        var problems: [String] = []
         var seen = Set<[Int]>()
-        for a in s.animations {
+        for a in animations {
             guard let row = a.row, let facing = a.facing else {
                 problems.append("animation \(a.id): no row and facing (the game's lists are by row and facing)")
                 continue
             }
-            if !(0..<src.rows).contains(row) || !(0..<4).contains(facing) {
-                problems.append("animation \(a.id): row \(row) facing \(facing) is not in the set's \(src.rows) rows x 4 facings")
+            if !(0..<rows).contains(row) || !(0..<4).contains(facing) {
+                problems.append("animation \(a.id): row \(row) facing \(facing) is not in the set's \(rows) rows x 4 facings")
             }
             if !seen.insert([row, facing]).inserted { problems.append("animation \(a.id): row \(row) facing \(facing) twice") }
             if !a.loop { problems.append("animation \(a.id): the game's lists always loop") }
@@ -88,8 +96,8 @@ public enum CTSpritePatch {
             for d in a.durations where !(1...255).contains(d) {
                 problems.append("animation \(a.id): duration \(d) is not 1-255"); break
             }
-            for id in a.frames where !(0..<min(src.frameCount, CTSpriteROM.endMarker)).contains(id) {
-                problems.append("animation \(a.id): frame id \(id) is not below \(min(src.frameCount, CTSpriteROM.endMarker))"); break
+            for id in a.frames where !(0..<min(frameCount, CTSpriteROM.endMarker)).contains(id) {
+                problems.append("animation \(a.id): frame id \(id) is not below \(min(frameCount, CTSpriteROM.endMarker))"); break
             }
         }
         return problems
