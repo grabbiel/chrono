@@ -333,3 +333,42 @@ and the scroll wheel pans through HOFS and VOFS.
 
 The project format has no palettes yet, so the previews use gray ramps.
 `PPUPreviewScenesTests` checks the layouts through the reference renderer.
+
+## Real locations
+
+`LocationScene` (`CTLocationRender.swift`) gives a [map](maps.md) the field's
+own register setup, as traced in the ROM. The interpreter runs of
+`Ppu_SetBgLayout` and `Ppu_ApplyMapScreens` back these values (`ct_maps.py
+check --run`).
+
+| Register | Value | Source |
+|---|---|---|
+| BGMODE | $09: mode 1, BG3 priority high | `Ppu_SetBgLayout` ($FD:C0D7) |
+| BG12NBA / BG34NBA | $11 / $05: BG1/2 characters at $1000, BG3's at $5000 | `Ppu_SetBgLayout` |
+| BG1SC–BG3SC | $61, $69, $71: tilemaps at $6000, $6800 and $7000, each 64×32 | `LocLoad_DrawMap` (HDMA) |
+| TM / TS / CGADSUB | From the map's `Screens` and `ColorMath`; layer 3 is off without a Tileset3 | `LocLoad_UnkA33B`, `Ppu_ApplyMapScreens` ($C0:A509) |
+| CGWSEL / COLDATA | $02 (sub screen as the second operand) / $E0 (black) | `Ppu_SetBgLayout` |
+| MOSAIC | 0 | `Ppu_ApplyMapScreens` |
+| BGnHOFS / BGnVOFS | The layer's scroll, VOFS minus 1 | the field's scroll |
+
+How a frame is built:
+
+- **Characters.** The location tileset's tiles go in at $1000, and the first
+  256 `t3` tiles (2bpp) at $5000.
+- **Tilemaps.** The visible cells are streamed into the 64×32 tilemaps the
+  way the field streams them. A cell past the edge of a 48-cell layer is
+  blank.
+- **Scroll.** Layer 2 at half rate scrolls at half the camera
+  (`Map_InitOrigin`). Layers 2 and 3 add their own step every frame
+  (`Map_Unk91AC`).
+- **Treasure.** Each chest gets a 16×16 OBJ ring at priority 2, as a
+  placeholder.
+- **Output.** `LocationScene.render` stitches frames over layer 1's area.
+
+These pictures are checked on two kinds of data:
+
+- **Synthetic tables.** The tilemap words equal the metatile chips cell by
+  cell, and the characters equal the sheet (`CTMapsTests`).
+- **The ROM.** Locations 1, 47, 109, 378 and 386 render as recognisable
+  rooms, through the reference renderer with colour math (`chronoforge maps
+  render`).
