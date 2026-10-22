@@ -276,6 +276,7 @@ default:
       chronoforge story <flags|graph|check|import|annotate> ...  (story flag registry and world graph)
       chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render|play|events|edit|verify-model> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]
+      chronoforge scene <raise|graph|timeline> <rom.sfc> <location> ...   (a location's event pack as a scene)
                         [--entry 0] [--flag symbol] [--steps 1000]
       chronoforge render-tileset <ctproj|rom> --out out.png [--tileset id]
       chronoforge decode-sample <brrfile> --out out.wav

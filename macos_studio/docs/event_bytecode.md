@@ -125,7 +125,9 @@ the interpreter does not model the multiplier), and a patched pointer lands in
   semantics come from handler documentation, not from named Studio statements.
   A `ct` opcode with `e` in its flow (e.g. the walks, whose next position goes
   through a saved offset the tracer does not follow) is accepted because its
-  normal path goes on. Raising ROM scripts into the Studio DSL is not done.
+  normal path goes on. ROM packs are raised as `ct-scene/1` documents
+  (objects, functions, offsets, calls; [Scene Director](scene_director.md#rom-locations-ct-scene1)),
+  not into the Studio DSL.
 - Writing packs into a ROM is the [ROM builder](rom_builder.md)'s job; it is
   limited to the confirmed free space of the 4 MB image.
 - `$FF` sub-op `$A9` exceeds the tracer's step budget; it is recorded as

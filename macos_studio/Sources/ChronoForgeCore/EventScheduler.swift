@@ -20,8 +20,8 @@ public enum EventScheduler {
         return slots
     }
 
-    private static func validateParty(_ slots: [Int]) throws {
-        guard (1...3).contains(slots.count), slots.allSatisfy({ (0...15).contains($0) }),
+    private static func validateParty(_ slots: [Int], range: ClosedRange<Int> = 0...15) throws {
+        guard (1...3).contains(slots.count), slots.allSatisfy({ range.contains($0) }),
               Set(slots).count == slots.count else {
             throw EventBytecode.CompileError("party requires 1–3 distinct object slots in 0...15")
         }
@@ -61,6 +61,7 @@ public enum EventScheduler {
         var pending: [EventStmt]                        // reversed: next statement last
         var block: Block? = nil
         var status = "running"
+        var step = 0                                    // statements of this function recorded so far
     }
     enum Block: Equatable {
         case sleep(until: Int)
@@ -91,36 +92,68 @@ public enum EventScheduler {
     public static func run(scenes: [String: EventScene], entryScene: String, entry: Int = 0,
                            flags initialFlags: Set<String> = [], dialogue: [String: String] = [:],
                            party: [Int]? = nil, frameLimit: Int = 10_000, stepLimit: Int = 1000) throws -> Result {
+        try trace(scenes: scenes, starts: [Start(scene: entryScene, function: entry, level: idleLevel)], flags: initialFlags,
+                  dialogue: dialogue, party: party, frameLimit: frameLimit, stepLimit: stepLimit).result
+    }
+
+    /// A function running when the trace begins: at the idle level as a
+    /// startup script, or lower as Evt_StartTargetFunc1 starts one (saving
+    /// the script the object ran).
+    struct Start { var scene: String, function: Int, level: Int }
+
+    /// `run` with several starting functions and object slots in `slots`
+    /// (raised ROM packs have up to 64 objects). `steps[i]` is how many
+    /// statements of its function invocation entry i's object had recorded
+    /// before it: the index of the statement in a body without conditionals.
+    static func trace(scenes: [String: EventScene], starts: [Start],
+                      flags initialFlags: Set<String> = [], dialogue: [String: String] = [:],
+                      party: [Int]? = nil, frameLimit: Int = 10_000, stepLimit: Int = 1000,
+                      slots: ClosedRange<Int> = 0...15) throws -> (result: Result, steps: [Int]) {
         guard (1...100_000).contains(stepLimit), (1...1_000_000).contains(frameLimit) else {
             throw EventBytecode.CompileError("preview limits out of range")
         }
-        guard let start = scenes[entryScene] else { throw EventBytecode.CompileError("unknown entry scene \(entryScene)") }
+        for s in starts where scenes[s.scene] == nil {
+            throw EventBytecode.CompileError("unknown entry scene \(s.scene)")
+        }
         var owners: [Int: String] = [:]
         for id in scenes.keys.sorted() {
             let scene = scenes[id]!
-            try EventBytecode.validate(scene)
+            if slots == 0...15 {
+                try EventBytecode.validate(scene)
+            } else {
+                guard slots.contains(scene.object) else { throw EventBytecode.CompileError("object slot must be in \(slots)") }
+                try EventBytecode.validate(scene.funcs)
+            }
             if let other = owners[scene.object] {
                 throw EventBytecode.CompileError("object slot \(scene.object) is shared by scenes \(other) and \(id)")
             }
             owners[scene.object] = id
         }
-        if let party { try validateParty(party) }
-        guard let entryBody = start.funcs.first(where: { $0.index == entry })?.stmts else {
-            throw EventBytecode.CompileError("missing entry function \(entry)")
-        }
+        if let party { try validateParty(party, range: slots) }
         var objects = scenes.keys.sorted().map { Object(id: $0, scene: scenes[$0]!) }
             .sorted { ($0.scene.object, $0.id) < ($1.scene.object, $1.id) }
         let index = Dictionary(uniqueKeysWithValues: objects.enumerated().map { ($0.element.id, $0.offset) })
-        objects[index[entryScene]!].cursor = Cursor(function: entry, pending: entryBody.reversed())
-        objects[index[entryScene]!].status = "running"
+        for s in starts.sorted(by: { $0.level > $1.level }) {
+            guard let body = scenes[s.scene]!.funcs.first(where: { $0.index == s.function })?.stmts else {
+                throw EventBytecode.CompileError("missing entry function \(s.function)")
+            }
+            let i = index[s.scene]!
+            if let c = objects[i].cursor, s.level < objects[i].level { objects[i].saved[objects[i].level] = c }
+            objects[i].cursor = Cursor(function: s.function, pending: body.reversed())
+            objects[i].level = s.level
+            objects[i].status = "running"
+        }
 
-        var flags = initialFlags, entries: [Entry] = []
+        var flags = initialFlags, entries: [Entry] = [], steps: [Int] = []
         var frame = 0, stop: String?
 
         func functionBody(_ o: Object, _ f: Int) -> [EventStmt]? { o.scene.funcs.first { $0.index == f }?.stmts }
-        func record(_ o: Object, _ function: Int, _ stmt: EventStmt, _ detail: String) {
+        var current = 0                                 // the object whose statement `record` logs
+        func record(_ o: Object, _ function: Int, _ stmt: EventStmt, _ detail: String, advance: Bool = true) {
             entries.append(Entry(id: entries.count, frame: frame, scene: o.id, object: o.scene.object, level: o.level,
                                  function: function, action: EventDSL.summary(stmt), detail: detail))
+            steps.append(objects[current].cursor?.step ?? 0)
+            if advance { objects[current].cursor?.step += 1 }
         }
         func target(of stmt: EventStmt) -> (id: String?, function: Int, mode: EventCallMode, level: Int, label: String) {
             switch stmt {
@@ -170,8 +203,9 @@ public enum EventScheduler {
         frames: while frame < frameLimit {
             var progressed = false
             for i in objects.indices {
-                var steps = 0
-                run: while steps < stepsPerFrame, objects[i].cursor != nil {
+                current = i
+                var ran = 0
+                run: while ran < stepsPerFrame, objects[i].cursor != nil {
                     switch objects[i].block {
                     case .sleep(let until)?:
                         guard frame >= until else { break run }
@@ -191,7 +225,7 @@ public enum EventScheduler {
                     objects[i].block = nil
                     objects[i].status = "running"
                     guard entries.count < stepLimit else { stop = "Step limit reached (possible loop)"; break frames }
-                    steps += 1; progressed = true
+                    ran += 1; progressed = true
                     switch stmt {
                     case .nop: record(o, function, stmt, "")
                     case .text(let id): record(o, function, stmt, dialogue[id] ?? "Unresolved dialogue: \(id)")
@@ -220,7 +254,7 @@ public enum EventScheduler {
                             break
                         }
                         if c.mode != .start && c.level >= objects[t].level {
-                            record(o, function, stmt, "\(id) busy at level \(objects[t].level): retrying each frame")
+                            record(o, function, stmt, "\(id) busy at level \(objects[t].level): retrying each frame", advance: false)
                             objects[i].cursor!.pending.append(stmt)
                             objects[i].block = .retry; objects[i].status = "retrying \(id)"
                             break run
@@ -239,10 +273,11 @@ public enum EventScheduler {
             if !progressed && !sleeping { stop = "Blocked: every running object waits on another"; break }
             frame += 1
         }
-        return Result(entries: entries, elapsedFrames: frame, flags: flags.sorted(),
-                      stopReason: stop ?? "Frame limit reached",
-                      objects: objects.map { o in
-                          ObjectState(scene: o.id, object: o.scene.object, level: o.level, function: o.cursor?.function, status: o.status)
-                      })
+        let result = Result(entries: entries, elapsedFrames: frame, flags: flags.sorted(),
+                            stopReason: stop ?? "Frame limit reached",
+                            objects: objects.map { o in
+                                ObjectState(scene: o.id, object: o.scene.object, level: o.level, function: o.cursor?.function, status: o.status)
+                            })
+        return (result, steps)
     }
 }
