@@ -35,7 +35,7 @@ public final class CTFieldDebugger {
 
     public init(field: CTFieldRuntime) {
         self.field = field
-        field.vm.trace = { [unowned self] e in self.observe(e) }
+        field.vm.trace = { [weak self] e in self?.observe(e) }
     }
 
     func observe(_ e: CTEventVM.TraceEvent) {

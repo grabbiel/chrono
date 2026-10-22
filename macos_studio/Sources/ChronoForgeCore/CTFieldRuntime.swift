@@ -77,11 +77,11 @@ public struct CTFieldInput: OptionSet, Hashable, Sendable {
 
     public static func parse(_ text: String) throws -> Script {
         var entries: [(ClosedRange<Int>, CTFieldInput)] = []
-        for raw in text.split(whereSeparator: { $0 == "\n" || $0 == ";" }) {
+        for raw in text.split(whereSeparator: { $0.isNewline || $0 == ";" }) {
             let line = raw.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
-                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty { continue }
-            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
             guard parts.count == 2 else { throw CTEventError("input: '\(line)' is not FROM[-TO] BUTTONS") }
             let bounds = parts[0].split(separator: "-").map { Int($0) }
             guard (1...2).contains(bounds.count), let from = bounds[0], let to = bounds.last ?? nil, from >= 0, to >= from else {
