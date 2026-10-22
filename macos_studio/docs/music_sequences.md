@@ -1,9 +1,9 @@
 # Song sequences (`ct-song/1`)
 
-The [native SPC700 CPU and SPC snapshot codec](spc700.md) now provide the first
-playback components. The CPU passes all 256,000 instruction cases. APU devices,
-DSP, CT song loading and audible playback remain unfinished. `music spc-info`
-inspects existing snapshots.
+Songs play on the [native S-SMP and S-DSP emulation](spc700.md): CT's driver
+loads them as the game does. `music render` writes a WAV, and `music play` and
+the Studio's Music pane play live, including an edited listing in place of a
+ROM song. `music spc-info` inspects existing snapshots.
 
 Chrono Trigger's music is 83 song sequences (`Audio_SongTable`, `$C7:0D18`)
 played by the SPC700 sound driver that ChronoRET transcribes
@@ -190,7 +190,9 @@ across the bank boundary.
 
 ## Limitations
 
-- No playback or SPC700 emulation. The listing is the driver's data, not audio.
+- The listing is the driver's data, not audio. Playback runs that data on the
+  emulated driver, which is not bit-exact with other players
+  ([spc700.md](spc700.md)).
 - Loop counts and `branch` conditions are not modelled.
 - Samples themselves (BRR data, loop points, tuning and ADSR words) are not
   written; a song can only list the ROM's 62 samples.

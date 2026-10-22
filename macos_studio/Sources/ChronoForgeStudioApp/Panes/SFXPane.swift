@@ -1,4 +1,5 @@
-// SFXPane.swift — BRR sample sidecars (loop/ADSR/GAIN) + WAV preview playback.
+// SFXPane.swift — BRR sample sidecars (loop/ADSR/GAIN), live S-DSP playback
+// of the sample as edited, and WAV preview playback.
 import SwiftUI
 import AVFoundation
 import ChronoForgeCore
@@ -10,6 +11,14 @@ struct SFXPane: View {
     @State private var player: AVAudioPlayer?
 
     var body: some View {
+        VStack(spacing: 0) {
+            samples
+            Divider()
+            PlaybackBar(store: store)
+        }
+    }
+
+    private var samples: some View {
         EntityListView(title: "SFX", ids: project.samples.keys.sorted(),
                        selection: $selection) { id in
             if let s = project.samples[id] {
@@ -26,8 +35,11 @@ struct SFXPane: View {
                         }
                         OptionalIntField(label: "GAIN", value: $s.gain, range: 0...255)
                         HStack {
+                            Button("Play", systemImage: "play.fill") { store.playSample($s.wrappedValue, title: id) }
+                                .help("Play the sample on the S-DSP with these settings")
+                                .keyboardShortcut("p", modifiers: .command)
                             Button("Play preview WAV") { play(s) }
-                            Button("Stop") { player?.stop() }
+                            Button("Stop") { player?.stop(); store.audio.stop() }
                         }
                         ApplyBar(apply: { store.updateSample(id, $s.wrappedValue) })
                     }

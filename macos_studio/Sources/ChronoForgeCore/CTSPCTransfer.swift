@@ -439,8 +439,18 @@ public enum CTSPCTransfer {
         guard rom.count == 4_194_304, CTEventPack.sha256(rom) == CTSPCDriver.cleanROMSHA256 else {
             throw CTSongError("song-load requires the verified unheadered CT USA 1.0 ROM")
         }
+        return try loadSession(rom: rom, plan: try Plan(rom: rom, song: song), iplROM: iplROM, limits: limits)
+    }
+
+    /// `plan` (for example from a copy of the ROM with an edited song built in
+    /// by `CTROMBuilder`) sent to the driver booted from the verified `rom`.
+    static func loadSession(rom: [UInt8], plan: Plan, iplROM: [UInt8]?, limits: Limits) throws
+        -> (session: CTSPCDriver.Session, diagnostic: Diagnostic) {
+        guard rom.count == 4_194_304, CTEventPack.sha256(rom) == CTSPCDriver.cleanROMSHA256 else {
+            throw CTSongError("song-load requires the verified unheadered CT USA 1.0 ROM")
+        }
         try validate(limits)
-        let plan = try Plan(rom: rom, song: song)
+        let song = plan.song
         let header = try CTSong(data: plan.songData)
         let session = try CTSPCDriver.boot(rom: rom, iplROM: iplROM, cycleLimit: 250_000)
         let driverBootCycles = session.postEntryCycles

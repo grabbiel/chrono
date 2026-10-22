@@ -18,12 +18,14 @@ struct MusicPane: View {
             .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320).padding(8)
             if mode == 0 { SongListingsView(store: store, project: project) }
             else { TrackerScoresView(store: store, project: project) }
+            Divider()
+            PlaybackBar(store: store, choosesROM: true)
         }
     }
 }
 
 /// ct-song/1 listings: edit, assemble live, choose the Audio_SongTable index
-/// `rom build` writes them to, import from a ROM.
+/// `rom build` writes them to, import from a ROM, play ROM songs and listings.
 private struct SongListingsView: View {
     let store: ProjectStore
     let project: CTProject
@@ -45,6 +47,8 @@ private struct SongListingsView: View {
             .safeAreaInset(edge: .bottom) {
                 HStack {
                     Stepper(String(format: "song $%02X", importIndex), value: $importIndex, in: 0...(CTSongISA.romSongCount - 1))
+                    Button("Play", systemImage: "play.fill") { store.playROMSong(importIndex) }
+                        .labelStyle(.iconOnly).help("Play this ROM song")
                     Button("Import from ROM…") { pickROM = true }
                 }.padding(8)
             }
@@ -91,6 +95,12 @@ private struct SongEditor: View {
                 Spacer()
                 Toggle("Build into song", isOn: $builds).toggleStyle(.checkbox)
                 Stepper(String(format: "$%02X", target), value: $target, in: 0...(CTSongISA.romSongCount - 1)).disabled(!builds)
+                Button("Play", systemImage: "play.fill") {
+                    store.playListing(text, replacing: target, title: (rel as NSString).lastPathComponent)
+                }
+                .help(String(format: "Play this listing (as edited) in place of song $%02X", target))
+                .keyboardShortcut("p", modifiers: .command)
+                .disabled((try? assembled.get()) == nil)
                 Button("Save") {
                     if store.writeSongListing(rel, text) { saved = text }
                     store.setSongTarget(rel, song: builds ? target : nil)
