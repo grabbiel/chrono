@@ -1,5 +1,5 @@
-// SNESPPUView.swift — MTKView subclass rendering BG1/BG2/BG3 + OAM sprites
-// at 60 fps from .ctproj-decoded tile/sprite data.
+// SNESPPUView.swift — MTKView that renders a PPUFrame at 60 fps and presents
+// it scaled (integer factors when it fits, nearest sampling).
 import MetalKit
 import simd
 import AppKit
@@ -8,9 +8,15 @@ import ChronoForgeCore
 @MainActor
 public final class SNESPPUView: MTKView, MTKViewDelegate {
     public private(set) var renderer: PPURenderer
-    public var additiveColorMath = false { didSet { needsDisplay = true } }
-    public var bgPlanes: [BGPlane] = [] { didSet { needsDisplay = true } }
-    public var sprites: [SpriteEntry] = [] { didSet { needsDisplay = true } }
+    /// The picture: video memory plus per-line registers. Only memory that
+    /// changed is uploaded, so a CGRAM edit is a palette-LUT write.
+    public var picture = PPUFrame()
+    /// Called once per displayed frame with the frame counter, before
+    /// rendering: animate here (palette cycling, scroll, HDMA-style tables).
+    public var tick: ((inout PPUFrame, Int) -> Void)?
+    /// Scroll-wheel / trackpad deltas in points, for panning previews.
+    public var onScroll: ((CGFloat, CGFloat) -> Void)?
+    public private(set) var frameCount = 0
 
     public init(device: MTLDevice) throws {
         self.renderer = try PPURenderer(device: device)
@@ -25,27 +31,22 @@ public final class SNESPPUView: MTKView, MTKViewDelegate {
 
     required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    public override func scrollWheel(with event: NSEvent) {
+        guard let onScroll else { return super.scrollWheel(with: event) }
+        onScroll(event.scrollingDeltaX, event.scrollingDeltaY)
+    }
+
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
-
-    /// Load a tileset's tiles into the BG atlas and set its palette.
-    public func loadTileset(indices: [UInt8], tilesWide: Int = 16, palette: [BGR555]) throws {
-        renderer.setPalette(palette)
-        try renderer.setTileAtlas(indices: indices, tilesWide: tilesWide, sprite: false)
-        needsDisplay = true
-    }
-
-    /// Load a sprite sheet's tiles into the sprite atlas.
-    public func loadSprites(indices: [UInt8], tilesWide: Int = 16) throws {
-        try renderer.setTileAtlas(indices: indices, tilesWide: tilesWide, sprite: true)
-        needsDisplay = true
-    }
 
     // MARK: MTKViewDelegate — one frame
     public func draw(in view: MTKView) {
-        guard let drawable = currentDrawable else { return }
-        renderer.render(into: drawable.texture,
-                        size: SIMD2(Float(max(1, bounds.width)), Float(max(1, bounds.height))),
-                        bgPlanes: bgPlanes, sprites: sprites,
-                        additive: additiveColorMath, clearColor: clearColor)
+        tick?(&picture, frameCount)
+        frameCount += 1
+        guard let drawable = currentDrawable,
+              let cmd = renderer.queue.makeCommandBuffer(),
+              let texture = try? renderer.encode(picture, into: cmd) else { return }
+        renderer.present(texture, to: drawable.texture, commandBuffer: cmd)
+        cmd.present(drawable)
+        cmd.commit()
     }
 }
