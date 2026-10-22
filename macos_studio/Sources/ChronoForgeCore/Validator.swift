@@ -276,6 +276,23 @@ public enum Validator {
                     }
                 }
             }
+            // Maps and tilesets: ids, their ROM sources, sizes and ranges (the build adds the base ROM's checks).
+            var locations: [Int: String] = [:]
+            for id in Set(spec.maps).sorted() {
+                let path = "project.json rom map \(id)"
+                if spec.maps.filter({ $0 == id }).count > 1 { err(4, path, "map built twice") }
+                guard let m = p.maps[id] else { err(4, path, "no maps/\(id).map.json"); continue }
+                if let loc = m.rom?.location, let other = locations.updateValue(id, forKey: loc) {
+                    err(4, "maps/\(id).map.json", "location \(loc) is also maps/\(other).map.json")
+                }
+                for problem in CTMapPatch.validate(m) { err(4, "maps/\(id).map.json", problem) }
+            }
+            for id in Set(spec.tilesets).sorted() {
+                let path = "project.json rom tileset \(id)"
+                if spec.tilesets.filter({ $0 == id }).count > 1 { err(4, path, "tileset built twice") }
+                guard let ts = p.tilesets[id] else { err(4, path, "no tilesets/\(id).tileset.json"); continue }
+                for problem in CTTilesetPatch.validate(ts) { err(4, "tilesets/\(id).tileset.json", problem) }
+            }
         }
 
         // ---------------- Gate 5: explicit ROM-backed text or legacy Studio format ----------------

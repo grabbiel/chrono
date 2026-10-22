@@ -1,5 +1,5 @@
-// Writes event packs, their message tables, songs and playable-character
-// records into a copy of the base ROM.
+// Writes event packs, their message tables, songs, playable-character
+// records, techs, items, maps and tilesets into a copy of the base ROM.
 // Layout facts and their evidence: CTROMLayout.swift / docs/rom_builder.md.
 import Foundation
 
@@ -101,6 +101,14 @@ public enum CTROMBuilder {
             public let length: Int
             public let what: String
         }
+        /// A block written somewhere other than where the base ROM had it.
+        public struct Relocation: Codable, Equatable, Sendable {
+            public let what: String
+            public let from: String?                   // its old place (absent: a new block, such as a fork)
+            public let to: String
+            public let pc: Int
+            public let bytes: Int
+        }
         public let schema: String
         public let baseSHA256: String
         public let outputSHA256: String
@@ -114,6 +122,9 @@ public enum CTROMBuilder {
         public let itemTables: ItemTablesDef?          // absent: not requested or no item_tables.json
         public let writes: [Write]
         public let freeBytesLeft: Int
+        public var maps: [CTMapPatch.ReportMap]? = nil             // absent: not requested
+        public var tilesets: [CTTilesetPatch.ReportTileset]? = nil // absent: not requested
+        public var relocations: [Relocation]? = nil               // absent: nothing moved
     }
 
     // MARK: Project entry point
@@ -125,12 +136,15 @@ public enum CTROMBuilder {
         public init(items: [ItemDef], tables: ItemTablesDef?) { self.items = items; self.tables = tables }
     }
 
-    /// Builds the project's `rom.eventPacks`, `rom.songs`, `rom.characters`, `rom.techs` and `rom.items`
-    /// into a copy of `base` (the pinned US 1.0 ROM; a 512-byte copier header is dropped).
+    /// Builds the project's `rom.eventPacks`, `rom.songs`, `rom.characters`, `rom.techs`, `rom.items`,
+    /// `rom.maps` and `rom.tilesets` into a copy of `base` (the pinned US 1.0 ROM; a 512-byte copier
+    /// header is dropped).
     public static func build(base: [UInt8], project: CTProject) throws -> (rom: [UInt8], report: Report) {
         guard let spec = project.project.rom,
-              !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items) else {
-            throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters, rom.techs or rom.items to build")
+              !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items
+                && spec.maps.isEmpty && spec.tilesets.isEmpty) else {
+            throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters, rom.techs, rom.items, " +
+                                  "rom.maps or rom.tilesets to build")
         }
         func inside(_ path: String) -> Bool { !path.hasPrefix("/") && !path.split(separator: "/").contains("..") }
         var requests: [Request] = []
@@ -188,15 +202,43 @@ public enum CTROMBuilder {
             }
             items = ItemsRequest(items: rom, tables: project.itemTables)
         }
+        let maps = try spec.maps.map { id -> GameMap in
+            guard let m = project.maps[id] else { throw CTROMBuildError("map \(id): no maps/\(id).map.json") }
+            return m
+        }
+        let tilesets = try spec.tilesets.map { id -> CTTilesetPatch.Request in
+            guard let ts = project.tilesets[id] else { throw CTROMBuildError("tileset \(id): no tilesets/\(id).tileset.json") }
+            func tiles(_ rel: String?) throws -> [[UInt8]]? {
+                guard let rel else { return nil }
+                guard inside(rel) else { throw CTROMBuildError("tileset \(id): \(rel) must stay inside the project") }
+                do { return SpriteSheet.tiles(try PNG.readIndexed(url: project.fileURL(relative: rel))) }
+                catch { throw CTROMBuildError("tileset \(id): \(rel): \(error)") }
+            }
+            return CTTilesetPatch.Request(tileset: ts, sheet: try tiles(ts.sheet), animSheet: try tiles(ts.animSheet))
+        }
         return try build(base: base, requests: requests, songs: songs, characters: characters, techs: techs,
-                         items: items, textProfile: project.textProfile)
+                         items: items, maps: maps, tilesets: tilesets, textProfile: project.textProfile)
+    }
+
+    /// `block` in its old span `home` (now unused) when it fits, else in a
+    /// reclaimed span, else in free space; never across a bank.
+    static func placeBlock(_ block: [UInt8], home: Range<Int>?, space: inout FreeSpace, what: String) throws -> (pc: Int, placement: String) {
+        if let home {
+            space.add(home, reclaimed: true)
+            if space.allocate(block.count, at: home.lowerBound) { return (home.lowerBound, "original") }
+        }
+        if let pc = space.allocate(block.count, reclaimed: true) { return (pc, "reclaimed") }
+        if let pc = space.allocate(block.count, reclaimed: false) { return (pc, "free") }
+        throw CTROMBuildError("no free space for the \(block.count)-byte \(what) " +
+                              "(\(space.total) bytes left, in pieces of at most \(space.largest))")
     }
 
     // MARK: Builder
 
     public static func build(base input: [UInt8], requests: [Request], songs songRequests: [SongRequest] = [],
                              characters characterRequests: [CharacterRequest] = [], techs: TechSystemDef? = nil,
-                             items: ItemsRequest? = nil, textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
+                             items: ItemsRequest? = nil, maps: [GameMap] = [], tilesets: [CTTilesetPatch.Request] = [],
+                             textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
         guard rom.count == romSize, CTEventPack.sha256(rom) == CTTextProfile.romHash else {
@@ -276,11 +318,22 @@ public enum CTROMBuilder {
             }
         }
 
-        var writes: [Report.Write] = []
+        var writes: [Report.Write] = [], relocations: [Report.Relocation] = []
         func write(_ bytes: [UInt8], at pc: Int, _ what: String) {
             rom.replaceSubrange(pc..<(pc + bytes.count), with: bytes)
             writes.append(.init(pc: pc, length: bytes.count, what: what))
         }
+        func relocated(_ what: String, from: Int?, to pc: Int, bytes: Int) {
+            relocations.append(.init(what: what, from: from.map(snes), to: snes(pc), pc: pc, bytes: bytes))
+        }
+
+        // Maps and tilesets first: the exits may grow only into the padding right after them.
+        let mapReport = maps.isEmpty ? nil : try CTMapPatch.apply(
+            maps: maps, base: base, space: &space, write: { write($0, at: $1, $2) },
+            relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
+        let tilesetReport = tilesets.isEmpty ? nil : try CTTilesetPatch.apply(
+            requests: tilesets, base: base, space: &space, write: { write($0, at: $1, $2) },
+            relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
 
         // Message tables first: their addresses go inside the packs.
         let codec = try textProfile.map { try CTTextCodec(profile: $0) }
@@ -420,7 +473,8 @@ public enum CTROMBuilder {
                             outputSHA256: CTEventPack.sha256(rom), checksum: sum, packs: packs,
                             messageTables: tables, songs: songs, characters: characters.isEmpty ? nil : characters,
                             techs: techs, items: items?.items, itemTables: items?.tables,
-                            writes: changed, freeBytesLeft: space.total))
+                            writes: changed, freeBytesLeft: space.total, maps: mapReport, tilesets: tilesetReport,
+                            relocations: relocations.isEmpty ? nil : relocations))
     }
 
     /// Checks LocLoad_CheckEvtData makes after unpacking, and that the pack
@@ -498,9 +552,11 @@ struct FreeSpace {
     var total: Int { ranges.reduce(0) { $0 + $1.range.count } }
     var largest: Int { ranges.map(\.range.count).max() ?? 0 }
 
-    /// First range of the kind with room, lowest address first.
-    mutating func allocate(_ size: Int, reclaimed: Bool) -> Int? {
-        guard let i = ranges.firstIndex(where: { $0.reclaimed == reclaimed && $0.range.count >= size }) else { return nil }
+    /// First range of the kind with room (in `bank`, a PC bank, when given), lowest address first.
+    mutating func allocate(_ size: Int, reclaimed: Bool, bank: Int? = nil) -> Int? {
+        guard let i = ranges.firstIndex(where: {
+            $0.reclaimed == reclaimed && $0.range.count >= size && (bank == nil || $0.range.lowerBound >> 16 == bank)
+        }) else { return nil }
         let start = ranges[i].range.lowerBound
         take(i, start..<(start + size))
         return start

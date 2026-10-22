@@ -43,6 +43,21 @@ ItemBoosts is the reported table (or unchanged); every description pointer
 lands in the table's span on a $00-terminated string, which is the clean
 ROM's bytes for an unchanged text and the reference encoder's bytes for a
 new one. Without items, none of those bytes change.
+Maps (tools/ct_maps.py), when reported: the pointer tables the relocations
+use point at no free region, and ExitRom ends where its padding begins; only
+the reported locations' LocRom records, their Map_PropsPtrs entries (a new
+entry only in a slot no record names whose pointer was 0), the spans of the
+MapProps packs no unreported location still uses, ExitRom and the reported
+treasure lists may change; each reported location decodes to the report's
+record, MapProps hash and size (one bank, inside a write zone), exits and
+treasure; every other location decodes as in the clean ROM. Tilesets
+(tools/ct_tilesets.py), when reported: only the reported palette sets, cycle
+lists and frames, metatile and pack pointers, LocGfx_Lists rows, the packs'
+and tables' old spans and the tile-animation lists may change; each reported
+block unpacks (ChronoRET's Decomp_ToWram transcription) to its reported
+hash and is what its pointer names; forks take only numbers no loader names;
+every unreported Tileset12, Tileset3 and palette set, and the battle
+backgrounds' packs, decode as in the clean ROM.
 """
 
 import argparse
@@ -57,10 +72,12 @@ import c3pack  # noqa: E402
 import ct_characters as cc  # noqa: E402
 import ct_event_packs as packs  # noqa: E402
 import ct_items as ci  # noqa: E402
+import ct_maps as cm  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
 import ct_spc_seq as spc  # noqa: E402
 import ct_techs as ct  # noqa: E402
 import ct_text_profile  # noqa: E402
+import ct_tilesets as cts  # noqa: E402
 
 TEXTWIN_INIT = 0xC257DF
 TEXTWIN_DP, STR_INDEX, STR_TABLE, MODE, TEXT_PTR = 0x7E0200, 0x0C, 0x0D, 0x14, 0x31
@@ -342,6 +359,288 @@ def check_items(clean, built, report):
             check(string + b"\x00" == expect or string == expect, f"item ${n:02X}: description bytes are not the encoded text")
 
 
+# --- Maps and tilesets ------------------------------------------------------------------------
+
+BATTLE_SETS, BATTLE_SET_BYTES = 0xD1ECDB, 24                         # BattleFx_BgSetPacks
+FIELD_ANIM_B_END = 0xFDFF29                                          # the data after FieldAnimListB
+
+
+def lpc(long):
+    return cts.pc(long)
+
+
+def packed_span(rom, long, what=None):
+    """(unpacked bytes, PC range of the packed stream) by ChronoRET's transcription."""
+    try:
+        data, end, _ = c3pack.unpack(rom, lpc(long))
+    except Exception as e:  # noqa: BLE001  (a damaged stream raises from inside the transcription)
+        check(False, f"{what or f'${long:06X}'} does not unpack ({e})")
+    return data, range(lpc(long), end)
+
+
+def exit_block_end(rom):
+    return cm.EXIT_OFS + cts.u16(rom, cm.EXIT_OFS + 2 * cm.LOC_COUNT)
+
+
+def location_users(rom):
+    users = {}
+    for i in range(cm.LOC_COUNT):
+        users.setdefault(cm.header(rom, i)["mapProps"], []).append(i)
+    return users
+
+
+def check_layout_tables(clean, regions):
+    """The relocations' free space: no pointer of the tables they repoint, and
+    no map, exit or treasure block, lies in a confirmed free region."""
+    targets = [cm.props_pointer(clean, e) for e in set(cm.header(clean, i)["mapProps"] for i in range(cm.LOC_COUNT))]
+    targets += [cts.u24(clean, cts.META12_PTRS + 3 * t) for t in cts.used_t12(clean)]
+    targets += [cts.u24(clean, cts.META3_PTRS + 3 * n) for n in cts.used_t3(clean)]
+    targets += [cts.u24(clean, cts.PACK_PTRS + 3 * n) for n in pack_users(clean)]
+    for long in targets:
+        at = lpc(long)
+        check(not any(at in r for r in regions), f"a table pointer ${long:06X} points into a free region")
+    end = lpc(exit_block_end(clean))
+    check(any(r.start == end for r in regions), "ExitRom does not end where a free region begins")
+    t_end = lpc(cm.TREASURE_BANK + cts.u16(clean, cm.TREASURE_OFS + 2 * cm.LOC_COUNT))
+    check(not any(r.start < t_end and lpc(cm.TREASURE_OFS) < r.stop for r in regions), "TreasureRom overlaps a free region")
+
+
+def map_content(rom, i):
+    """ct_maps.decode without the addresses a rewritten ExitRom moves."""
+    d = cm.decode(rom, i)
+    d["exits"] = [{k: v for k, v in e.items() if k != "at"} for e in d["exits"]]
+    return d
+
+
+def map_zones(clean, report, regions):
+    maps = report.get("maps")
+    if maps is None:
+        return []
+    zones, reported = [], {m["location"] for m in maps}
+    users = location_users(clean)
+    for m in maps:
+        loc = m["location"]
+        zones.append(range(lpc(cm.LOC_ROM) + cm.LOC_BYTES * loc, lpc(cm.LOC_ROM) + cm.LOC_BYTES * (loc + 1)))
+        zones.append(range(lpc(cm.MAP_PROPS_PTRS) + 3 * m["entry"], lpc(cm.MAP_PROPS_PTRS) + 3 * m["entry"] + 3))
+        old = cm.header(clean, loc)["mapProps"]
+        if set(users[old]) <= reported:                     # no unreported location still reads it
+            zones.append(packed_span(clean, cm.props_pointer(clean, old))[1])
+            zones.append(range(lpc(cm.MAP_PROPS_PTRS) + 3 * old, lpc(cm.MAP_PROPS_PTRS) + 3 * old + 3))
+        list_loc = m["treasureList"]
+        first = cts.u16(clean, cm.TREASURE_OFS + 2 * list_loc)
+        end = cts.u16(clean, cm.TREASURE_OFS + 2 * list_loc + 2)
+        zones.append(range(lpc(cm.TREASURE_BANK + first), lpc(cm.TREASURE_BANK + end)))
+    # ExitRom may grow into the padding that begins where it ends.
+    end = lpc(exit_block_end(clean))
+    zones.append(range(lpc(cm.EXIT_OFS), max([r.stop for r in regions if r.start == end] + [end])))
+    return zones
+
+
+def check_maps(clean, built, report, inside):
+    maps = report.get("maps")
+    if maps is None:
+        for i in range(cm.LOC_COUNT):
+            check(bytes(built[lpc(cm.LOC_ROM) + cm.LOC_BYTES * i:lpc(cm.LOC_ROM) + cm.LOC_BYTES * (i + 1)])
+                  == bytes(clean[lpc(cm.LOC_ROM) + cm.LOC_BYTES * i:lpc(cm.LOC_ROM) + cm.LOC_BYTES * (i + 1)]),
+                  f"LocRom[{i}] changed but no maps are reported")
+        return
+    used = location_users(clean)
+    reported = {}
+    spans = {}
+    for m in maps:
+        loc = m["location"]
+        name = f"map {m['id']}"
+        check(0 <= loc < cm.LOC_COUNT and loc not in reported, f"{name}: location out of range or reported twice")
+        reported[loc] = m
+        record = list(built[lpc(cm.LOC_ROM) + cm.LOC_BYTES * loc:lpc(cm.LOC_ROM) + cm.LOC_BYTES * (loc + 1)])
+        check(record == m["record"], f"{name}: LocRom record is not the reported one")
+        h = cm.header(built, loc)
+        check(h["mapProps"] == m["entry"], f"{name}: the record names entry {h['mapProps']}, the report {m['entry']}")
+        if m["newEntry"]:
+            check(m["entry"] not in used and cm.props_pointer(clean, m["entry"]) == 0,
+                  f"{name}: new entry {m['entry']} was not a free Map_PropsPtrs slot")
+        at = cm.props_pointer(built, m["entry"])
+        data, span = packed_span(built, at, f"{name}: MapProps")
+        check(lpc(at) == m["pc"] and len(span) == m["packedBytes"] and packs.sha(data) == m["unpackedSHA256"]
+              and len(data) == m["unpackedBytes"], f"{name}: MapProps is not the reported pack")
+        check(span.start >> 16 == (span.stop - 1) >> 16, f"{name}: MapProps crosses a bank")
+        if m["placement"] != "unchanged":
+            check(inside(span), f"{name}: MapProps outside free space")
+            if spans.get(span.start, span) != span:
+                check(False, f"{name}: MapProps overlaps another")
+            spans[span.start] = span
+        else:
+            check(at == cm.props_pointer(clean, cm.header(clean, loc)["mapProps"]), f"{name}: unchanged MapProps moved")
+        try:
+            cm.parse_props(data)
+        except Exception as e:  # noqa: BLE001
+            check(False, f"{name}: MapProps does not parse ({e})")
+        exits = [list(raw) for _, raw in cm.exit_records(built, loc)]
+        check(exits == m["exits"], f"{name}: exits are not the reported ones")
+        check(all(cm.decode_exit(raw)["dest"] < cm.LOC_COUNT for raw in exits), f"{name}: an exit leaves the locations")
+        tloc, tlist = cm.treasure_list(built, loc)
+        check(tloc == m["treasureList"] and [[t & 0xFF, t >> 8, c] for _, t, c in tlist] == m["treasure"],
+              f"{name}: treasure is not the reported list")
+        check(len(tlist) == len(cm.treasure_list(clean, loc)[1]), f"{name}: the treasure count changed (flag numbers)")
+    ordered = sorted(spans.values(), key=lambda r: r.start)
+    for a, b in zip(ordered, ordered[1:]):
+        check(a.stop <= b.start, f"MapProps at ${a.start:06X} and ${b.start:06X} overlap")
+    check(cts.u16(built, cm.TREASURE_OFS) == cts.u16(clean, cm.TREASURE_OFS)
+          and all(cts.u16(built, cm.TREASURE_OFS + 2 * i) == cts.u16(clean, cm.TREASURE_OFS + 2 * i)
+                  for i in range(cm.LOC_COUNT + 1)), "TreasureRom's offset words changed")
+    check(cm.treasure_list(built, 0) == cm.treasure_list(clean, 0), "location 0's dummy treasure changed")
+    for i in range(cm.LOC_COUNT):
+        if i not in reported:
+            check(map_content(built, i) == map_content(clean, i), f"location {i} changed but is not reported")
+
+
+def pack_users(rom):
+    """{pack number: [users]} of the location lists in use, the Tileset3 packs
+    and the battle backgrounds (the only readers of LocGfx_PackPtrs)."""
+    out = {}
+    for t in cts.used_t12(rom):
+        for k, n in enumerate(cts.pack_list(rom, t)):
+            if n is not None:
+                out.setdefault(n, []).append(("t12", t, k))
+    for n in cts.used_t3(rom):
+        out.setdefault(n, []).append(("t3", n, 0))
+    for k, n in enumerate(rom[lpc(BATTLE_SETS):lpc(BATTLE_SETS) + BATTLE_SET_BYTES]):
+        if n != cts.NONE:
+            out.setdefault(n, []).append(("battle", k // 4, k % 4))
+    return out
+
+
+def tileset_zones(clean, report):
+    tilesets = report.get("tilesets")
+    if tilesets is None:
+        return []
+    zones = []
+    users = pack_users(clean)
+    reported = {(t["kind"], t["index"]) for t in tilesets}
+    for t in tilesets:
+        i = t["index"]
+        if t["kind"] == "palette":
+            at = lpc(cts.LOC_PAL + cts.PAL_SET_BYTES * i)
+            zones.append(range(at, at + cts.PAL_SET_BYTES))
+            records, start, end = cts.anim_list_b(clean, i)
+            zones.append(range(lpc(start), lpc(end)))
+            for r in records:
+                if r and "offset" in r:
+                    f = lpc(cts.PAL_ANIM_ROM + r["offset"])
+                    zones.append(range(f, f + 2 * r["count"] * len(r["colours"])))
+            continue
+        ptrs = cts.META12_PTRS if t["kind"] == "bg12" else cts.META3_PTRS
+        zones.append(range(lpc(ptrs) + 3 * i, lpc(ptrs) + 3 * i + 3))
+        zones.append(packed_span(clean, cts.u24(clean, ptrs + 3 * i))[1])
+        if t["kind"] == "bg12":
+            zones.append(range(lpc(cts.LISTS) + cts.LIST_BYTES * i, lpc(cts.LISTS) + cts.LIST_BYTES * (i + 1)))
+            _, start, end = cts.anim_list_a(clean, i)
+            zones.append(range(lpc(start), lpc(end)))
+        numbers = [n for n in cts.pack_list(clean, i) if n is not None] if t["kind"] == "bg12" else [i]
+        for n in numbers:
+            # A pack's old span is writable when every user of it is reported.
+            if all((("bg12" if k == "t12" else "bg3"), j) in reported for k, j, _ in users[n] if k != "battle") \
+                    and not any(k == "battle" for k, _, _ in users[n]):
+                zones.append(packed_span(clean, cts.u24(clean, cts.PACK_PTRS + 3 * n))[1])
+            zones.append(range(lpc(cts.PACK_PTRS) + 3 * n, lpc(cts.PACK_PTRS) + 3 * n + 3))
+        for b in t["blocks"]:
+            if "fork of" in b["what"]:
+                f = int(b["what"].split()[1])
+                zones.append(range(lpc(cts.PACK_PTRS) + 3 * f, lpc(cts.PACK_PTRS) + 3 * f + 3))
+    return zones
+
+
+def tileset_content(rom, kind, i):
+    """A tileset's decode without the fields other tilesets' builds may move
+    (the locations using it, the preview, pack addresses)."""
+    if kind == "bg12":
+        d = cts.decode_t12(rom, i)
+        window, _ = cts.bg12_vram(rom, i)
+        wram, _ = cts.anim_wram(rom, i)
+        return (d["metatiles"], d["knownTiles"], d["animKnown"], d["tileAnims"]["records"], window, wram)
+    if kind == "bg3":
+        d = cts.decode_t3(rom, i)
+        return (d["metatiles"], d["knownTiles"], cts.bg3_vram(rom, i)[0])
+    d = cts.decode_pal(rom, i)
+    return (d["rows"], d["cycles"]["records"])
+
+
+def check_tilesets(clean, built, report, inside):
+    tilesets = report.get("tilesets")
+    reported = {(t["kind"], t["index"]): t for t in tilesets or []}
+    free_numbers = {n for n in range(cts.PACK_COUNT) if n not in pack_users(clean)}
+    spans = {}
+    for t in tilesets or []:
+        name = t["id"]
+        i = t["index"]
+        check(t["kind"] in ("bg12", "bg3", "palette") and list(reported).count((t["kind"], i)) == 1,
+              f"{name}: kind or index reported twice")
+        # What the report says it left alone decodes as in the clean ROM.
+        unchanged = {"palette": lambda r: cts.palette_set(r, i),
+                     "cycles": lambda r: [x and {k: v for k, v in x.items() if k not in ("offset", "colours")}
+                                          for x in cts.anim_list_b(r, i)[0]],
+                     "frames": lambda r: [x and x.get("colours") for x in cts.anim_list_b(r, i)[0]],
+                     "metatiles": lambda r: cts.meta_table(r, cts.META12_PTRS if t["kind"] == "bg12" else cts.META3_PTRS, i)["metatiles"],
+                     "characters": lambda r: (cts.bg12_vram(r, i)[0], cts.anim_wram(r, i)[0]) if t["kind"] == "bg12"
+                     else cts.bg3_vram(r, i)[0],
+                     "animations": lambda r: cts.anim_list_a(r, i)[0]}
+        parts = {"palette": ("palette", "cycles", "frames"), "bg12": ("metatiles", "characters", "animations"),
+                 "bg3": ("metatiles", "characters")}[t["kind"]]
+        for part in parts:
+            if part not in t["changed"] and not (part == "cycles" and "frames" in t["changed"]):
+                check(unchanged[part](built) == unchanged[part](clean), f"{name}: {part} changed but is not reported")
+        if t["kind"] == "palette":
+            records, start, end = cts.anim_list_b(built, i)
+            check(lpc(cts.ANIM_B) <= lpc(start) and lpc(end) <= lpc(FIELD_ANIM_B_END), f"{name}: cycle list outside FieldAnimListB")
+            for r in records:
+                if r:
+                    last = r["first"] + r["count"] - (0 if r["kind"] in (2, 3) else 1)
+                    check(r["kind"] in (1, 2, 3, 8) and r["first"] >= 16 and last < 128, f"{name}: a cycle leaves rows 1-7")
+                    if "offset" in r:
+                        f = lpc(cts.PAL_ANIM_ROM + r["offset"])
+                        check(inside(range(f, f + 2 * r["count"] * len(r["colours"]))) or
+                              bytes(built[f:f + 2 * r["count"] * len(r["colours"])])
+                              == bytes(clean[f:f + 2 * r["count"] * len(r["colours"])]), f"{name}: frames outside free space")
+            continue
+        ptrs = cts.META12_PTRS if t["kind"] == "bg12" else cts.META3_PTRS
+        meta_at = cts.u24(built, ptrs + 3 * i)
+        names = {}
+        for b in t["blocks"]:
+            data, span = packed_span(built, 0xC00000 | b["pc"], f"{name}: {b['what']} at {b['address']} does not unpack to the reported bytes;")
+            check(len(span) == b["packedBytes"] and len(data) == b["unpackedBytes"] and packs.sha(data) == b["unpackedSHA256"],
+                  f"{name}: {b['what']} at {b['address']} does not unpack to the reported bytes")
+            check(span.start >> 16 == (span.stop - 1) >> 16 and inside(span), f"{name}: {b['what']} outside free space")
+            check(spans.get(span.start, (span, b["unpackedSHA256"])) == (span, b["unpackedSHA256"]),
+                  f"{name}: {b['what']} overlaps another block")
+            spans[span.start] = (span, b["unpackedSHA256"])
+            names[b["what"]] = b["pc"]
+        if "metatiles" in names:
+            check(lpc(meta_at) == names["metatiles"], f"{name}: the metatile pointer does not name the new table")
+        else:
+            check(meta_at == cts.u24(clean, ptrs + 3 * i), f"{name}: the metatile pointer moved")
+        for what, at in names.items():
+            if what.startswith("pack "):
+                n = int(what.split()[1])
+                check(lpc(cts.u24(built, cts.PACK_PTRS + 3 * n)) == at, f"{name}: {what} is not what its pointer names")
+                if "fork of" in what:
+                    check(n in free_numbers, f"{name}: fork {n} took a number a loader names")
+        if t["kind"] == "bg12":
+            check([cts.NONE if n is None else n for n in cts.pack_list(built, i)] == t["packs"], f"{name}: pack list is not the reported one")
+            for n in cts.pack_list(built, i):
+                if n is not None and n not in cts.pack_list(clean, i):
+                    check(n in free_numbers and any(f"pack {n} (fork" in w for w in names), f"{name}: list names pack {n}, not a reported fork")
+    for kind, values in (("bg12", cts.used_t12(clean)), ("bg3", cts.used_t3(clean)), ("palette", cts.used_pal(clean))):
+        for i in values:
+            if (kind, i) not in reported:
+                check(tileset_content(built, kind, i) == tileset_content(clean, kind, i),
+                      f"{kind} {i} changed but is not reported")
+    for k, n in enumerate(clean[lpc(BATTLE_SETS):lpc(BATTLE_SETS) + BATTLE_SET_BYTES]):
+        if n != cts.NONE:
+            check(cts.pack(built, n)["data"] == cts.pack(clean, n)["data"], f"battle background pack {n} changed")
+    check(built[lpc(BATTLE_SETS):lpc(BATTLE_SETS) + BATTLE_SET_BYTES] == clean[lpc(BATTLE_SETS):lpc(BATTLE_SETS) + BATTLE_SET_BYTES],
+          "BattleFx_BgSetPacks changed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("built")
@@ -403,6 +702,10 @@ def main():
         zones += ct.write_zones(clean)
     if report.get("items") is not None or report.get("itemTables") is not None:
         zones += ci.write_zones(clean)
+    if report.get("maps") is not None or report.get("tilesets") is not None:
+        check_layout_tables(clean, zones[:len(rom_layout["freeRegions"])])
+    zones += map_zones(clean, report, zones[:len(rom_layout["freeRegions"])])
+    zones += tileset_zones(clean, report)
 
     def inside(r):
         return any(r.start >= z.start and r.stop <= z.stop for z in zones)
@@ -449,6 +752,8 @@ def main():
     check_characters(clean, built, report)
     check_techs(clean, built, report)
     check_items(clean, built, report)
+    check_maps(clean, built, report, inside)
+    check_tilesets(clean, built, report, inside)
 
     # New packs and tables.
     table_doc = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -502,7 +807,9 @@ def main():
     print(f"ROM build: {checks} checks passed ({len(report['packs'])} packs, {len(report['messageTables'])} message tables, "
           f"{len(report.get('songs', []))} songs, {len(report.get('characters') or [])} characters"
           + (", techs" if report.get("techs") else "")
-          + (f", {len(report['items'])} items" if report.get("items") is not None else "") + ")")
+          + (f", {len(report['items'])} items" if report.get("items") is not None else "")
+          + (f", {len(report['maps'])} maps" if report.get("maps") is not None else "")
+          + (f", {len(report['tilesets'])} tilesets" if report.get("tilesets") is not None else "") + ")")
 
 
 if __name__ == "__main__":
