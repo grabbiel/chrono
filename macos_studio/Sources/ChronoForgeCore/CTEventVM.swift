@@ -259,6 +259,8 @@ public final class CTEventVM {
         "messages": [0xB8, 0xBB, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4],
         "warps": [0xDC, 0xDD, 0xDE, 0xE0, 0xE2],
         "field": [0xD8, 0xE3, 0xE6, 0xE7, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4],
+        "characters": [0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83],
+        "movement": [0x8F, 0x92, 0x94, 0x95, 0x96, 0x9C, 0xA0, 0xA8, 0xA9, 0xB5, 0xB6],
     ]
     public static let modelled: Set<UInt8> = Set(families.values.joined())
 
@@ -546,6 +548,24 @@ public final class CTEventVM {
                 wram[WRAM.fadeBrightness] = 0x0F
             }
             return .go(x: y, carry: false)
+        case 0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80: return initCharacter(op, y)
+        case 0x81: return initSprite(y)
+        case 0x92, 0x9C: return walkDirection(y, animate: op == 0x92)
+        case 0x96, 0xA0: return walkToTile(y, animate: op == 0x96)
+        case 0x94, 0x95:
+            if wram[WRAM.objMoveFrames + objCur] != 0 { return .go(x: y, carry: false) }
+            let t = op == 0x94 ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
+            return walkToObject(y, target: t)
+        case 0x8F: return followPartyMember(y)
+        case 0xB5, 0xB6:                                               // Evt_OpB5_FollowObj / Evt_OpB6_FollowPc
+            wram.setWord(WRAM.evtUnk0920Key, y)                        // EvtFollow_SavedY
+            let walked = dispatch(op == 0xB5 ? 0x94 : 0x95, y)
+            guard case .go(_, let carry) = walked else { return walked }
+            return .go(x: y, carry: op == 0xB5 ? false : carry)
+        case 0xA8: return faceObject(y, target: data(y + 1))
+        case 0xA9: return faceObject(y, target: Int(wram[WRAM.partyObjSlot + data(y + 1)]))
+        case 0x82: return initNpcSprite(y)
+        case 0x83: return initEnemySprite(y)
         case 0xE3: wram[WRAM.fieldControlEnabled] = UInt8(data(y + 1)); return .go(x: y + 2, carry: true)
         case 0xE6:
             let amount = dataWord(y + 1), layers = data(y + 3)

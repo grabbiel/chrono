@@ -45,10 +45,13 @@ import ct_story as story  # noqa: E402
 
 CLI = WS.parent / "macos_studio" / ".build" / "debug" / "chronoforge"
 SEED = 0x7F2000
-SCRATCH = (range(0x7E01C1, 0x7E01EB), range(0x7E01EE, 0x7E01F8))
+SCRATCH = (range(0x7E01C1, 0x7E01EB), range(0x7E01EE, 0x7E01F8),
+           range(0x7E0309, 0x7E0317),     # Decomp_ToWram's own working bytes (Decomp_OutLen is compared)
+           range(0x7F3800, 0x7F4400))     # SprBuf: Spr_LoadLargeObj's tile buffer (presentation)
+STEP_LIMIT = 3_000_000
 OBJ_TABLES = (0x0C00, 0x0F00, 0x0F80, 0x1000, 0x1080, 0x1100, 0x1180, 0x1300, 0x1600, 0x1680, 0x1780,
               0x1800, 0x1880, 0x1900, 0x1980, 0x1A00, 0x1A80, 0x1B00, 0x1B80, 0x1C00, 0x1C80)
-TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E)
+TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E, 0x92, 0x96, 0x9C, 0xA0)
 
 
 def scratch(a):
@@ -68,16 +71,23 @@ def biased(rng):
     return rng.randrange(256)
 
 
-def state(rng, objects, op):
+def state(rng, objects, op, e4):
     """[(address, bytes)]: one random WRAM state for a handler of `op`."""
     n = max(1, min(16, objects))
     slot = lambda: 2 * rng.randrange(n)  # noqa: E731
     out = []
     dp = bytearray(biased(rng) for _ in range(0xC0))      # $7E:0100-$01BF (DP_Field)
     dp[0x6D], dp[0x6E] = slot(), 0                          # Obj_Cur
-    for p in range(9):                                      # Party_ObjSlot
-        dp[0x97 + p] = 0x80 if rng.random() < 0.3 else slot()
+    for p in (0, 2, 4):                                     # Party_ObjSlot words
+        dp[0x97 + p], dp[0x98 + p] = (0x80 if rng.random() < 0.3 else slot()), 0
+    if True:  # noqa: SIM108                                # Field_E4Ptr0-3 as the location load sets them
+        for k in range(4):
+            dp[0xAF + 3 * k:0xB2 + 3 * k] = bytes((e4[2 * k], e4[2 * k + 1], 0xE4))
+    unk71 = 0x8000 + rng.randrange(0x6000)                  # ObjQ_Unk71: the next free graphics offset
+    dp[0x71], dp[0x72] = unk71 & 0xFF, unk71 >> 8
     out.append((0x7E0100, dp))
+    lst = bytearray(0xFF if rng.random() < 0.5 else rng.randrange(256) for _ in range(16))
+    out.append((0x7E0920, lst + bytearray(slot() for _ in range(16))))    # Evt_Unk0920 / Evt_Unk0930
     out.append((0x7E00F0, bytearray(biased(rng) for _ in range(0x10))))
     for base in OBJ_TABLES:
         t = bytearray(biased(rng) for _ in range(32))
@@ -85,12 +95,17 @@ def state(rng, objects, op):
             for k in range(0, 32, 2):
                 t[k] = rng.randrange(8)
                 t[k + 1] = 0 if rng.random() < 0.75 else 1
+        if base == 0x1600:                                  # Obj_Facing 0-3 (an index into Evt_InFrontTests)
+            for k in range(0, 32, 2):
+                t[k] = rng.randrange(4)
         if base in (0x1800, 0x1880) and op in TILE_OPS:     # tiles inside the attribute block
             for k in range(1, 32, 2):
                 t[k] = rng.randrange(16)
         out.append((0x7E0000 | base, t))
     out.append((0x7E1D00, bytearray(biased(rng) for _ in range(0x50))))   # Map_* scroll, origin, drift
-    out.append((0x7E2980, bytearray(biased(rng) for _ in range(0x10))))   # Party_Members
+    party = bytearray(biased(rng) for _ in range(0x10))  # Party_Members: characters 0-6 or none
+    party[0:3] = bytes(rng.choice((0, 1, 2, 3, 4, 5, 6, 0x80)) for _ in range(3))
+    out.append((0x7E2980, party))
     out.append((0x7E2A10, bytearray(biased(rng) for _ in range(0x10))))
     out.append((0x7F0000, bytearray(biased(rng) for _ in range(0x400))))  # story bytes, event words
     save = bytearray(0x400)                                 # ObjX_Unk7F0580 + level x $80
@@ -156,10 +171,62 @@ class Concrete:
                     return None
                 return base.read8(self, s, addr)
 
-        m = Machine(machine.image, machine.code, max_steps=200000, callee_steps=100000)
-        m.widen_after = 10 ** 9
+            def write8(self, s, addr, v):
+                if addr is not None:
+                    a = addr & 0xFFFFFF
+                    bank, low = a >> 16, a & 0xFFFF
+                    if (bank < 0x40 or 0x80 <= bank < 0xC0) and 0x2180 <= low <= 0x2183:
+                        self.wram_port(s, low, v)
+                        return
+                self.writes += 1
+                base.write8(self, s, addr, v)
+
+            def wram_port(self, s, low, v):
+                """WMDATA ($2180) writes WRAM at WMADD ($2181-$2183), which then steps on."""
+                if v is None or self.wmadd is None:
+                    self.wmadd = None
+                    if low == 0x2180:
+                        raise absint.Unresolved("a WRAM port write with an unknown address or value")
+                    return
+                if low == 0x2180:
+                    self.writes += 1
+                    base.write8(self, s, 0x7E0000 + self.wmadd, v)
+                    self.wmadd = (self.wmadd + 1) & 0x1FFFF
+                elif low == 0x2181:
+                    self.wmadd = self.wmadd & 0x1FF00 | v
+                elif low == 0x2182:
+                    self.wmadd = self.wmadd & 0x100FF | v << 8
+                else:
+                    self.wmadd = self.wmadd & 0xFFFF | (v & 1) << 16
+
+        m = Machine(machine.image, machine.code, max_steps=STEP_LIMIT, callee_steps=STEP_LIMIT)
         interp.machine = m
         self.interp, self.absint, self.machine = interp, absint, m
+
+    def execute(self, s, known):
+        """Machine.run for one concrete state: no forks, and a loop is a branch
+        reached again with the same registers and no write since (a halt)."""
+        m, absint = self.machine, self.absint
+        m.known, m.reads, m.control, m.opaque = known, set(), set(), set()
+        m.writes, m.wmadd = 0, 0
+        s.frames = []
+        base, seen = len(s.sp), set()
+        for steps in range(1, STEP_LIMIT + 1):
+            m._steps = steps
+            if m._branchy(s.pc):
+                sig = (s.pc, s.a, s.b, s.x, s.y, s.c, s.z, s.n, s.v, s.m, s.xf, s.d, s.db, len(s.sp), m.writes)
+                if sig in seen:
+                    return None
+                seen.add(sig)
+            r = m.step(s, base)
+            if r is None:
+                continue
+            if r[0] == "fork":
+                raise absint.Unresolved("the handler forks on an unknown (hardware) value")
+            if r[0] != "rts":
+                raise absint.Unresolved(f"the handler ends with {r[0]}")
+            return s
+        raise absint.Unresolved("too many steps")
 
     def run(self, data, y, regions, carry):
         """('go', x, carry, {addr: byte}) / ('halted',) / ('unknown', why)."""
@@ -179,19 +246,15 @@ class Concrete:
         for at, block in regions:
             known.update((at + i, b) for i, b in enumerate(block))
         try:
-            ends = self.machine.run(s, known)
+            st = self.execute(s, known)
         except absint.Unresolved as e:
             return ("unknown", f"interpreter: {e}")
-        ends = [st for st, how in ends if how == "rts"]
-        if not ends:
+        if st is None:
             return ("halted",)
-        outs = {(st.x, st.c, tuple(sorted(st.mem.items()))) for st in ends}
-        if len(outs) > 1:
-            return ("unknown", "the handler forks on an unknown (hardware) value")
-        x, c, mem = outs.pop()
-        if x is None or c is None or any(v is None for _, v in mem):
+        mem = {a: v for a, v in st.mem.items() if a >> 16 in (0x7E, 0x7F)}
+        if st.x is None or st.c is None or any(v is None for v in mem.values()):
             return ("unknown", "the handler returns an unknown (hardware) value")
-        return ("go", x, c, dict(mem), known)
+        return ("go", st.x, st.c, mem, known)
 
 
 def compare(rom_out, swift, known):
@@ -226,15 +289,17 @@ def check(args):
     rng = random.Random(SEED)
     wanted = set(range(256)) if not args.ops else {int(o, 16) for o in args.ops.split(",")}
     sites = operand_sets(loaded, wanted, args.per_op, rng)
+    e4 = rom[0x24FFE0:0x24FFE8]                         # RomE4_PtrInit: Field_E4Ptr0-3 low words
     interp, _ = packs.interpreter(rom)
     import absint
     conc = Concrete(interp, absint)
     cases, meta = [], {}
     for op in sorted(sites):
+        states = max(args.states, -(-args.per_op * args.states // len(sites[op])))   # few operand sets: more states
         for label, y in sites[op]:
-            for _ in range(args.states):
+            for _ in range(states):
                 objects = by_label[label][0]
-                regions = state(rng, objects, op)
+                regions = state(rng, objects, op, e4)
                 cid = len(cases)
                 cases.append({"id": cid, "pack": label, "y": y,
                               "regions": [[at, bytes(b).hex()] for at, b in regions]})
@@ -272,6 +337,10 @@ def check(args):
         why = compare(outs[0], swift, outs[0][4] if outs[0][0] == "go" else {})
         if why is None:
             per_op[op]["agree"] += 1
+            if str(0x7E0306) in swift["mem"]:
+                per_op[op]["unpacked"] += 1             # agreed through Decomp_ToWram
+            if outs[0][0] == "halted":
+                per_op[op]["halts"] += 1
         else:
             per_op[op]["disagree"] += 1
             failures[op].append(f"{label} ${y:04X}: {why}")
@@ -282,8 +351,9 @@ def check(args):
             "opcodes": len(ops), "opcodesUsed": sum(1 for op in ops if uses[op]),
             "opcodesVerified": sum(1 for op in ops if per_op[op]["agree"] and not per_op[op]["disagree"]),
             "operandSets": sum(len(sites.get(op, [])) for op in ops),
-            "cases": sum(sum(per_op[op].values()) for op in ops),
+            "cases": sum(sum(n for k, n in per_op[op].items() if k not in ("unpacked", "halts")) for op in ops),
             "agree": sum(per_op[op]["agree"] for op in ops),
+            "unpacked": sum(per_op[op]["unpacked"] for op in ops), "halts": sum(per_op[op]["halts"] for op in ops),
             "disagree": sum(per_op[op]["disagree"] for op in ops), "byOpcode": rows}
     modelled = {int(op) for ops in families.values() for op in ops}
     report["unmodelled"] = {f"{op:02X}": n for op, n in uses.most_common() if op not in modelled}

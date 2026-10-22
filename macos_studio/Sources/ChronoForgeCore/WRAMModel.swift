@@ -80,7 +80,16 @@ public enum WRAM {
     public static let objQScanlineLimit = dpField + 0x6B
     public static let objCur = dpField + 0x6D
     public static let objQUnk74 = dpField + 0x74, objQUnk75 = dpField + 0x75
+    public static let objQUnk71 = dpField + 0x71, objQUnk73 = dpField + 0x73, objQUnk78 = dpField + 0x78
     public static let chrObjSlot = dpField + 0x8D, partyObjSlot = dpField + 0x97
+    public static let partyObjSlot1 = dpField + 0x99, partyObjSlot2 = dpField + 0x9B
+    public static let fieldUnkAB = dpField + 0xAB, fieldUnkAEObj = dpField + 0xAE
+    /// Field_E4Ptr0-3: 24-bit pointers into bank $E4 (tile graphics, frames, animation frame and time tables).
+    public static let fieldE4Ptr0 = dpField + 0xAF, fieldE4Ptr1 = dpField + 0xB2
+    public static let fieldE4Ptr2 = dpField + 0xB5, fieldE4Ptr3 = dpField + 0xB8
+    public static let evtSprRecOfs = dpField + 0xBF, evtOpSavedPos = dpField + 0xC7
+    public static let evtSprIdx = dpField + 0xD9, evtCharId = dpField + 0xD9
+    public static let evtSprSlotArg = dpField + 0xE1, evtUnk0920Key = dpField + 0xE3
     public static let evtObjSlotEnd = dpField + 0xBD
     public static let fieldUnkBC = dpField + 0xBC
     public static let fieldUnkEB = dpField + 0xEB
@@ -93,8 +102,20 @@ public enum WRAM {
     // Pad (absolute)
     public static let padPressed = 0x7E00F0, menuPadHeld = 0x7E00F2
     public static let padUnk00F6 = 0x7E00F6, padUnk00F8 = 0x7E00F8, padUnk00F9 = 0x7E00F9
+    // Sprite bookkeeping and the decompressor's block (absolute)
+    public static let objTileSlot = 0x7E0B88
+    public static let evtUnk0920 = 0x7E0920, evtUnk0930 = 0x7E0930
+    public static let decompSrc = 0x7E0300, decompSrcBank = 0x7E0302, decompDest = 0x7E0303
+    public static let decompDestBank = 0x7E0305, decompOutLen = 0x7E0306
+    /// FieldBtlObj[k].GfxOfs (12-byte records from $7E:29BF).
+    public static func fieldBtlObjGfxOfs(_ k: Int) -> Int { 0x7E29BF + 12 * k + 9 }
     // Object tables: object x 2 indexes them
     public static let objPrioLow = 0x7E0C00, objPrioHigh = 0x7E0C01
+    public static let objVramTile = 0x7E0D00, objTileBuf = 0x7E0D80
+    public static let objGfxBank = 0x7E1200, objSprSize = 0x7E1201, objGfxOfs = 0x7E1280
+    public static let objFrameBank = 0x7E1300, objFrameOfs = 0x7E1380, objPalSrc = 0x7E1400
+    public static let objAnimFacingStride = 0x7E1480, objAnimFrameTbl = 0x7E1500, objAnimTimeTbl = 0x7E1580
+    public static let objTileRecOfs = 0x7E1700
     public static let objUnk0F00 = 0x7E0F00, objLastFrame = 0x7E0F01, objOamFlags = 0x7E0F80, objOamAttr = 0x7E0F81
     public static let objUnk1000 = 0x7E1000, objUnk1001 = 0x7E1001, objUnk1080 = 0x7E1080, objQueueNext = 0x7E1081
     public static let objUnk1100 = 0x7E1100, objUnk1101 = 0x7E1101, objScriptPos = 0x7E1180
