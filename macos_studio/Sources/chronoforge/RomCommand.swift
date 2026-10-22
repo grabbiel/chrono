@@ -75,6 +75,11 @@ func cmdRom(_ args: [String]) -> Int32 {
                 print("enemies: \(enemies.count) listed, \(edited.count) changed" +
                       (edited.isEmpty ? "" : " (" + edited.prefix(6).map(\.id).joined(separator: ", ") + (edited.count > 6 ? ", ..." : "") + ")"))
             }
+            for t in report.sprites ?? [] where !t.changed.isEmpty {
+                print("sprite \(t.id): set \(t.set), \(t.changed.joined(separator: ", "))" +
+                      (t.changedTiles.isEmpty ? "" : " (\(t.changedTiles.count) tiles)") +
+                      (t.sharedWith.map { "; also shown by " + $0.joined(separator: "; ") } ?? ""))
+            }
             for r in report.relocations ?? [] {
                 print("moved \(r.what): \(r.from ?? "new") -> \(r.to), \(r.bytes) bytes")
             }

@@ -140,6 +140,27 @@ def test_synthetic_sets_decode_with_the_end_rules():
         assert got["frameList"] == want["frameList"] and got["animationList"] == want["animationList"]
 
 
+def test_encode_tile_inverts_tile_indices():
+    rng = cs.Lcg(0xE1C0)
+    for _ in range(20):
+        raw = bytes(rng.next(256) for _ in range(cs.TILE_BYTES))
+        assert cs.encode_tile(cs.tile_indices(raw)) == raw
+    assert cs.encode_tile([0] * 64) == bytes(32)
+    assert cs.encode_tile([15] + [0] * 63) == bytes([0x80, 0x80] + [0] * 14 + [0x80, 0x80] + [0] * 14)
+
+
+def test_set_spans_cover_the_write_back_blocks():
+    image, _, _ = synthetic_image()
+    spans = cs.set_spans(image, 1)
+    d = cs.decode_set(image, 1)
+    assert len(spans["tiles"]) == 32 * d["tiles"]["count"] and len(spans["frames"]) == 40 * d["frames"]["count"]
+    assert len(spans["frameIds"]) == 16 * 3 and len(spans["durations"]) == 4 * 3 and len(spans["palette"]) == 24
+    assert spans["palette"].start == cs.pc(0xE40030)
+    assert spans["tiles"].stop == cs.set_spans(image, 0)["tiles"].start + 32 * 64   # set 1 follows set 0's 40 tiles
+    for key in ("tiles", "frames", "frameIds", "durations", "palette"):
+        assert spans[key].start >> 16 == (spans[key].stop - 1) >> 16
+
+
 def test_swift_vectors_file_is_current():
     path = cs.VECTORS
     assert path.exists(), "regenerate with ct_sprites.py vectors --out"
@@ -212,3 +233,78 @@ def test_render_writes_a_png(rom, tmp_path):
     data = out.read_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", data[16:24]) == (w, h)
     assert 8 <= w <= 64 and 8 <= h <= 64 and left < 0 and top < 0
+
+
+# --- Enemy battle sprites ----------------------------------------------------------------
+
+def test_pack_literals_is_a_decomp_stream():
+    import ct_tilesets
+    rng = cs.Lcg(0xE4F6)
+    for n in (0, 1, 7, 8, 9, 32, 300):
+        data = bytes(rng.next(256) for _ in range(n))
+        got, _, _ = ct_tilesets.unpack_bytes(cs.pack_literals(data) + b"\xAA" * 8)
+        assert bytes(got) == data.ljust(-(-n // 8) * 8, b"\x00")      # the last group zero-padded
+
+
+def test_enemy_obj_assembly_runs_along_row_pairs():
+    assert cs.enemy_piece_cells(0, 8) == [0, 1, 8, 9]
+    assert cs.enemy_piece_cells(3, 8) == [6, 7, 14, 15]
+    assert cs.enemy_piece_cells(4, 8) == [16, 17, 24, 25]          # layout 2: the next row pair
+    assert cs.enemy_piece_cells(7, 16) == [14, 15, 30, 31]         # layout 1: 8 OBJs on one pair
+    for layout, (columns, rows, record_bytes, objs) in cs.LAYOUTS.items():
+        if layout not in cs.ASSEMBLED:
+            continue
+        cells = sorted(k for n in range(objs) for k in cs.enemy_piece_cells(n, columns))
+        assert cells == list(range(columns * rows)) and record_bytes == 2 * columns * rows + 2 * objs
+
+
+def synthetic_enemy_image():
+    regions, expect = cs.synthetic_enemy_rom()
+    image = bytearray(cs.ROM_SIZE)
+    for long, data in regions.items():
+        image[cs.pc(long):cs.pc(long) + len(data)] = data
+    return bytes(image), expect
+
+
+def test_synthetic_enemies_decode_by_layout_and_graphics_source():
+    image, expect = synthetic_enemy_image()
+    got = {i: cs.decode_enemy(image, i) for i in (0, 1, 2, 0xF8)}
+    assert [got[i]["layout"]["index"] for i in (0, 1, 2, 0xF8)] == [0, 1, 2, 0]
+    assert [got[i]["frames"]["count"] for i in (0, 1, 2)] == [6, 5, 4]
+    assert [got[i]["tiles"]["source"] for i in (0, 1, 0xF8)] == ["packed", "packed", "rom"]
+    assert got[0]["tiles"]["count"] == got[2]["tiles"]["count"] == 30 and got[1]["tiles"]["count"] == 50
+    assert got[1]["palette"]["address"] == "$E4:0030"
+    for i, d in got.items():
+        lay = d["layout"]
+        assert all(len(f["cells"]) == lay["columns"] * lay["rows"] and len(f["pieces"]) == lay["objs"]
+                   for f in d["frameList"])
+    for d, want in zip(got.values(), expect):
+        assert d["frameList"] == want["frameList"] and d["animationList"] == want["animationList"]
+
+
+def test_swift_enemy_vectors_file_is_current():
+    path = cs.ENEMY_VECTORS
+    assert path.exists(), "regenerate with ct_sprites.py enemy-vectors --out"
+    assert path.read_text() == cs.enemy_vectors_text()
+    vectors = json.loads(path.read_text())
+    assert vectors["schema"] == "ct-enemy-sprite-vectors/1" and len(vectors["enemies"]) == 4
+    for e in vectors["enemies"]:
+        assert len(e["tileIndices"]) == 2 * 64 * e["tiles"]["count"]
+        c = e["composed"]
+        assert len(c["indices"]) == 2 * c["width"] * c["height"]
+
+
+def test_enemy_chronoret_source_claims(rom, chronoret):
+    claims = cs.asm_claims(chronoret, routines=cs.ENEMY_ASM_CLAIMS, constants=cs.ENEMY_CONSTANT_CLAIMS)
+    assert len(claims) == len(cs.ENEMY_ASM_CLAIMS) + len(cs.ENEMY_CONSTANT_CLAIMS)
+    assert not failed(claims)
+
+
+def test_enemy_code_and_data_claims(rom):
+    assert not failed(cs.enemy_code_claims(rom) + cs.enemy_data_claims(rom))
+
+
+def test_rom_unpacker_and_frame_decoder_run_as_decoded_for_some_enemies(rom, chronoret):
+    # The full run (every enemy) is ct_sprites.py check --run.
+    claims = cs.enemy_run_claims(rom, ref=chronoret, ids=(0, 2, 26, 117, 253))
+    assert len(claims) == 2 and not failed(claims)

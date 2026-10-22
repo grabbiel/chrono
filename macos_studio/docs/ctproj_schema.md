@@ -63,7 +63,8 @@ MyGame.ctproj/
            "items": true,
            "maps": ["loc_001"],
            "tilesets": ["t12_02", "pal_00"],
-           "enemies": ["enemy_005"] }
+           "enemies": ["enemy_005"],
+           "sprites": ["crono"] }
 }
 ```
 `flags` entries name a bit of `$7F:0000–$7F:01FF` for scenes (`bit` 0–7). Two
@@ -85,6 +86,9 @@ palette sets ([tilesets](tilesets.md#writing-back)). Both are omitted when empty
 `enemies` names `characters/<id>.json` files with an `enemy` record. Each
 enemy's stats, rewards and name are written over its `enemy.enemyId`
 ([enemies](enemies.md)). The list is omitted when empty.
+`sprites` names `sprites/<id>.sprite.json` files with a `rom` source of family
+`ct-pc`; each set is written in place ([sprites](sprites.md#writing-back)). The
+list is omitted when empty.
 
 ## `characters/<id>.json`
 ```json
@@ -158,6 +162,11 @@ original fields; files with only those still load and save unchanged.
 - `hitbox` and `weapon` are Studio fields about the origin; they are not
   written to the ROM.
 - `rom` records where the import read the set (see [Sprites](sprites.md)).
+  An enemy's battle sprite (`sprites/enemy_NNN.*`) has `rom.family` `ct-enemy`,
+  `rom.set` the enemy id, `rom.layout` its frame layout (0–2) and `rom.packed`
+  (tiles unpacked from a pack); its `stream` is 8 × 2, 16 × 2 or 8 × 6 at
+  baseTile 64. It is read-only: `rom.sprites` takes only `ct-pc` sets
+  ([Enemy sprites](sprites.md#enemy-sprites)).
 
 ## `tilesets/<id>.tileset.json`
 ```json
@@ -394,7 +403,9 @@ written by the SFX Lab for preview; it can be regenerated. See
    project that assemble; `rom.characters` rows name files with a `pc` record, no
    record twice, in the game's ranges (equipment with `party.json`); `rom.techs`
    needs `tech_system.json` in the game's ranges (read-only fields are checked
-   against the base ROM by `rom build`).
+   against the base ROM by `rom build`); `rom.sprites` rows name sprite files of
+   family `ct-pc`, one per set, in the format the set can carry (the build adds
+   the base ROM's addresses, counts and the re-decode).
 5. With a ROM text profile, every string compiles to a terminated CT message whose
    decode re-encodes byte-exactly; otherwise the placeholder codec round-trip (warning).
 6. BRR encode → decode ≈ source WAV within SNES BRR error envelope; loop points

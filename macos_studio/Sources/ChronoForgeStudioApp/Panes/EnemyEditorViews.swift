@@ -133,7 +133,7 @@ private struct EnemyRecordEditor: View {
         let e = character.enemy!
         header(e)
         HStack(alignment: .top, spacing: 12) {
-            spritePlaceholder
+            battleSprite
             GroupBox("Level and HP") {
                 Grid(alignment: .leading) {
                     GridRow {
@@ -189,13 +189,38 @@ private struct EnemyRecordEditor: View {
         }
     }
 
-    /// No battle-sprite decoder covers enemies yet (docs/enemies.md).
-    private var spritePlaceholder: some View {
-        RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4]))
-            .foregroundStyle(.secondary)
-            .frame(width: 96, height: 96)
-            .overlay(Text("battle sprite\nnot decoded").font(.caption2).multilineTextAlignment(.center).foregroundStyle(.secondary))
+    /// The enemy's battle sprite at rest (CTEnemySpriteROM.sprite(for:in:),
+    /// imported by the Sprites pane; docs/sprites.md "Enemy sprites"), centred
+    /// on a strip of the PPU picture; a placeholder until it is imported.
+    @ViewBuilder private var battleSprite: some View {
+        if let s = CTEnemySpriteROM.sprite(for: character, in: project), let png = store.spriteSheet(s),
+           let picture = Self.restPicture(s, sheet: SpriteSheet.tiles(png)) {
+            VStack(spacing: 2) {
+                PPUPictureView(picture: picture)
+                    .frame(width: 256, height: CGFloat(picture.height))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                Text("\(s.id), frame \(CTEnemySpriteROM.restFrame(s))").font(.caption2).foregroundStyle(.secondary)
+            }
+        } else {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4]))
+                .foregroundStyle(.secondary)
+                .frame(width: 96, height: 96)
+                .overlay(Text("battle sprite:\nimport sprites\n(Sprites pane)").font(.caption2)
+                    .multilineTextAlignment(.center).foregroundStyle(.secondary))
+        }
+    }
+
+    private static func restPicture(_ s: SpriteDef, sheet: [[UInt8]]) -> PPUFrame? {
+        let f = CTEnemySpriteROM.restFrame(s)
+        var o = SpriteScene.Options()
+        o.originX = 128; o.originY = 112
+        guard let b = SpriteScene.bounds(s, frame: f, options: o) else { return nil }
+        let height = max(64, min(224, b.h + 16))
+        o.height = height
+        o.originX = 128 - (b.x - 128) - b.w / 2
+        o.originY = 112 - b.y + (height - b.h) / 2
+        return SpriteScene.frame(s, frame: f, sheet: sheet, sheetPalette: [], options: o)
     }
 
     private var statsBox: some View {

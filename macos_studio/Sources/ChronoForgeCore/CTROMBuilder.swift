@@ -1,5 +1,5 @@
 // Writes event packs, their message tables, songs, playable-character
-// records, techs, items, maps, tilesets and enemies into a copy of the base ROM.
+// records, techs, items, maps, tilesets, enemies and sprites into a copy of the base ROM.
 // Layout facts and their evidence: CTROMLayout.swift / docs/rom_builder.md.
 import Foundation
 
@@ -145,6 +145,7 @@ public enum CTROMBuilder {
         public var tilesets: [CTTilesetPatch.ReportTileset]? = nil // absent: not requested
         public var relocations: [Relocation]? = nil               // absent: nothing moved
         public var enemies: [Enemy]? = nil                        // absent: none requested
+        public var sprites: [CTSpritePatch.ReportSprite]? = nil   // absent: none requested
     }
 
     // MARK: Project entry point
@@ -162,9 +163,9 @@ public enum CTROMBuilder {
     public static func build(base: [UInt8], project: CTProject) throws -> (rom: [UInt8], report: Report) {
         guard let spec = project.project.rom,
               !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items
-                && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty) else {
+                && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty && spec.sprites.isEmpty) else {
             throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters, rom.techs, rom.items, " +
-                                  "rom.maps, rom.tilesets or rom.enemies to build")
+                                  "rom.maps, rom.tilesets, rom.enemies or rom.sprites to build")
         }
         func inside(_ path: String) -> Bool { !path.hasPrefix("/") && !path.split(separator: "/").contains("..") }
         var requests: [Request] = []
@@ -241,8 +242,20 @@ public enum CTROMBuilder {
             guard let e = c.enemy else { throw CTROMBuildError("enemy \(id) has no enemy record; import the ROM's enemies") }
             return EnemyRequest(id: id, enemy: e, name: CTEnemyROM.writableName(c))
         }
+        let sprites = try spec.sprites.map { id -> CTSpritePatch.Request in
+            guard let s = project.sprites[id] else { throw CTROMBuildError("sprite \(id): no sprites/\(id).sprite.json") }
+            guard inside(s.sheet) else { throw CTROMBuildError("sprite \(id): \(s.sheet) must stay inside the project") }
+            let png: IndexedPNG
+            do { png = try PNG.readIndexed(url: project.fileURL(relative: s.sheet)) }
+            catch { throw CTROMBuildError("sprite \(id): \(s.sheet): \(error)") }
+            guard png.bitDepth <= 4, png.indices.allSatisfy({ $0 < 16 }) else {
+                throw CTROMBuildError("sprite \(id): \(s.sheet) must be a 4bpp indexed sheet (indices 0-15)")
+            }
+            return CTSpritePatch.Request(sprite: s, sheet: SpriteSheet.tiles(png))
+        }
         return try build(base: base, requests: requests, songs: songs, characters: characters, techs: techs,
-                         items: items, maps: maps, tilesets: tilesets, enemies: enemies, textProfile: project.textProfile)
+                         items: items, maps: maps, tilesets: tilesets, enemies: enemies, sprites: sprites,
+                         textProfile: project.textProfile)
     }
 
     /// `block` in its old span `home` (now unused) when it fits, else in a
@@ -263,7 +276,7 @@ public enum CTROMBuilder {
     public static func build(base input: [UInt8], requests: [Request], songs songRequests: [SongRequest] = [],
                              characters characterRequests: [CharacterRequest] = [], techs: TechSystemDef? = nil,
                              items: ItemsRequest? = nil, maps: [GameMap] = [], tilesets: [CTTilesetPatch.Request] = [],
-                             enemies enemyRequests: [EnemyRequest] = [],
+                             enemies enemyRequests: [EnemyRequest] = [], sprites spriteRequests: [CTSpritePatch.Request] = [],
                              textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
@@ -310,6 +323,8 @@ public enum CTROMBuilder {
             }
             enemyWrites += try CTEnemyROM.writes(e.enemy, id: e.id, name: e.name, base: rom)
         }
+        // Sprites: checked and decoded back before anything is written (docs/sprites.md).
+        let (spriteWrites, spriteReport) = try CTSpritePatch.writes(spriteRequests, base: rom)
         var itemWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
         if let items {
             try CTItemROM.check(items.items, tables: items.tables)
@@ -501,6 +516,8 @@ public enum CTROMBuilder {
         for w in itemWrites { write(w.bytes, at: w.pc, w.what) }
         // Enemies: the stat and reward records field by field, the name in place (docs/enemies.md).
         for w in enemyWrites { write(w.bytes, at: w.pc, w.what) }
+        // Sprites: frame records, changed tiles, animation rows and colours 1-12 in place.
+        for w in spriteWrites { write(w.bytes, at: w.pc, w.what) }
         let enemyReport = enemyRequests.map { e -> Report.Enemy in
             let pc = CTEnemyROM.statsPC(e.enemy.enemyId)
             let wroteName = enemyWrites.contains { $0.what == "enemy \(e.id) name" }
@@ -520,6 +537,7 @@ public enum CTROMBuilder {
                             writes: changed, freeBytesLeft: space.total, maps: mapReport, tilesets: tilesetReport,
                             relocations: relocations.isEmpty ? nil : relocations)
         report.enemies = enemyReport.isEmpty ? nil : enemyReport
+        report.sprites = spriteRequests.isEmpty ? nil : spriteReport
         return (rom, report)
     }
 

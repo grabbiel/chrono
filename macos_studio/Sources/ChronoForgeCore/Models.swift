@@ -31,6 +31,7 @@ public struct Project: Codable, Equatable, Sendable {
         public var maps: [String] = []         // maps/<id>.map.json with a rom.location (absent = none)
         public var tilesets: [String] = []     // tilesets/<id>.tileset.json with a rom source (absent = none)
         public var enemies: [String] = []      // characters/<id>.json with an enemy record (absent = none)
+        public var sprites: [String] = []      // sprites/<id>.sprite.json with a rom source (absent = none)
         public struct Song: Codable, Equatable, Sendable {
             public var song: Int
             public var listing: String         // project-relative path
@@ -45,11 +46,12 @@ public struct Project: Codable, Equatable, Sendable {
             }
         }
         public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = [], techs: Bool = false,
-                    items: Bool = false, maps: [String] = [], tilesets: [String] = [], enemies: [String] = []) {
+                    items: Bool = false, maps: [String] = [], tilesets: [String] = [], enemies: [String] = [],
+                    sprites: [String] = []) {
             self.eventPacks = eventPacks; self.songs = songs; self.characters = characters; self.techs = techs
-            self.items = items; self.maps = maps; self.tilesets = tilesets; self.enemies = enemies
+            self.items = items; self.maps = maps; self.tilesets = tilesets; self.enemies = enemies; self.sprites = sprites
         }
-        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items, maps, tilesets, enemies }
+        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items, maps, tilesets, enemies, sprites }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             eventPacks = try c.decodeIfPresent([EventPack].self, forKey: .eventPacks) ?? []
@@ -60,6 +62,7 @@ public struct Project: Codable, Equatable, Sendable {
             maps = try c.decodeIfPresent([String].self, forKey: .maps) ?? []
             tilesets = try c.decodeIfPresent([String].self, forKey: .tilesets) ?? []
             enemies = try c.decodeIfPresent([String].self, forKey: .enemies) ?? []
+            sprites = try c.decodeIfPresent([String].self, forKey: .sprites) ?? []
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -71,6 +74,7 @@ public struct Project: Codable, Equatable, Sendable {
             if !maps.isEmpty { try c.encode(maps, forKey: .maps) }
             if !tilesets.isEmpty { try c.encode(tilesets, forKey: .tilesets) }
             if !enemies.isEmpty { try c.encode(enemies, forKey: .enemies) }
+            if !sprites.isEmpty { try c.encode(sprites, forKey: .sprites) }
         }
     }
 
@@ -329,8 +333,8 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         }
     }
     public struct ROMSource: Codable, Equatable, Sendable {
-        public var family: String      // "ct-pc": a playable character's set
-        public var set: Int
+        public var family: String      // "ct-pc": a playable character's set; "ct-enemy": an enemy record
+        public var set: Int            // the set (ct-pc) or the enemy record (ct-enemy)
         public var tiles: String       // "$D2:72C0"
         public var tileCount: Int
         public var frames: String
@@ -339,6 +343,8 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         public var frameIds: String
         public var durations: String
         public var rows: Int
+        public var layout: Int? = nil  // ct-enemy: the frame layout (size class 0-2; absent = 0)
+        public var packed: Bool? = nil // ct-enemy: the graphics are unpacked from `tiles` (absent = raw)
     }
     public struct Box: Codable, Equatable, Sendable {
         public var x: Int, y: Int, w: Int, h: Int

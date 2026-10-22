@@ -2,7 +2,7 @@
 
 `chronoforge rom build` (and **Story → Build ROM…** or **Characters → Build ROM…**
 in Studio) writes a project's event packs, songs, playable-character records,
-tech tables, item tables, location maps, tilesets and enemies into a copy of the clean Chrono Trigger US 1.0 ROM and
+tech tables, item tables, location maps, tilesets, enemies and the playable characters' sprites into a copy of the clean Chrono Trigger US 1.0 ROM and
 fixes the header checksum. It starts from the unmodified ROM every time (SHA-256
 `06d1c2b0…829a9`; a 512-byte copier header is dropped); a built ROM is refused as
 a base. The output is game data: keep it local.
@@ -25,9 +25,15 @@ a base. The output is game data: keep it local.
   "items": true,
   "maps": ["loc_001", "loc_002"],
   "tilesets": ["t12_02", "t3_00", "pal_00"],
-  "enemies": ["enemy_005", "enemy_009"]
+  "enemies": ["enemy_005", "enemy_009"],
+  "sprites": ["crono", "magus"]
 }
 ```
+
+`sprites` names `sprites/<id>.sprite.json` files imported from the ROM
+(`rom.family` `ct-pc`). Each set is written in place: its frame records, the
+sheet tiles that changed, its animation rows and colours 1–12. See
+[sprites](sprites.md#writing-back).
 
 `enemies` names `characters/<id>.json` files with an `enemy` record. For each
 one, the builder writes the stat record, the reward record and (when changed)
@@ -111,7 +117,12 @@ ranges, the bit rules, the tileset a map names against its location record).
    name (`$CC:6500` + id × 11) only when it differs from the base ROM's. All of
    this happens after the checks in [enemies](enemies.md). AI scripts, attack
    and tech records are never written.
-9. Writes the `Evt_PackPtrs` entries and the checksum and complement.
+9. With `rom.sprites`, writes each playable character's set in place: the
+   40-byte frame records, each changed tile (re-encoded from the sheet), the
+   frame-id and duration rows and colours 1–12, after the checks and the
+   re-decode in [sprites](sprites.md#writing-back). Pointer tables and sprite
+   records are never written.
+10. Writes the `Evt_PackPtrs` entries and the checksum and complement.
 
 Maps and tilesets are applied first, right after the free space is set up, so
 the spans they free are known before the event packs are placed:
@@ -187,6 +198,15 @@ enemy id, stat-record address, the record written and the name written (absent
 when the name was left as it was). Each changed field is one write, such as
 `enemy enemy_005 magic` or `enemy enemy_005 name`. The CLI prints how many
 enemies are listed and which ones changed.
+
+With sprites, the report adds `sprites`: per listed sprite its set, the parts
+written (`tiles`, `frames`, `animations`, `palette`), the block addresses and
+counts, the frames, animations and colours the set holds after the build, the
+tile block's SHA-256, the changed tile numbers, and `sharedWith`: the other
+sprite records (`$E4:F000`, `$E4:F600`) that name a changed part and so show
+the edit too. Each changed record, tile or row is one write, such as
+`sprite crono frame 12`, `sprite crono tile 37`, `sprite crono frame ids
+r03.left` or `sprite crono durations r03`.
 
 ## The packer
 
@@ -278,6 +298,20 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
 
   Five damaged copies are rejected and four bad edits are refused.
 
+- **Sprites** (`CTSpritePatchTests`, `macos_studio/tools/verify_sprite_build.py`):
+  importing the seven playable characters' sets and building gives the clean
+  ROM with no write. An edited build (a tile's pixels, a cell's tile and
+  mirror, OBJ offsets, a frame id, a row's durations, colours) writes exactly
+  the edited records, tiles and rows. Its checks:
+  - `ct_rom_check.py` checks it: only reported sets' blocks change, the pointer
+    tables and sprite records do not, and each set decodes to the report;
+  - `ct_sprites.py verify-import --rom <built>` decodes the built ROM back to
+    the edited project;
+  - the ROM's own `Battle_DrawBattlerFrameAnyLayout`, run on the built ROM,
+    gives the edited frames from tiles encoded independently from the sheet.
+
+  Seven damaged copies are rejected and twelve bad edits are refused.
+
 ## Limitations
 
 - No emulator run: the evidence is the ROM's own loader, decompressor and text
@@ -285,7 +319,7 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
 - Only event packs, message tables, song sequences (with their per-song table
   rows), the playable characters' records and growth rows, the tech tables'
   writable fields, the item tables' writable fields, and the maps and tilesets
-  of existing locations, and enemies' stats, rewards and names, are written. New locations, overworld maps, sprites, samples, sound effects, new items or item ids, new
+  of existing locations, enemies' stats, rewards and names, and the playable characters' sprite sets in place, are written. New locations, overworld maps, other sprites, samples, sound effects, new items or item ids, new
   techs or tech names, enemy AI scripts, attack and tech records, ExpToLevel and other tables are not.
   Enemies are written as their stat and reward records and names only.
 - Lowered packs cover the Studio statements in `event_bytecode.md`; cross-map calls
