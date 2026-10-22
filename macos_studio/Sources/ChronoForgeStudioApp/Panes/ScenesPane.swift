@@ -14,6 +14,7 @@ struct ScenesPane: View {
     @State private var adding = false
     /// `--select loc_NNN` at launch opens that ROM location.
     @State private var mode = LaunchArguments.value("--select")?.hasPrefix("loc_") == true ? "rom" : "project"
+    @Environment(\.openWindow) private var openWindow
 
     private var launchLocation: Int? {
         LaunchArguments.value("--select").flatMap { $0.hasPrefix("loc_") ? Int($0.dropFirst(4)) : nil }
@@ -28,6 +29,10 @@ struct ScenesPane: View {
             .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 360).padding(.top, 8)
             if mode == "rom" {
                 LocationScenesView(store: store, project: project, initial: launchLocation)
+                    .toolbar {
+                        Button("Play…", systemImage: "play.fill") { openWindow(id: "runtime", value: launchLocation ?? 0) }
+                            .help("Open the Play window (choose the location there)")
+                    }
             } else {
                 projectScenes
             }

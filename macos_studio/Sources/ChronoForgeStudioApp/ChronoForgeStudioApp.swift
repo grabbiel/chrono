@@ -16,6 +16,10 @@ struct ChronoForgeStudioApp: App {
                     .keyboardShortcut("o")
             }
         }
+        WindowGroup("Play", id: "runtime", for: Int.self) { $location in
+            RuntimeWindow(store: store, location: location ?? 0)
+        }
+        .defaultSize(width: 1180, height: 640)
     }
 }
 
@@ -48,6 +52,7 @@ enum LaunchArguments {
 struct RootView: View {
     @Bindable var store: ProjectStore
     @State private var selection: StudioModule? = LaunchArguments.module ?? .characters
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationSplitView {
@@ -98,6 +103,7 @@ struct RootView: View {
             if store.project == nil, let path = LaunchArguments.value("--open") {
                 store.load(url: URL(fileURLWithPath: path))
             }
+            if let play = LaunchArguments.value("--play").flatMap({ Int($0) }) { openWindow(id: "runtime", value: play) }
         }
         .fileImporter(isPresented: $store.requestOpen,
                       allowedContentTypes: [.folder],

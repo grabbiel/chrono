@@ -131,6 +131,7 @@ public final class CTFieldRuntime {
         "Evt_PushTarget (pushing objects) and treasure opening are not run",
         "the dialogue box's own code (Field_Unk1F87) is CTDialogueLayout's; the D-pad is held while the box is open; a choice answers its first line",
         "the frame-build queue (ObjQ_Head/Tail) is drained every frame, so every object's animation advances",
+        "Party_LeaderAnim: no idle rows (Party_AnimIdle) and no shape-$1E stair row; followers hold their place (Party_UnkA26B/A2CE not run)",
         "battles, menus, fades and palettes are not run",
     ]
 
@@ -581,20 +582,39 @@ public final class CTFieldRuntime {
         switch r {
         case .step(let kind, let slot):
             if kind == 0 {
-                let vx = vm.wram[WRAM.mapUnk1D32], vy = vm.wram[WRAM.mapUnk1D33]
-                vm.wram[WRAM.objVelX + slot] = vx; vm.wram[WRAM.objVelY + slot] = vy
-                if vx != 0 || vy != 0 {
-                    let sx = Self.signed(vm.wram[WRAM.mapUnk1D2C]), sy = Self.signed(vm.wram[WRAM.mapUnk1D2D])
-                    if sx != 0 || sy != 0 {
-                        vm.wram[WRAM.objFacing + slot] = abs(sx) >= abs(sy) ? (sx < 0 ? 2 : 3) : (sy < 0 ? 0 : 1)
-                    }
-                }
+                leaderAnim(slot)
+                vm.wram[WRAM.objVelX + slot] = vm.wram[WRAM.mapUnk1D32]; vm.wram[WRAM.objVelY + slot] = vm.wram[WRAM.mapUnk1D33]
             } else {
                 vm.wram[WRAM.objVelX + slot] = 0; vm.wram[WRAM.objVelY + slot] = 0
             }
         case .touch(let target):
             startFunction(target, function: 2)
         }
+    }
+
+    /// Party_LeaderAnim's step code (Party_AnimTable): the pad's X step
+    /// >> 3 with its Y step, negative steps as |v| + $20. Straight steps set
+    /// the facing, a diagonal keeps a facing it names (else the horizontal
+    /// one); walking shows row 1, running row 6 (row $17 while blocked); no
+    /// step shows the stand row (Party_AnimIdle's idle rows are not kept).
+    func leaderAnim(_ slot: Int) {
+        func code(_ v: UInt8) -> Int { v & 0x80 != 0 ? (Int(v ^ 0xFF) + 0x21) & 0xFF : Int(v) }
+        let index = (code(vm.wram[WRAM.mapUnk1D2D]) | code(vm.wram[WRAM.mapUnk1D2C]) >> 3) & 0x7E
+        let entries: [Int: (facing: [Int], run: Bool)] = [
+            1: ([3], false), 2: ([3], true), 3: ([2], false), 4: ([2], true),
+            8: ([1], false), 9: ([3, 1], false), 10: ([3, 1], true), 11: ([2, 1], false), 12: ([2, 1], true),
+            16: ([1], true), 17: ([3, 1], true), 18: ([3, 1], true), 19: ([2, 1], true), 20: ([2, 1], true),
+            24: ([0], false), 25: ([3, 0], false), 26: ([3, 0], true), 27: ([2, 0], false), 28: ([2, 0], true),
+            32: ([0], true), 33: ([3, 0], true), 34: ([3, 0], true), 35: ([2, 0], true), 36: ([2, 0], true)]
+        func row(_ r: UInt8) {
+            guard vm.wram[WRAM.objAnimRow + slot] != r else { return }
+            vm.wram[WRAM.objAnimRow + slot] = r; vm.wram[WRAM.objAnimColumn + slot] = 0; vm.wram[WRAM.objAnimTimer + slot] = 0
+        }
+        guard let e = entries[index / 2] else { row(0); return }
+        if !e.facing.contains(Int(vm.wram[WRAM.objFacing + slot])) { vm.wram[WRAM.objFacing + slot] = UInt8(e.facing[0]) }
+        if !e.run { row(1); return }
+        let still = vm.wram[WRAM.mapUnk1D32] == 0 && vm.wram[WRAM.mapUnk1D33] == 0 && vm.wram[WRAM.mapUnk1D34] == 0
+        row(still ? 0x17 : 6)
     }
 
     // MARK: Dialogue

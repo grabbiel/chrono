@@ -17,6 +17,7 @@ struct StoryPane: View {
     @State private var flagSelection: String? = StoryPane.launchSymbol
     @State private var location: Int?
     @State private var importStory = false
+    @Environment(\.openWindow) private var openWindow
 
     /// `--select registry|graph|<symbol>` opens that part of the pane at launch.
     private static var launchTab: String {
@@ -52,6 +53,8 @@ struct StoryPane: View {
                 ForEach(["Dialogue", "Flag Registry", "Era Graph"], id: \.self) { Text($0) }
             }.pickerStyle(.segmented)
             Button(registry == nil ? "Import Story from ROM…" : "Rescan Story from ROM…") { importStory = true }
+            Button("Play", systemImage: "play.fill") { openWindow(id: "runtime", value: location ?? 0) }
+                .help("Run the selected location in the embedded runtime, flags by registry symbol")
         }
         .onAppear { (registry, graph) = store.loadStory() }
         .onChange(of: project.url) { (registry, graph) = store.loadStory() }
