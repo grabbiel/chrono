@@ -11,6 +11,7 @@ struct MapsPane: View {
     @State private var selection: String? = LaunchArguments.value("--select")   // e.g. --module Maps --select loc_001
     @State private var importROM = false
     @State private var revision = 0          // re-seeds the editor after an import
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         EntityListView(title: "Maps", ids: project.maps.keys.sorted(), selection: $selection) { id in
@@ -20,6 +21,10 @@ struct MapsPane: View {
             }
         }
         .toolbar {
+            if let loc = selection.flatMap({ project.maps[$0]?.rom?.location }) {
+                Button("Play", systemImage: "play.fill") { openWindow(id: "runtime", value: loc) }
+                    .help("Run this location in the embedded runtime (Play window)")
+            }
             Button(project.maps.values.contains { $0.rom != nil } ? "Reimport Maps from ROM…" : "Import Maps from ROM…") {
                 importROM = true
             }
