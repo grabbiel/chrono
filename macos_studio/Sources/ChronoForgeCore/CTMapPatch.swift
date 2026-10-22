@@ -63,10 +63,15 @@ public enum CTMapPatch {
             throw fail("settings.\(name) \(v) is not a byte")
         }
         let code1 = (s1.width / 16 - 1) | (s1.height / 4 - 4)
-        let code3 = s3.map { ($0.width / 16 - 1) | ($0.height / 4 - 4) } ?? base.size3 & 0x0F
+        var code3: Int = base.size3 & 0x0F
+        if let s3 { code3 = (s3.width / 16 - 1) | (s3.height / 4 - 4) }
         let size1 = code1 | (s2.width - 16) | (s2.height - 16) * 4
-        let size3 = code3 | (settings.ownStep2 ? 0x10 : 0) | (settings.ownStep3 ? 0x20 : 0)
-            | (settings.halfRate2 ? 0x40 : 0) | (s3 == nil ? 0 : 0x80)
+        // One flag at a time keeps this cheap for CI's older type checker (Xcode 26.6).
+        var size3: Int = code3
+        if settings.ownStep2 { size3 |= 0x10 }
+        if settings.ownStep3 { size3 |= 0x20 }
+        if settings.halfRate2 { size3 |= 0x40 }
+        if s3 != nil { size3 |= 0x80 }
         guard let tp = m.tileProps, let plane = CTTilePropsPlane(tp), (tp.width, tp.height) == (s1.width, s1.height) else {
             throw fail("tileProps must be three hex planes over layer 1 (\(s1.width) x \(s1.height))")
         }
