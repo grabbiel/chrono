@@ -315,6 +315,9 @@ Changing one rule in the shader alone fails every parity test that exercises
 it. The rules tried were half on a transparent sub screen, OBJ X flip,
 brightness 0, XNOR window logic, and TSW.
 
+These tests need a Metal device. On hosted runners without one they skip, and
+they are listed as `may-skip` in `scripts/ci/expected_skips.txt`.
+
 ## Studio previews
 
 `PPUPreviewScenes` in ChronoForgeCore builds the Studio's tileset and map
@@ -330,6 +333,3 @@ and the scroll wheel pans through HOFS and VOFS.
 
 The project format has no palettes yet, so the previews use gray ramps.
 `PPUPreviewScenesTests` checks the layouts through the reference renderer.
-
-These tests need a Metal device. On hosted runners without one they skip, and
-they are listed as `may-skip` in `scripts/ci/expected_skips.txt`.
