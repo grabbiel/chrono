@@ -58,3 +58,5 @@ ChronoForgeCoreTests.CTItemsTests/testEditedItemsWriteOnlyTheirBytesAndReadBack 
 ChronoForgeCoreTests.CTItemsTests/testEquipStatsOnTheImportedTables                             skip      # local ROM
 ChronoForgeCoreTests.CTItemsTests/testImportThenBuildIsIdentical                                skip      # local ROM
 ChronoForgeCoreTests.CTTextAnalyzerTests/testItemDescriptionsAnalyzeToTheirROMSize              skip      # local ROM
+ChronoForgeCoreTests.SFXLabROMTests/testEncoderOnROMSampleDecodes                               skip      # local ROM
+ChronoForgeCoreTests.SFXLabROMTests/testEveryROMSamplePlaysExactlyAsDecodedOnTheSDSP            skip      # local ROM
