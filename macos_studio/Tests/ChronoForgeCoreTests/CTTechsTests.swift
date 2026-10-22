@@ -361,4 +361,66 @@ final class CTTechsTests: XCTestCase {
         refuse({ $0.techSystem!.learned.counts[0] += 1 }, "top bits")
         refuse({ $0.techSystem = nil }, "needs tech_system.json")
     }
+
+    /// The area routines' tests (CTTechTargets) on hand-placed battlers.
+    func testTargetZones() throws {
+        typealias P = CTTechTargets.Point
+        XCTAssertEqual(CTTechTargets.modes.count, CTTechROM.targetModes)
+        XCTAssertEqual(CTTechTargets.shapes.count, 7)
+        XCTAssertEqual(CTTechTargets.params.count, 7)
+        var at: [P?] = Array(repeating: nil, count: 11)
+        at[0] = P(x: 128, y: 200); at[1] = P(x: 40, y: 200); at[2] = P(x: 216, y: 200)
+        at[3] = P(x: 128, y: 100)                       // the centre
+        at[4] = P(x: 176, y: 100)                       // 3 cells right: 9 <= 9
+        at[5] = P(x: 192, y: 100)                       // 4 cells: 16 > 9
+        at[6] = P(x: 128, y: 132)                       // 2 cells down; the row's edge (+$20)
+        at[7] = P(x: 128, y: 133)                       // past the row
+        // Circle: in cells, inclusive, the centre first.
+        XCTAssertEqual(CTTechTargets.hits(.init(.circle(centre: 3, size: 9)), positions: at), [3, 4, 6, 7])
+        XCTAssertEqual(CTTechTargets.hits(.init(.circle(centre: 3, size: 4)), positions: at), [3, 6, 7])
+        // The 8-bit sum wraps: 15 cells across and 7 down is $112 -> $12.
+        var far = at
+        far[8] = P(x: 128 + 15 * 16, y: 100 + 7 * 16)
+        XCTAssertTrue(CTTechTargets.hits(.init(.circle(centre: 3, size: 0x19)), positions: far).contains(8))
+        XCTAssertFalse(CTTechTargets.hits(.init(.circle(centre: 3, size: 0x11)), positions: far).contains(8))
+        // Row: y within ±$20 of the centre's, inclusive.
+        XCTAssertEqual(CTTechTargets.hits(.init(.row(centre: 3)), positions: at), [3, 4, 5, 6])
+        // The party's triangle takes in enemies only.
+        var tri: [P?] = Array(repeating: nil, count: 11)
+        tri[0] = P(x: 20, y: 200); tri[1] = P(x: 128, y: 20); tri[2] = P(x: 236, y: 200)
+        tri[3] = P(x: 128, y: 150); tri[4] = P(x: 20, y: 20)
+        XCTAssertEqual(CTTechTargets.hits(.init(.partyTriangle), positions: tri), [3])
+        // Line: a strip from the source past the aim, or a box ending at it.
+        var line: [P?] = Array(repeating: nil, count: 11)
+        line[0] = P(x: 20, y: 100)
+        line[3] = P(x: 120, y: 100)                     // the aim
+        line[4] = P(x: 200, y: 110)                     // beyond, 10 px off the line
+        line[5] = P(x: 80, y: 130)                      // 30 px off
+        line[6] = P(x: 10, y: 100)                      // behind the source
+        XCTAssertEqual(CTTechTargets.hits(.init(.line(source: 0, aim: 3, size: 2, box: false)), positions: line), [3, 4])
+        XCTAssertEqual(CTTechTargets.hits(.init(.line(source: 0, aim: 3, size: 2, box: true)), positions: line), [3])
+        XCTAssertEqual(CTTechTargets.hits(.init(.line(source: 0, aim: 3, size: 4, box: true)), positions: line), [3, 5])
+        // Menu modes: their handlers' zones and lists.
+        let party: [Int?] = [0, 3, 6]
+        XCTAssertEqual(CTTechTargets.menu(0x0B, caster: 0, target: 5, party: party).zone,
+                       .init(.line(source: 0, aim: 5, size: 2, box: false)))
+        XCTAssertEqual(CTTechTargets.menu(0x0D, caster: 0, target: 5, party: party).zone,
+                       .init(.line(source: 1, aim: 5, size: 2, box: false)))   // the PC with id 3
+        XCTAssertNil(CTTechTargets.menu(0x0D, caster: 0, target: 5, party: [0, 1, 2]).zone)
+        XCTAssertEqual(CTTechTargets.menu(0x1A, caster: 0, target: 5, party: party).zone, .init(.circle(centre: 5, size: 0x19)))
+        XCTAssertEqual(CTTechTargets.menu(0x1B, caster: 0, target: 5, party: party).zone, .init(.circle(centre: 2, size: 0x19)))
+        XCTAssertEqual(CTTechTargets.menu(0x08, caster: 0, target: 5, party: party).slots, Array(3..<11))
+        XCTAssertEqual(CTTechTargets.menu(0x15, caster: 1, target: 5, party: party).slots, [1])
+        // Area records: centre and aim by parameter set, the variant bit, a position query.
+        let area = { (shape: Int, param: Int, size: Int) in TechSystemDef.Area(shape: shape, param: param, size: size) }
+        XCTAssertEqual(CTTechTargets.zone(area(0, 0, 0x82), users: [1, 2], caster: 0, target: 6),
+                       .init(.line(source: 1, aim: 6, size: 2, box: true)))
+        XCTAssertEqual(CTTechTargets.zone(area(1, 5, 0x10), users: [0], caster: 0, target: 6),
+                       .init(.circle(centre: 0, size: 0x10)))
+        XCTAssertEqual(CTTechTargets.zone(area(2, 2, 0x04), users: [0], caster: 0, target: 6),
+                       .init(.circle(centre: 4, size: 0)))                    // centre from the size byte
+        XCTAssertEqual(CTTechTargets.zone(area(6, 1, 0x10), users: [0], caster: 0, target: 1),
+                       .init(.row(centre: 1), scansParty: true))              // a PC target scans the party
+        XCTAssertNil(CTTechTargets.zone(area(1, 0x81, 0x10), users: [0], caster: 0, target: 6))
+    }
 }
