@@ -35,6 +35,14 @@ ranges the game's jump tables and tables allow; the read-only bits (user
 sets, flags, attributes, the animation's graphics), the combination records
 and every other table are unchanged; bit 4 of +$02 is set exactly for the
 characters with all 8 singles. Without techs, none of those bytes change.
+Items (tools/ct_items.py), when reported: only record A and B, name bytes
+1-10, the target modes, ItemBoosts and the description table may change;
+each reported item decodes to the reported values, in the ranges the game's
+code keeps, with its icon byte unchanged; unreported items are unchanged;
+ItemBoosts is the reported table (or unchanged); every description pointer
+lands in the table's span on a $00-terminated string, which is the clean
+ROM's bytes for an unchanged text and the reference encoder's bytes for a
+new one. Without items, none of those bytes change.
 """
 
 import argparse
@@ -48,6 +56,7 @@ sys.path.insert(0, str(WS / "refs" / "ChronoRET" / "tools"))
 import c3pack  # noqa: E402
 import ct_characters as cc  # noqa: E402
 import ct_event_packs as packs  # noqa: E402
+import ct_items as ci  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
 import ct_spc_seq as spc  # noqa: E402
 import ct_techs as ct  # noqa: E402
@@ -143,6 +152,15 @@ def tech_bytes(record, report):
     return {2} if record < cc.CHARACTERS else set(range(ct.TECH_STATE_SIZE))
 
 
+def item_record_bytes(clean, record, report):
+    """The record bytes an item build may change: the eighth record's block
+    ends inside the weapons' record B table (ids $00-$05), checked by check_items."""
+    if report.get("items") is None and report.get("itemTables") is None:
+        return set()
+    start = cc.RECORDS_PC + cc.RECORD_SIZE * record
+    return {at - start for z in ci.write_zones(clean) for at in z if start <= at < start + cc.RECORD_SIZE}
+
+
 def check_characters(clean, built, report):
     reported = report.get("characters") or []
     ids = [c["charId"] for c in reported]
@@ -152,7 +170,7 @@ def check_characters(clean, built, report):
     by_id = {c["charId"]: c for c in reported}
     for i in range(cc.INIT_RECORDS):
         before, after = cc.record(clean, i), cc.record(built, i)
-        techs = tech_bytes(i, report)
+        techs = tech_bytes(i, report) | item_record_bytes(clean, i, report)
         if i not in by_id:
             check(all(before[b] == after[b] for b in range(cc.RECORD_SIZE) if b not in techs),
                   f"record {i} changed but is not reported")
@@ -242,6 +260,88 @@ def check_techs(clean, built, report):
               and bool(built[at] & ct.ALL_TECHS) == (state["counts"][c] >= 8), f"record {c} +$02")
 
 
+ITEM_FIELDS = {"weapon": ("attack", "byte1", "critical", "modifier", "modifierArg"),
+               "armor": ("defence", "modifier", "modifierOn"), "helmet": ("defence", "modifier", "modifierOn"),
+               "accessory": ("battleFlags", "special", "specialArg", "specialBits"),
+               "consumable": ("useKind", "restores", "amount", "byte3")}
+STAT_NAMES = {"magic_defense": "magicDefense"}
+
+
+def item_bytes(rom, item):
+    """Every byte of `item` an item build may write, by offset."""
+    cat = ci.category(item)
+    a, b = ci.record_a_pc(rom, item), ci.record_b_pc(rom, item)
+    at = list(range(a, a + ci.SIZES_A[cat])) + list(range(b, b + ci.SIZES_B[cat]))
+    at += range(ci.NAMES_PC + ci.NAME_SIZE * item + 1, ci.NAMES_PC + ci.NAME_SIZE * (item + 1))
+    if cat == 4:
+        at.append(ci.TARGET_MODE_PC + item - ci.FIRST[4])
+    return {i: rom[i] for i in at}
+
+
+def check_items(clean, built, report):
+    # Every byte inside ci.write_zones is compared below; main()'s span check
+    # rejects changed bytes outside them (the icons, the tables they point at).
+    items, tables = report.get("items"), report.get("itemTables")
+    if items is None and tables is None:
+        for z in ci.write_zones(clean):
+            check(built[z.start:z.stop] == clean[z.start:z.stop], f"item byte ${z.start:06X} changed but items are not reported")
+        return
+    check(all(built[ci.NAMES_PC + ci.NAME_SIZE * i] == clean[ci.NAMES_PC + ci.NAME_SIZE * i] for i in range(ci.ITEMS)),
+          "an icon byte changed (read-only)")
+    reported = {}
+    for want in items or []:
+        r = want["rom"]
+        n = r["itemId"]
+        name = f"item ${n:02X}"
+        check(0 <= n < ci.ITEMS and n not in reported, f"{name}: id out of range or reported twice")
+        reported[n] = want
+        kind = ci.CATEGORIES[ci.category(n)]
+        v = ci.decode_item(built, n)
+        check(want["kind"] == kind and v["icon"] == r["icon"], f"{name}: kind or icon is not the item's")
+        check(v["flags"] == r["flags"] and v["price"] == want["price"] and v.get("equip") == r.get("equip")
+              and v.get("boost") == r.get("boost") and v.get("element_bonus") == r.get("elementBonus")
+              and v.get("target_mode") == r.get("targetMode")
+              and [v[f] for f, _ in ci.FIELDS_B[kind]] == [want["stats"][f] for f in ITEM_FIELDS[kind]]
+              and v["name"] == want["name"], f"{name}: not the reported values")
+        check(not v["flags"] & 0x61 and (v.get("equip", 0) & 1) == 0 and v.get("boost", 0) < ci.BOOSTS,
+              f"{name}: flags, equip mask or boost out of range")
+        if kind in ("weapon", "armor", "helmet"):
+            check(v["modifier"] < ci.MODIFIERS, f"{name}: modifier past BattleRom_UnkCC2A05")
+        if kind in ("armor", "helmet"):
+            check(v["modifier_on"] in (0, 1), f"{name}: modifier_on is 0 or 1")
+        if kind == "accessory" and v["special"] & ci.ACCESSORY_BOOST:
+            check(v["special_arg"] < ci.BOOSTS, f"{name}: the boost in special_arg is past ItemBoosts")
+        raw = built[ci.NAMES_PC + ci.NAME_SIZE * n + 1:ci.NAMES_PC + ci.NAME_SIZE * (n + 1)]
+        glyphs = bytes(raw).rstrip(b"\xef")
+        check(all(g >= 0xA0 and g != 0xEF for g in glyphs), f"{name}: the name has a non-glyph or inner $EF byte")
+    for n in range(ci.ITEMS):
+        if n not in reported:
+            check(item_bytes(built, n) == item_bytes(clean, n), f"item ${n:02X} changed but is not reported")
+    if tables is None:
+        check(ci.boosts(built) == ci.boosts(clean), "ItemBoosts changed but item_tables.json is not reported")
+    else:
+        order = ci.stat_order(built)
+        got = [{"stats": [STAT_NAMES.get(x, x) for x in ci.boost_stats(w, order)], "amount": w >> 8} for w in ci.boosts(built)]
+        check(got == tables["boosts"] and all(w & 1 == 0 for w in ci.boosts(built)), "ItemBoosts is not the reported table")
+        check(tables["statCaps"] == ci.stat_caps(built) and tables["char5Attack"] == ci.char5_attack(built)
+              and [STAT_NAMES.get(ci.STATS[i], ci.STATS[i]) for i in order] == tables["statOrder"],
+              "the read-only stat tables are not the ROM's")
+    # Descriptions: each pointer on a $00-terminated string inside the table's span.
+    codec = ct_text_profile.reference_codec()
+    dictionary = codec.rom_dictionary(clean)
+    before = ci.descriptions(clean)
+    start = ci.DESC_PC + 2 * ci.ITEMS
+    for n in range(ci.ITEMS):
+        at = ci.pc(0xCC, int.from_bytes(built[ci.DESC_PC + 2 * n:ci.DESC_PC + 2 * n + 2], "little"))
+        check(start <= at < ci.DESC_END and 0 in built[at:ci.DESC_END], f"item ${n:02X}: description pointer")
+        string = bytes(built[at:built.index(0, at, ci.DESC_END)])
+        text = reported.get(n, {}).get("description")
+        if string != before[n][1]:
+            check(text is not None, f"item ${n:02X}: description changed but is not reported")
+            expect = codec.encode_msg(text.replace("\n", "{line}"), dictionary, f"item {n}")
+            check(string + b"\x00" == expect or string == expect, f"item ${n:02X}: description bytes are not the encoded text")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("built")
@@ -301,6 +401,8 @@ def main():
     zones += character_zones(report)
     if report.get("techs"):
         zones += ct.write_zones(clean)
+    if report.get("items") is not None or report.get("itemTables") is not None:
+        zones += ci.write_zones(clean)
 
     def inside(r):
         return any(r.start >= z.start and r.stop <= z.stop for z in zones)
@@ -346,6 +448,7 @@ def main():
 
     check_characters(clean, built, report)
     check_techs(clean, built, report)
+    check_items(clean, built, report)
 
     # New packs and tables.
     table_doc = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -398,7 +501,8 @@ def main():
         check(a.stop <= b.start, f"${a.start:06X} and ${b.start:06X} overlap")
     print(f"ROM build: {checks} checks passed ({len(report['packs'])} packs, {len(report['messageTables'])} message tables, "
           f"{len(report.get('songs', []))} songs, {len(report.get('characters') or [])} characters"
-          + (", techs" if report.get("techs") else "") + ")")
+          + (", techs" if report.get("techs") else "")
+          + (f", {len(report['items'])} items" if report.get("items") is not None else "") + ")")
 
 
 if __name__ == "__main__":

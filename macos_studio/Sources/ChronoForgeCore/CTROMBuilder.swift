@@ -110,7 +110,7 @@ public enum CTROMBuilder {
         public let songs: [Song]
         public let characters: [Character]?           // absent: none requested
         public let techs: TechSystemDef?               // absent: not requested
-        public let items: [String]?                    // the ROM item files built (absent: not requested)
+        public let items: [ItemDef]?                   // the ROM items built (absent: not requested)
         public let itemTables: ItemTablesDef?          // absent: not requested or no item_tables.json
         public let writes: [Write]
         public let freeBytesLeft: Int
@@ -419,7 +419,7 @@ public enum CTROMBuilder {
         return (rom, Report(schema: "ct-rom-build/1", baseSHA256: CTEventPack.sha256(base),
                             outputSHA256: CTEventPack.sha256(rom), checksum: sum, packs: packs,
                             messageTables: tables, songs: songs, characters: characters.isEmpty ? nil : characters,
-                            techs: techs, items: items.map { $0.items.map(\.id) }, itemTables: items?.tables,
+                            techs: techs, items: items?.items, itemTables: items?.tables,
                             writes: changed, freeBytesLeft: space.total))
     }
 
