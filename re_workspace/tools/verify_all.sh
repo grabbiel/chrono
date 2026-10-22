@@ -171,6 +171,15 @@ if [ -f macos_studio/Package.swift ]; then
   RC=$?
   note "SFX Lab CLI ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_sfx.log | tail -1) frames S-DSP parity)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   rm -rf "$SFX_DIR"
+  # Music event model: every ROM song through the model byte for byte; key-ons
+  # and step passes against the emulated driver on four songs (legato, drums,
+  # loop_jump, branch, tempo fades, wait).
+  macos_studio/.build/debug/chronoforge music verify-model re_workspace/ct_clean.sfc >/tmp/verify_music_model.log 2>&1
+  RC=$?
+  note "music model round trip ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_music_model.log | tail -1) songs)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  macos_studio/.build/debug/chronoforge music verify-model re_workspace/ct_clean.sfc --driver-steps 600 --songs 1,8,24,29 >/tmp/verify_music_driver.log 2>&1
+  RC=$?
+  note "music model vs driver key-ons ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_music_driver.log | tail -1) songs)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

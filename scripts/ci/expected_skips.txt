@@ -60,3 +60,7 @@ ChronoForgeCoreTests.CTItemsTests/testImportThenBuildIsIdentical                
 ChronoForgeCoreTests.CTTextAnalyzerTests/testItemDescriptionsAnalyzeToTheirROMSize              skip      # local ROM
 ChronoForgeCoreTests.SFXLabROMTests/testEncoderOnROMSampleDecodes                               skip      # local ROM
 ChronoForgeCoreTests.SFXLabROMTests/testEveryROMSamplePlaysExactlyAsDecodedOnTheSDSP            skip      # local ROM
+ChronoForgeCoreTests.CTSongModelTests/testEveryROMSongRoundTripsThroughTheModel                 skip      # local ROM
+ChronoForgeCoreTests.CTSongModelTests/testROMEchoAndInstrumentTables                            skip      # local ROM
+ChronoForgeCoreTests.CTSongModelTests/testModelKeyOnsAndStepTimingMatchTheDriver                skip      # local ROM
+ChronoForgeCoreTests.CTSongModelTests/testEditedSongPlaysAsTheModelSays                         skip      # local ROM

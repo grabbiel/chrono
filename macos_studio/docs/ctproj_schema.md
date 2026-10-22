@@ -286,6 +286,9 @@ written by the SFX Lab for preview; it can be regenerated. See
   events: [{t, dur, note, ...}]}], echo: {edl, efb, evoll, evolr, fir[8]}}` (the
   Studio's own score format). `.ctsong` = the game's own song sequences as text
   (`ct-song/1`, [song sequences](music_sequences.md)); the two are not converted.
+  The Studio's tracker, piano roll, instrument rack and echo designer edit a
+  `.ctsong` listing in place and save it after every edit, with undo; nothing
+  else is stored ([music tracker](music_tracker.md)).
 - **Event DSL (implemented)**: one object slot (`obj 0..15`) per scene, unique
   functions `func 0..15`, and the Studio statements described in `scene_director.md`.
   DSL is authoritative; `.event.json` caches the AST and `{node_id, x, y}` graph
