@@ -39,6 +39,7 @@ MyGame.ctproj/
 ├── maps/<id>.map.json            # location header, layers, exits, triggers
 ├── scenes/<id>.event.dsl         # human-readable event script (canonical source)
 ├── scenes/<id>.event.json        # compiled AST + visual node layout
+├── scenes/rom/packNNN.ctevt      # ROM event pack edited in the Scene Director (ct-events/1; rom.eventPacks listing)
 ├── story/flags.json              # story flag registry (ct-story-flags/1, docs/story.md)
 ├── story/graph.json              # world graph and inferred era groups (ct-story-graph/1)
 └── build/                        # compiler output (gitignored): .sfc, .app

@@ -209,6 +209,11 @@ if [ -f macos_studio/Package.swift ]; then
   macos_studio/.build/debug/chronoforge story check re_workspace/ct_clean.sfc >/tmp/verify_story_cli.log 2>&1
   RC=$?
   note "story CLI check ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_story_cli.log | tail -1) registry flags resolve)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Scene Director: every non-empty ROM event pack raised to ct-scene/1 and lowered back byte-exact.
+  macos_studio/.build/debug/chronoforge scene verify-rom re_workspace/ct_clean.sfc \
+    --manifest re_workspace/manifests/event_pack_verification.json >/tmp/verify_scene_rom.log 2>&1
+  RC=$?
+  note "scene ROM round trip ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_scene_rom.log | tail -1) event packs)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

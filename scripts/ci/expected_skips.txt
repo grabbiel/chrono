@@ -69,3 +69,6 @@ ChronoForgeCoreTests.CTStoryTests/testROMScanReconcilesWithThePythonTwin        
 ChronoForgeCoreTests.CTStoryTests/testROMPathSetsTheRecordedFlagsInThePreview                   skip      # local ROM
 ChronoForgeCoreTests.CTStoryTests/testROMImportIntoAProjectValidates                            skip      # local ROM
 ChronoForgeCoreTests.CTMapTilesetBuildTests/testEveryMapAndTilesetRebuildsFromItsImport         skip      # local ROM
+ChronoForgeCoreTests.CTSceneDocumentTests/testEveryROMPackRaisesAndLowersByteExact                        skip      # local ROM
+ChronoForgeCoreTests.CTSceneDocumentTests/testEveryROMPackRunsOnTheTimeline                               skip      # local ROM
+ChronoForgeCoreTests.CTSceneDocumentTests/testROMLocationsFindTheirPacksAndMapObjects                     skip      # local ROM
