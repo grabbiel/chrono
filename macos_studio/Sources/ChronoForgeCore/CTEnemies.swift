@@ -201,8 +201,14 @@ public enum CTEnemyROM {
         let at = base + actionSize * id
         let part = Int(rom[at + 5])
         let effect = part == partNone ? nil : (0..<effectSize).map { Int(rom[effects + effectSize * part + $0]) }
-        return .init(id: id, flags: Int(rom[at + 1]), elementBits: Int(rom[at + 3]) >> 4, part: part, effect: effect,
-                     targetMode: targets.map { Int(rom[$0 + 2 * id]) }, area: targets.map { Int(rom[$0 + 2 * id + 1]) })
+        let elementBits: Int = Int(rom[at + 3]) >> 4
+        var targetMode: Int? = nil, area: Int? = nil
+        if let targets {
+            targetMode = Int(rom[targets + 2 * id])
+            area = Int(rom[targets + 2 * id + 1])
+        }
+        return .init(id: id, flags: Int(rom[at + 1]), elementBits: elementBits, part: part, effect: effect,
+                     targetMode: targetMode, area: area)
     }
 
     public static func decode(rom: [UInt8], id: Int, lengths: [Int]? = nil) -> CharacterDef.Enemy {
