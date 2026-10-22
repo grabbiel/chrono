@@ -33,6 +33,14 @@ ChronoForgeCoreTests.SPCIPLHostTests/testRealIPLUploadsCTBootBlocksBeforeDriverE
 ChronoForgeCoreTests.SPCRenderTests/testCTSongRenderFromTheDriverLoad                           skip      # local ROM
 ChronoForgeCoreTests.SPCStreamTests/testCTSongStreamIsTheRender                                 skip      # local ROM
 ChronoForgeCoreTests.TileTests/testRealGraphicsAssetsIfPresent                                  skip      # local ROM-extracted graphics
+ChronoForgeMetalTests.PPUParityTests/testPaletteCyclingRewritesOnlyTheLUT                       may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParity239Lines                                         may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParityColorMath                                        may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParityLayeredScene                                     may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParityOBJLimits                                        may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParityPerLineScrollModeAndBrightness                   may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParityRandomFrames                                     may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUParityTests/testParityWindows                                          may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testMTKViewFramePath                                     may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testOffscreenFrameRenders                                may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testShaderLibraryCompiles                                may-skip  # Metal device availability on hosted runners
