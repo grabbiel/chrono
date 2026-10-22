@@ -154,6 +154,13 @@ if [ -f macos_studio/Package.swift ]; then
     && $PY re_workspace/tools/ct_tilesets.py verify-import "$TILESET_DIR/p.ctproj" >>/tmp/verify_tileset_import.log 2>&1
   note "Tileset import (CLI = ct_tilesets.py decode)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   rm -rf "$TILESET_DIR"
+  # Items: CLI import = ct_items.py decode, identical rebuild, edits checked by
+  # ct_rom_check.py and by the ROM's own Menu_BuildItemTables / Menu_RefreshAllChars.
+  $PY macos_studio/tools/verify_item_build.py >/tmp/verify_item_build.log 2>&1
+  note "Item tables (import, build)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
+  $PY re_workspace/tools/ct_items.py check --run >/tmp/verify_item_claims.log 2>&1
+  RC=$?
+  note "Item evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_item_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

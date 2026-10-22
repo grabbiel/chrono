@@ -18,12 +18,14 @@ public struct Project: Codable, Equatable, Sendable {
     /// lowered from Studio scenes or assembled from a ct-events/1 listing),
     /// songs by Audio_SongTable index (each assembled from a ct-song/1 listing),
     /// and playable characters by their `characters/<id>.json` (its `pc`
-    /// record and `growth` rows; docs/characters.md).
+    /// record and `growth` rows; docs/characters.md), the tech tables and the
+    /// item tables (docs/items.md).
     public struct ROMBuild: Codable, Equatable, Sendable {
         public var eventPacks: [EventPack]
         public var songs: [Song]
         public var characters: [String]
         public var techs: Bool                 // write tech_system.json's tables (absent = false)
+        public var items: Bool                 // write the ROM items and item_tables.json (absent = false)
         public struct Song: Codable, Equatable, Sendable {
             public var song: Int
             public var listing: String         // project-relative path
@@ -37,16 +39,19 @@ public struct Project: Codable, Equatable, Sendable {
                 self.entry = entry; self.scenes = scenes; self.listing = listing
             }
         }
-        public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = [], techs: Bool = false) {
+        public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = [], techs: Bool = false,
+                    items: Bool = false) {
             self.eventPacks = eventPacks; self.songs = songs; self.characters = characters; self.techs = techs
+            self.items = items
         }
-        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs }
+        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             eventPacks = try c.decodeIfPresent([EventPack].self, forKey: .eventPacks) ?? []
             songs = try c.decodeIfPresent([Song].self, forKey: .songs) ?? []
             characters = try c.decodeIfPresent([String].self, forKey: .characters) ?? []
             techs = try c.decodeIfPresent(Bool.self, forKey: .techs) ?? false
+            items = try c.decodeIfPresent(Bool.self, forKey: .items) ?? false
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -54,6 +59,7 @@ public struct Project: Codable, Equatable, Sendable {
             if !songs.isEmpty { try c.encode(songs, forKey: .songs) }
             if !characters.isEmpty { try c.encode(characters, forKey: .characters) }
             if techs { try c.encode(techs, forKey: .techs) }
+            if items { try c.encode(items, forKey: .items) }
         }
     }
 
@@ -330,7 +336,34 @@ public struct ItemDef: Codable, Equatable, Sendable, Identifiable {
     public var kind: String            // weapon|helmet|armor|accessory|consumable
     public var price: Int?
     public var effect: String?
+    /// A ROM item's record B fields by `CTItemROM.statFields[kind]` (docs/items.md).
     public var stats: [String: Int]?
+    /// The ROM item this file edits (absent: a project-only item).
+    public var rom: Record? = nil
+    /// The menu description, in the dialogue codec's text.
+    public var description: String? = nil
+
+    /// The record A bytes and the read-only icon of a ROM item. Equip, boost,
+    /// element bonus and target mode are present only where the category has them.
+    public struct Record: Codable, Equatable, Sendable {
+        public var itemId: Int                 // 0-$F1, fixes the category
+        public var icon: Int                   // name byte 0, read-only
+        public var flags: Int                  // record A byte 0
+        public var equip: Int?                 // byte 3: bit 7 - character (weapons to accessories)
+        public var boost: Int?                 // byte 4: ItemBoosts index (weapons, armour, helmets)
+        public var elementBonus: Int?          // byte 5: bits 7-4 by CTItemROM.elements
+        public var targetMode: Int?            // ItemTargetMode byte (consumables)
+        public init(itemId: Int, icon: Int, flags: Int, equip: Int? = nil, boost: Int? = nil,
+                    elementBonus: Int? = nil, targetMode: Int? = nil) {
+            self.itemId = itemId; self.icon = icon; self.flags = flags; self.equip = equip; self.boost = boost
+            self.elementBonus = elementBonus; self.targetMode = targetMode
+        }
+    }
+    public init(id: String, name: String, kind: String, price: Int? = nil, effect: String? = nil,
+                stats: [String: Int]? = nil, rom: Record? = nil, description: String? = nil) {
+        self.id = id; self.name = name; self.kind = kind; self.price = price; self.effect = effect
+        self.stats = stats; self.rom = rom; self.description = description
+    }
 }
 
 // MARK: - techs/<id>.json

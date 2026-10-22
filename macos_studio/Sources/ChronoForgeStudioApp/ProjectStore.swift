@@ -188,17 +188,18 @@ public final class ProjectStore {
     }
 
     static func isEmpty(_ spec: Project.ROMBuild) -> Bool {
-        spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs
+        spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items
     }
 
     /// Saves the project's `rom` section (nil: no packs or songs). Its
-    /// `characters` and `techs` are kept: the Characters pane sets them
-    /// (updateROMCharacters, updateROMTechs).
+    /// `characters`, `techs` and `items` are kept: their panes set them
+    /// (updateROMCharacters, updateROMTechs, updateROMItems).
     public func updateROMBuild(_ spec: Project.ROMBuild?) -> Bool {
         guard var candidate = project else { return false }
         var merged = spec ?? Project.ROMBuild()
         merged.characters = candidate.project.rom?.characters ?? []
         merged.techs = candidate.project.rom?.techs ?? false
+        merged.items = candidate.project.rom?.items ?? false
         candidate.project.rom = Self.isEmpty(merged) ? nil : merged
         do {
             try candidate.save()

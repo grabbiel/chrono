@@ -35,6 +35,16 @@ def reference_codec():
     return module
 
 
+def workspace_path(path):
+    """`path` relative to the workspace, through the unresolved refs/ link
+    (in a linked worktree refs/ChronoRET resolves outside the workspace)."""
+    path = Path(path)
+    try:
+        return str(path.relative_to(WORKSPACE))
+    except ValueError:
+        return str((REFERENCE / path.resolve().relative_to(REFERENCE.resolve())).relative_to(WORKSPACE))
+
+
 def pc(address):
     return int(address.replace("$", "").replace(":", ""), 16) - 0xC00000
 
@@ -146,8 +156,7 @@ def build(rom):
              codec.CONSTANTS, survey_path]
     evidence = {
         "schema": "ct-text-verification/1", "romSHA256": ROM_SHA256,
-        "sources": [{"path": str(p.relative_to(WORKSPACE)), "sha256": digest(p.read_bytes())}
-                    for p in paths],
+        "sources": [{"path": workspace_path(p), "sha256": digest(p.read_bytes())} for p in paths],
         "controlTable": control_evidence(rom, codec),
         "dictionary": {"pointerPC": 0x1EFA00, "entryCount": 128,
                        "directEntries": 127, "extendedEntry127Bytes": [18, 104],

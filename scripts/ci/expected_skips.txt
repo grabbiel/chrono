@@ -53,3 +53,8 @@ ChronoForgeMetalTests.PPURendererTests/testOffscreenFrameRenders                
 ChronoForgeMetalTests.PPURendererTests/testShaderLibraryCompiles                                may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPURendererTests/testSNESPPUViewInits                                     may-skip  # Metal device availability on hosted runners
 ChronoForgeCoreTests.CTTilesetsTests/testImportFromTheROM                                       skip      # local ROM
+ChronoForgeCoreTests.CTItemsTests/testBuilderItemRefusals                                       skip      # local ROM
+ChronoForgeCoreTests.CTItemsTests/testEditedItemsWriteOnlyTheirBytesAndReadBack                 skip      # local ROM
+ChronoForgeCoreTests.CTItemsTests/testEquipStatsOnTheImportedTables                             skip      # local ROM
+ChronoForgeCoreTests.CTItemsTests/testImportThenBuildIsIdentical                                skip      # local ROM
+ChronoForgeCoreTests.CTTextAnalyzerTests/testItemDescriptionsAnalyzeToTheirROMSize              skip      # local ROM

@@ -25,7 +25,8 @@ MyGame.ctproj/
 ├── party.json                    # ct-party/1: exp table + equipment, from the ROM (optional)
 ├── sprites/<id>.sprite.json      # OAM sprite assemblies + animation sets
 ├── sprites/<id>.png              # indexed 16-col sheet (mode P, 4bpp) or 4-col (2bpp)
-├── items/<id>.json               # weapons/helmets/armors/accessories/consumables
+├── items/<id>.json               # weapons/helmets/armors/accessories/consumables (+ a ROM item's record)
+├── item_tables.json              # ct-item-tables/1: ItemBoosts and the stat tables, from the ROM (optional)
 ├── techs/<id>.json               # single/dual/triple techs (legacy Studio format)
 ├── tech_system.json              # ct-techs/1: the game's tech tables, from the ROM (optional)
 ├── strings/dialogue.json         # UTF-8 strings; compiler emits CT text codec bytes
@@ -55,7 +56,8 @@ MyGame.ctproj/
                            { "entry": 30, "listing": "events/entry030.ctevents" } ],
            "songs": [ { "song": 1, "listing": "audio/songs/song01.ctsong" } ],
            "characters": ["crono", "robo"],
-           "techs": true }
+           "techs": true,
+           "items": true }
 }
 ```
 `rom` is optional: the event packs, songs and playable characters `chronoforge rom
@@ -63,6 +65,7 @@ build` writes into the base ROM (see [ROM builder](rom_builder.md),
 [song sequences](music_sequences.md) and [characters](characters.md)). Any list may
 be absent; `characters` names `characters/<id>.json` files that have a `pc` record.
 `techs` (absent = false) writes `tech_system.json`'s tables ([techs](techs.md)).
+`items` (absent = false) writes the ROM items and `item_tables.json` ([items](items.md)).
 
 ## `characters/<id>.json`
 ```json
@@ -218,6 +221,30 @@ animation's graphics bytes, the combination records' `mask`, `first` and row
 count, `userSets` and `areas` are read-only: the builder refuses values that differ
 from the base ROM's. `element`
 is absent for none. See [techs](techs.md) for each field's meaning and evidence.
+
+## `items/<id>.json` and `item_tables.json`
+```json
+{ "id": "5c_…", "name": "…", "kind": "armor", "price": 0,
+  "stats": { "defence": 0, "modifier": 0, "modifierOn": 0 },
+  "rom": { "itemId": 92, "icon": 0, "flags": 0, "equip": 0, "boost": 0, "elementBonus": 0 },
+  "description": "…" }
+```
+```json
+{ "schema": "ct-item-tables/1",
+  "boosts": [ { "stats": [], "amount": 0 }, { "stats": ["…"], "amount": 0 }, "… 23 entries" ],
+  "statOrder": ["… 7 stat names"], "statCaps": [0, "… 7"], "char5Attack": [0, "… 100"] }
+```
+(Values elided; `chronoforge items import` fills them from your ROM.) `id`,
+`name`, `kind`, `price`, `effect` and `stats` are the original item fields; `rom`
+and `description` are optional. A file without `rom` is a project-only item and
+is never built. For a ROM item, `stats` holds record B under the category's keys
+(`attack`, `byte1`, `critical`, `modifier`, `modifierArg`; `defence`,
+`modifier`, `modifierOn`; `battleFlags`, `special`, `specialArg`, `specialBits`;
+`useKind`, `restores`, `amount`, `byte3`). `rom.equip` is absent on consumables;
+`rom.boost` and `rom.elementBonus` appear only on weapons, armour and helmets;
+`rom.targetMode` only on consumables. `rom.icon`, `statOrder`, `statCaps` and
+`char5Attack` are read-only: the builder refuses values that differ from the base
+ROM's. See [items](items.md) for each field's meaning and evidence.
 
 ## Conventions (binding for all modules)
 - **Color**: stored as hex BGR555 word `"bgr555": "0x7FFF"` + derived `"srgb": [r,g,b]`

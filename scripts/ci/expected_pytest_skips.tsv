@@ -121,3 +121,8 @@ re_workspace/tests/test_tilesets.py::test_data_claims	local ROM not present (re_
 re_workspace/tests/test_tilesets.py::test_decoded_tilesets_are_consistent	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_tilesets.py::test_render_writes_a_png	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_tilesets.py::test_rom_routines_run_as_decoded	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_items.py::test_a_rule_without_the_caps_is_caught_by_the_rom	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_items.py::test_asm_claims	local ChronoRET checkout not present (re_workspace/refs/ChronoRET)
+re_workspace/tests/test_items.py::test_code_and_data_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_items.py::test_rom_routine_agrees_with_the_synthetic_vectors	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_items.py::test_rom_routines_agree_with_the_model	local ROM not present (re_workspace/ct_clean.sfc)

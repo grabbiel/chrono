@@ -67,6 +67,11 @@ public struct CTTextCodec: Sendable {
         return result
     }()
     private static let characters = Dictionary(uniqueKeysWithValues: glyphs.map { ($0.value, $0.key) })
+    /// The text of glyph `byte` ($A0-$FF; $EF " ", $FF "_"), nil when it has none.
+    /// For fixed-width names outside messages (item names).
+    public static func glyphText(_ byte: UInt8) -> String? { glyphs[byte] }
+    /// The glyph byte of one character's text, nil when it has none.
+    public static func glyphByte(_ text: String) -> UInt8? { characters[text] }
     private static let tags: [UInt8: String] = [
         0: "end", 4: "step", 5: "line", 6: "line indent", 7: "wait line", 8: "wait line indent",
         9: "page", 10: "page indent", 11: "wait page", 12: "wait page indent",
@@ -94,6 +99,11 @@ public struct CTTextCodec: Sendable {
         }
         self.candidates = candidates
     }
+
+    /// The dictionary entries the packer may use ($21 + index), glyph bytes each (CTTextAnalyzer).
+    public var dictionaryEntries: [[UInt8]] { Array(dictionary.prefix(127)) }
+    /// Whether the packer skips entry `index` (CTTextAnalyzer reports it as never chosen).
+    public static func isSkippedEntry(_ index: Int) -> Bool { skippedEntries.contains(index) }
 
     public struct Analysis: Equatable, Sendable {
         public let bytes: [UInt8]
