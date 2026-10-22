@@ -257,3 +257,12 @@ path as the script's first argument. `CTSceneDocumentTests` uses a synthetic
 two-object pack; its three ROM tests (every pack raised and lowered, every
 pack run on the timeline, locations to packs and map objects) skip without a
 local ROM.
+
+## Message preview
+
+With a ROM chosen, the statement inspector shows a message statement (`OpBB`,
+`OpC0`–`OpC4`) in the in-game dialogue box: the table is the last
+`OpB8_SetMsgPtr` before it, and `OpC2`/`OpC4` place the box at the bottom. It
+uses `DialoguePreviewView` (page stepping, frame-by-frame play, overflow
+warnings); see [dialogue box](dialogue.md). `--scene-statement 0340` at launch
+selects a statement by offset.

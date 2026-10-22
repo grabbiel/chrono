@@ -90,7 +90,8 @@ struct LocationSceneEditor: View {
     @State private var textSelection: TextSelection?
     @State private var listingEdited = false
     /// `--scene-object N` at launch selects object N (screenshots, demos).
-    @State private var selection = SceneSelection(object: LaunchArguments.value("--scene-object").flatMap { Int($0) }, function: 0)
+    @State private var selection = SceneSelection(object: LaunchArguments.value("--scene-object").flatMap { Int($0) }, function: 0,
+                                                  offset: LaunchArguments.value("--scene-statement").flatMap { Int($0, radix: 16) })
     @State private var tab = LaunchArguments.value("--scene-tab") ?? "Map"
     @State private var diagnostic = ""
     @State private var showListing = LaunchArguments.value("--scene-listing") != "hide"
@@ -119,7 +120,8 @@ struct LocationSceneEditor: View {
                                            analysis: analysis, selection: $selection, edit: edit)
                         }
                         Divider()
-                        SceneStatementInspector(analysis: analysis, selection: $selection, edit: edit)
+                        SceneStatementInspector(analysis: analysis, selection: $selection, edit: edit,
+                                                romPath: store.sceneROMPath)
                     }
                     .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .clipped()
@@ -293,6 +295,8 @@ struct SceneStatementInspector: View {
     let analysis: CTSceneAnalysis
     @Binding var selection: SceneSelection
     let edit: ((inout CTSceneDocument) throws -> Void) -> Void
+    /// The ROM a message statement's dialogue box preview reads.
+    var romPath: String? = nil
     @State private var operands = ""
     @State private var insertOp = "OpAD_WaitRuns"
     @State private var insertOperands = "$10"
@@ -361,7 +365,21 @@ struct SceneStatementInspector: View {
                  + (m.mode == 0x0B ? " — the save-slot list" : m.mode == 0x0C ? " — the shop list" : "")
                  + (m.list.map { ", list \($0)" } ?? ""))
                 .font(.caption)
+        } else if let message = Self.message(s, analysis) {
+            DialoguePreviewView(source: .message(table: message.table, index: message.index), romPath: romPath,
+                                place: message.place, scale: 1.5)
         }
+    }
+
+    /// A message statement's table (the last OpB8_SetMsgPtr before it) and index; OpC1/OpC3 put
+    /// the box at the top, OpC2/OpC4 at the bottom (Field_Unk30), OpBB/OpC0 shown at the top.
+    static func message(_ s: CTSceneAnalysis.Statement, _ analysis: CTSceneAnalysis) -> (table: Int, index: Int, place: Int)? {
+        guard [0xBB, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4].contains(s.opcode), let index = s.operands.first,
+              let set = analysis.statements.last(where: { $0.opcode == 0xB8 && $0.offset < s.offset && $0.operands.count == 3 })
+        else { return nil }
+        let table = set.operands[0] | set.operands[1] << 8 | set.operands[2] << 16
+        guard table >> 16 >= 0xC0 else { return nil }
+        return (table, index, [0xC2, 0xC4].contains(s.opcode) ? 2 : 1)
     }
 
     private func applyOperands() {

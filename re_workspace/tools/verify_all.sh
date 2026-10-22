@@ -222,6 +222,14 @@ if [ -f macos_studio/Package.swift ]; then
   $PY macos_studio/tools/verify_enemy_build.py >/tmp/verify_enemy_build.log 2>&1
   RC=$?
   note "Enemy write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_enemy_build.log | tail -1) loader runs on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Dialogue box: font, window, layout and pacing claims (TextWin_DrawGlyph on 608 glyphs, the window
+  # routines and Field_Unk1F87 on real and synthetic messages in ChronoRET's interpreter); the CLI agrees.
+  $PY re_workspace/tools/ct_dialogue.py check --run >/tmp/verify_dialogue.log 2>&1
+  RC=$?
+  note "dialogue box claims ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_dialogue.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  $PY re_workspace/tools/ct_dialogue.py verify-cli macos_studio/.build/debug/chronoforge >/tmp/verify_dialogue_cli.log 2>&1
+  RC=$?
+  note "dialogue CLI = ct_dialogue ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_dialogue_cli.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi
