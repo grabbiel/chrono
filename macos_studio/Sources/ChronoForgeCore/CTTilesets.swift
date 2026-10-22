@@ -492,16 +492,14 @@ public enum CTTilesets {
             guard let ts = project.tilesets[id3(n)] else { problems.append("\(id3(n)): not imported"); continue }
             let d = try CTTilesetROM.decode3(rom, n)
             if ts.metatiles != metatiles(d.meta) { problems.append("\(ts.id): metatiles differ") }
+            if ts.vram?.known != spans(d.window) { problems.append("\(ts.id): known characters differ") }
             if try sheetTiles(ts) != windowTiles(d.window, bpp: 2) { problems.append("\(ts.id): sheet differs") }
         }
         for p in CTTilesetROM.users(rom, \.palette).keys.sorted() {
             checked += 1
             guard let ts = project.tilesets[idPalette(p)] else { problems.append("\(idPalette(p)): not imported"); continue }
             let d = CTTilesetROM.decodePalette(rom, p)
-            let rows = (ts.palettes ?? []).map { $0.map(word) }
-            if rows.count != 8 || (0..<7).contains(where: { Array(rows[$0 + 1].dropFirst()) != d.rows[$0] }) {
-                problems.append("\(ts.id): palette rows differ")
-            }
+            if ts.palettes != paletteRows(d.rows) { problems.append("\(ts.id): palette rows differ") }
             if (ts.paletteCycles ?? []) != paletteCycles(d.cycles) { problems.append("\(ts.id): palette cycles differ") }
         }
         return (checked, problems)
