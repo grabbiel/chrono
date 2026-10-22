@@ -334,9 +334,15 @@ public enum CTTechROM {
         for c in 0..<CTCharacterROM.count {
             let at = CTCharacterROM.recordPC(c) + 2
             let all = l.counts[c] >= singlesPerCharacter ? UInt8(allTechsBit) : 0
-            out.append((at, [rom[at] & ~UInt8(allTechsBit) | all], "character \(c) all-singles bit"))
+            out.append((at, [rom[at] & ~UInt8(allTechsBit) | all], "record \(c) all-singles bit"))
         }
         return out
+    }
+
+    /// Whether a report write's `what` is one of `writes`'.
+    public static func isTechWrite(_ what: String) -> Bool {
+        ["tech $", "part ", "TechTpCost", "combination $", "new-game tech state"].contains { what.hasPrefix($0) }
+            || what.hasPrefix("record ") && what.hasSuffix(" all-singles bit")
     }
 
     // MARK: Import

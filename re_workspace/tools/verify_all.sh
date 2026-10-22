@@ -134,6 +134,13 @@ if [ -f macos_studio/Package.swift ]; then
     && $PY re_workspace/tools/ct_sprites.py verify-import "$SPRITE_DIR/p.ctproj" >>/tmp/verify_sprite_import.log 2>&1
   note "Sprite import (CLI = ct_sprites.py decode)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   rm -rf "$SPRITE_DIR"
+  # Techs: CLI import = ct_techs.py decode, CLI tech-point runs = its rule, identical
+  # rebuild, edits checked by ct_rom_check.py and learned by the ROM's AwardTechPoints.
+  $PY macos_studio/tools/verify_tech_build.py >/tmp/verify_tech_build.log 2>&1
+  note "Tech system (import, TP runs, build)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
+  $PY re_workspace/tools/ct_techs.py check --run >/tmp/verify_tech_claims.log 2>&1
+  RC=$?
+  note "Tech evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_tech_claims.log) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

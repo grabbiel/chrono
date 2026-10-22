@@ -53,6 +53,11 @@ func cmdRom(_ args: [String]) -> Int32 {
                 print("character \(c.id): record \(c.charId) at \(c.address), \(fields) field(s) changed" +
                       (c.growth == nil ? "" : " (growth rows included)"))
             }
+            if report.techs != nil {
+                let changed = report.writes.filter { CTTechROM.isTechWrite($0.what) }
+                print("techs: \(changed.count) table write(s) changed" +
+                      (changed.isEmpty ? "" : " (" + changed.prefix(6).map(\.what).joined(separator: ", ") + (changed.count > 6 ? ", ..." : "") + ")"))
+            }
             print(String(format: "wrote %@: checksum $%04X, %d bytes of free space left", out, report.checksum, report.freeBytesLeft))
         case "info":
             let rom = try readROM(positional[0])
