@@ -163,7 +163,9 @@ private struct DialogueBoxPicture: NSViewRepresentable {
         if c.key != key || c.blank == nil {
             c.key = key
             c.blank = box.blankFrame()
+            player.restart()
         }
+        guard !layout.frames.isEmpty else { return }
         let lines = CTDialogueBox.boxLines(place: layout.settings.place)
         // The 224-line picture, shown so the 80 box lines fill the view.
         let fullHeight = 224 * scale
