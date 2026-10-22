@@ -56,8 +56,19 @@ final class CTEnemySpritesTests: XCTestCase {
             XCTAssertEqual(d.rows, want.animations.rows)
             XCTAssertEqual(d.frames.map { $0.cells }, want.frameList.map { $0.cells })
             XCTAssertEqual(d.frames.map { $0.pieces.map { [$0.x, $0.y] } }, want.frameList.map { $0.pieces })
-            XCTAssertEqual(d.animations.map { [$0.row ?? -1, $0.facing ?? -1] + $0.frames + [-1] + $0.durations },
-                           want.animationList.map { [$0.row, $0.facing] + $0.frames + [-1] + $0.durations })
+            // Rows built step by step: CI's older type checker (Xcode 26.6) gives up on long literal chains.
+            var gotRows: [[Int]] = [], wantRows: [[Int]] = []
+            for a in d.animations {
+                var row: [Int] = [a.row ?? -1, a.facing ?? -1]
+                row.append(contentsOf: a.frames); row.append(-1); row.append(contentsOf: a.durations)
+                gotRows.append(row)
+            }
+            for a in want.animationList {
+                var row: [Int] = [a.row, a.facing]
+                row.append(contentsOf: a.frames); row.append(-1); row.append(contentsOf: a.durations)
+                wantRows.append(row)
+            }
+            XCTAssertEqual(gotRows, wantRows)
             XCTAssertEqual(TileDecoder.decodeIndices(d.tiles.flatMap { $0 }, depth: .bpp4),
                            CTSpritesTests.bytes(want.tileIndices))
         }

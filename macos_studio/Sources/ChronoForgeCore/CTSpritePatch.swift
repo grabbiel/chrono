@@ -256,7 +256,8 @@ public enum CTSpritePatch {
             for i in first..<CTSpriteROM.pointers {
                 let at = CTSpriteROM.pc(table + size * i)
                 if rom[at..<(at + CTSpriteROM.sprRecBytes)].allSatisfy({ $0 == 0 }) { continue }
-                let hits = fields.filter { parts.contains($0.part) && CTSpriteROM.u8(rom, table + size * i + $0.offset) == c }
+                let record: Int = table + size * i
+                let hits = fields.filter { f in parts.contains(f.part) && CTSpriteROM.u8(rom, record + f.offset) == c }
                 if !hits.isEmpty { out.append("\(CTSpriteROM.snes(table)) record \(i): \(hits.map(\.part).joined(separator: ", "))") }
             }
         }

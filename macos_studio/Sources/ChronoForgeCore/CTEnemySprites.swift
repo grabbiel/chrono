@@ -83,7 +83,13 @@ public enum CTEnemySpriteROM {
             guard CTSpriteROM.pc(tilesAt) + 32 * n <= rom.count else {
                 throw CTROMBuildError(String(format: "enemy %d: tiles at %@ run past the ROM", i, CTSpriteROM.snes(tilesAt)))
             }
-            tiles = (0..<n).map { Array(rom[(CTSpriteROM.pc(tilesAt) + 32 * $0)..<(CTSpriteROM.pc(tilesAt) + 32 * ($0 + 1))]) }
+            let base: Int = CTSpriteROM.pc(tilesAt)
+            var list: [[UInt8]] = []
+            for t in 0..<n {
+                let at: Int = base + 32 * t
+                list.append(Array(rom[at..<(at + 32)]))
+            }
+            tiles = list
         }
         let framesAt = CTSpriteROM.u24(rom, CTSpriteROM.framesPtr + 3 * r.frames)
         let n = frameCount(rom, frameSet: r.frames, recordBytes: shape.recordBytes)
