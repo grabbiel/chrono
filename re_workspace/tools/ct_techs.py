@@ -534,15 +534,17 @@ def data_claims(rom):
     if REF.exists():
         glyphs = _glyphs()
         names = [tech_name(rom, t, glyphs)[1] for t in range(TECHS)]
-        groups = {"lightning": ("Lightning", "Luminaire"), "shadow": ("Dark Bomb", "Dark Mist", "DarkMatter"),
-                  "water": ("Ice", "Water"), "fire": ("Fire", "Flare")}
-        bad = []
+        # Plain element words, not names: a single whose name starts with one has that element.
+        groups = {"lightning": ("Lightning",), "shadow": ("Dark",), "water": ("Ice", "Water"), "fire": ("Fire", "Flare")}
+        bad, seen = [], 0
         for element, words in groups.items():
             for t in range(1, FIRST_DOUBLE):
-                if any(names[t] == w or names[t].startswith(w + " ") for w in words):
+                if names[t].startswith(words):
+                    seen += 1
                     if element_of(techs[t]["element_bits"] << 4) != element:
                         bad.append(names[t])
-        claim("the elemental singles' names agree with their element bit", not bad, repr(bad))
+        claim("the elemental singles' names agree with their element bit", not bad and seen >= 8,
+              f"{seen} named singles; disagreeing: {bad!r}")
     return out
 
 
