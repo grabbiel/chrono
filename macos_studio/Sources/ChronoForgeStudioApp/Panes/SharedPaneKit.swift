@@ -29,17 +29,20 @@ struct EditorHost<T: Equatable, Content: View>: View {
     let entity: T
     let apply: (T) -> Void
     @ViewBuilder let content: (Binding<T>) -> Content
-    @State private var copy: T?
+    // Seeded before the first draw: seeding in `onAppear` on a Group that is
+    // empty until then never ran, so every pane using this stayed blank.
+    @State private var copy: T
+
+    init(entity: T, apply: @escaping (T) -> Void, @ViewBuilder content: @escaping (Binding<T>) -> Content) {
+        self.entity = entity
+        self.apply = apply
+        self.content = content
+        _copy = State(initialValue: entity)
+    }
 
     var body: some View {
-        Group {
-            if copy != nil {
-                content(Binding<T>(
-                    get: { _copy.wrappedValue! },
-                    set: { _copy.wrappedValue = $0 }))
-            }
-        }
-        .onAppear { copy = entity }
+        content($copy)
+            .onChange(of: entity) { _, newValue in copy = newValue }
     }
 }
 
