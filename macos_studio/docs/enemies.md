@@ -209,7 +209,9 @@ The attack record and AI script text are read-only. The script view lists the
 enemy techs it names. **Write to ROM** adds the enemy to `rom.enemies`. A range
 problem shows under the header before a build.
 
-No decoder covers enemy battle sprites yet, so a placeholder stands in.
+The view shows the enemy's battle sprite at rest once **Sprites → Import Sprites
+from ROM…** has imported it (`sprites/enemy_NNN.*`, read-only;
+[Enemy sprites](sprites.md#enemy-sprites)); until then a placeholder stands in.
 
 ## Write-back
 

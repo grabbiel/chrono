@@ -8,7 +8,8 @@ decode (`verify-import`). Building the unmodified import with all seven in
 tile's pixels, a frame's cell and OBJ offset, an animation's frame id and a
 row's duration, and palette colours are edited and built; the result is checked by
 re_workspace/tools/ct_rom_check.py, decoded again by `ct_sprites.py
-verify-import --rom <built>` (it must give the edited project back), and the
+verify-import --rom <built> --pc-only` (it must give the edited project back;
+the enemy sprites stay a snapshot of the clean ROM), and the
 ROM's own frame decoder Battle_DrawBattlerFrameAnyLayout ($C1:1C55, run in
 ChronoRET's 65816 interpreter) on the built ROM must produce the edited
 frames from tiles encoded independently from the edited sheet. The checker
@@ -127,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-sprites-') as directory:
         fail(f'writes {written}')
     print(run(python, workspace / 'tools/ct_rom_check.py', out, report), end='')
     # The built ROM decodes to the edited project (frames, animations, palettes, sheets).
-    print(run(python, workspace / 'tools/ct_sprites.py', 'verify-import', project, '--rom', out).splitlines()[-1],
+    print(run(python, workspace / 'tools/ct_sprites.py', 'verify-import', project, '--rom', out, '--pc-only').splitlines()[-1],
           '(the built ROM decodes to the edited project)')
 
     # The ROM's own frame decoder on the built ROM gives the edited frames,

@@ -78,3 +78,4 @@ ChronoForgeCoreTests.CTEnemiesTests/testEditedEnemyWritesOnlyItsFields          
 ChronoForgeCoreTests.CTEnemiesTests/testBuilderEnemyRefusals                                    skip      # local ROM
 ChronoForgeCoreTests.CTDialogueTests/testCorpusTablesLayOutAndRender                              skip      # local ROM
 ChronoForgeCoreTests.CTSpritePatchTests/testImportThenBuildIsIdentical                          skip      # local ROM
+ChronoForgeCoreTests.CTEnemySpritesTests/testImportEveryEnemy                                   skip      # local ROM

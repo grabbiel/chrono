@@ -235,6 +235,13 @@ if [ -f macos_studio/Package.swift ]; then
   $PY macos_studio/tools/verify_sprite_build.py >/tmp/verify_sprite_build.log 2>&1
   RC=$?
   note "Sprite write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_sprite_build.log | tail -1) frame decoder runs on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Enemy battle sprites: the sprite claims above include them (the field and battle loaders'
+  # source, Decomp_ToWram and the frame decoder run for every enemy), and the import check
+  # covers sprites/enemy_NNN.*; this line reports the enemy part of both logs.
+  grep -q "^ok   the ROM's frame decoder (\$C1:1C55, run) = the enemy decode" /tmp/verify_sprite_claims.log \
+    && grep -q "^ok   enemies: frames, cells" /tmp/verify_sprite_import.log
+  RC=$?
+  note "Enemy sprites ($(grep -oE '[0-9]+ frames of [0-9]+ distinct' /tmp/verify_sprite_claims.log | tail -1) enemy sprites through the ROM's frame decoder; import checked)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

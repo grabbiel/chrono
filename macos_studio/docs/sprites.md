@@ -8,7 +8,8 @@ every claim's check is `re_workspace/tools/ct_sprites.py`; the Swift twin is
 
 No ROM data is stored in the repository: the import reads it from your ROM
 into your project. `rom build` writes the sets back in place (see
-[Writing back](#writing-back)).
+[Writing back](#writing-back)). The enemies' battle sprites are decoded and
+imported too, read-only (see [Enemy sprites](#enemy-sprites)).
 
 ## The data
 
@@ -192,11 +193,18 @@ Impact:
     independent composition of the decoded cells.
 - `verify_all.sh` runs `check --run` and a CLI import checked by
   `ct_sprites.py verify-import`.
+- Enemy sprites: `test_sprites.py` adds ROM-free tests (the literal-only
+  Decomp stream, OBJ assembly, the synthetic enemies, the enemy vectors file)
+  and local ones (source, code and data claims; the ROM's unpacker and frame
+  decoder for five enemies). `CTEnemySpritesTests` checks the decode and the PPU
+  scene against `enemy_sprite_vectors.json`, the OBJ assembly, the Enemies
+  view's hook and (local ROM) the import of every enemy.
 
 ## Limitations
 
-- Only the playable characters' sets are decoded. Enemy sprites (`$E4:F600`,
-  10-byte records, other frame layouts) and NPC sets are not.
+- The playable characters' sets are decoded and written back; enemy sprites are
+  decoded and imported read-only ([Enemy sprites](#enemy-sprites)); NPC sets are
+  not decoded.
 - The weapon colours (13–15) are not imported, and the import uses OBJ palette 0
   where the battle uses 5–7.
 - `hitbox` and `weapon` are Studio metadata. They are not decoded from the game
@@ -278,3 +286,88 @@ Evidence (`macos_studio/tools/verify_sprite_build.py`, with the ROM):
 
 Growing a set (more tiles or frames) needs free-space relocation and pointer
 updates in `$E4:2000/2300`; that is a later step.
+
+## Enemy sprites
+
+An enemy's battle sprite is a record of `RomE4_EnemySprRec` / `BattleRom_EnemySpr`
+(`$E4:F600`, 10 bytes, one per enemy id 0–254). It names a graphics pack, a frame
+set, a palette and an animation set in the PC tables above, plus a frame layout.
+
+| Byte | Field | Reader |
+|---|---|---|
+| +0 | graphics: `$E4:2000` pointer index | `Evt_Op83_InitEnemySprite` (`$C0:46DF`): below `$F8` the pack is unpacked by `Decomp_ToWram` to `$7F`; from `$F8` up the ROM tiles are used as they are |
+| +1 | frame set (`$E4:2300`) | `Battle_InitScene` (`$CC:E000`) by enemy id |
+| +2 | palette (`$E4:0000` + 24 × p, 12 colours) | `Evt_Op83` to `Obj_PalSrc`; the battle takes it from the field object's attribute |
+| +3 | animation set (`$E4:2600/2800`) | both, as for a PC |
+| +4 | bits 0–1 frame layout (`Obj_SprSize`), bits 2, 3, 5, 7 flags | `FieldBtl_SaveObj` keeps the layout in `FieldBtlObj.Flags`; `Battle_InitScene` uses `Flags & 7` |
+| +5…+9 | screen offset x, y, half width, height, move speed (bits 0–2) and delay (bits 4–7) | `Battle_InitScene` by enemy id |
+
+Frame layouts (from `BattleRom_FrameLayout`, `FrameBytes` and `LayoutSprBytes`):
+
+| Layout | Cells | Record | OBJs (16×16) | Enemies |
+|---|---|---|---|---|
+| 0 | 8 × 2 | 40 B | 4 | 150 |
+| 1 | 16 × 2 | 80 B | 8 | 77 |
+| 2 | 8 × 6 | 120 B | 12 | 25 |
+| 3 | 96 × 1 | 240 B | 24 | 3 (111, 147, 215) |
+
+A frame record is the cell words (as for a PC: bits 0–10 a tile, 0 blank, bit 14
+mirrors) then one signed (x, y) pair per OBJ. OBJ n shows cells (2p, 2q),
+(2p, 2q+1), (2p+1, 2q), (2p+1, 2q+1) with p, q = divmod(n, columns / 2): the OBJs
+run along row pairs. This comes from the battle's DMA tables and OBJ records
+(`BattleRom_SprTileListPtr`: slot s's OBJs start at `Battle_SprRec` record 4s;
+layout 2 in slot 3 uses the fixed DMA words of `Battle_InitSceneGfx`, elsewhere
+the row order of layout 5) and holds for layout 0 in all 8 enemy slots, layout 1
+in slots 3, 5, 7 and 9 and layout 2 in slots 3 and 6. No slot gives layout 3 an
+assembly, so those three records are not imported.
+
+### Evidence
+
+`ct_sprites.py check` matches `Evt_Op83_InitEnemySprite`, `FieldBtl_SaveObj`,
+`Battle_InitScene`, `Battle_InitSceneGfx`, `Battle_DrawBattlerFrameAnyLayout` and
+`BattleCF_BuildSprites` line by line in ChronoRET's source, the constants they
+use, the ROM's code bytes at `$C0:46DF`, `$CC:E000` and `$CC:ED87`, and these
+data claims: the layout table above; the 96 packs records 0–247 name unpack to
+whole 4bpp tiles; records `$F8`–`$FF` name only PC tile blocks; palettes have
+bit 15 clear; animation sets are below 255.
+
+`check --run` runs, in ChronoRET's 65816 interpreter, the ROM's `Decomp_ToWram`
+(`$C3:0557`) on all 96 packs (equal to the Python unpacker) and its frame decoder
+(`$C1:1C55`) on every frame of the 114 distinct (graphics, frame set, layout)
+sprites in layouts 0–2: 3015 frames, in slot 3 and, for layout 2, slot 6. Each
+equals the decode. The run does not cover `Battle_InitScene` itself.
+
+### Import
+
+`chronoforge sprites import` (and the Studio's **Import Sprites from ROM…**)
+writes `sprites/enemy_NNN.sprite.json` and `.png` for the 252 records of
+layouts 0–2 (`--enemy N` for some only; `--set` alone imports no enemies):
+
+- `rom.family` is `ct-enemy`, `rom.set` the enemy id, `rom.layout` the frame
+  layout and `rom.packed` whether the tiles were unpacked.
+- `stream` is columns × rows at OBJ tile `$40` (slot 3); OBJ n is a 16×16 at
+  tile 32p + 2q, palette 0, priority 2.
+- The palette is colour 0, the 12 ROM colours, then three zeros. The sheet holds
+  the pack's tiles, 16 per row.
+- An enemy character (`enemy.enemyId`) without a `sprite` is linked to its sprite;
+  the Enemies view shows the sprite's rest frame (its first animation's first
+  frame) through the PPU model.
+
+`ct_sprites.py verify-import` checks the import against `decode_enemy` for every
+record. Packs shared by several enemies are copied into each sprite's sheet.
+
+### Limitations
+
+- Read-only: `rom.sprites` refuses `ct-enemy` sprites, so enemy edits stay in the
+  project. An imported enemy sprite is a snapshot of the clean ROM: records
+  `$F8`–`$FE` show PC tile blocks, frames and palettes, and a PC write-back
+  reports them under `sharedWith` but does not update their project files.
+- Layout 3 (records 111, 147 and 215) is not imported.
+- Records 117 and 253 have cells past their graphics. They show as blank in the
+  Studio. In the game they read past the pack. Records 26, 27 and 254 have
+  animations naming frames past the frame set; the import leaves those
+  animations out.
+- The battle's palette slot, the record's flags, screen offsets, size and move
+  fields are decoded (`decode-enemy`) but not imported.
+- No emulator run: the evidence is the ROM's code, data and its own unpacker and
+  frame decoder executed.

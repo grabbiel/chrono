@@ -2,10 +2,11 @@ import Foundation
 import ChronoForgeCore
 
 private let spritesUsage = """
-usage: chronoforge sprites import <rom.sfc> --project <project.ctproj> [--set N ...]
+usage: chronoforge sprites import <rom.sfc> --project <project.ctproj> [--set N ...] [--enemy N ...]
+         (no --set or --enemy: the 7 playable characters and every enemy; with either, only those)
        chronoforge sprites show <project.ctproj | rom.sfc> [sprite] [--frame N] [--onion N]
                                 [--png out.png] [--scale K]
-         <sprite>: a project sprite id; from a ROM a name (crono ... magus) or 0-6
+         <sprite>: a project sprite id; from a ROM a name (crono ... magus), 0-6 or enemy_NNN
 """
 
 /// A sprite with its sheet tiles and palette, from a project or decoded from a ROM.
@@ -25,24 +26,34 @@ private func loadSprites(_ path: String) throws -> [LoadedSprite] {
         }
     }
     let rom = try readROM(path)
-    return (0..<CTSpriteROM.sets).map { c in
+    var out = (0..<CTSpriteROM.sets).map { c in
         let d = CTSpriteROM.decode(rom: rom, set: c)
         let sheet = CTSpriteROM.sheet(d)
         return LoadedSprite(sprite: CTSpriteROM.spriteDef(d, id: CTSpriteROM.names[c]),
                             sheet: SpriteSheet.tiles(sheet), palette: sheet.palette)
     }
+    for i in 0..<CTEnemySpriteROM.ids where CTEnemySpriteROM.assembled.contains(CTEnemySpriteROM.record(rom, i).size) {
+        let d = try CTEnemySpriteROM.decode(rom: rom, id: i)
+        let sheet = CTEnemySpriteROM.sheet(d)
+        out.append(LoadedSprite(sprite: CTEnemySpriteROM.spriteDef(d, id: CTEnemySpriteROM.id(i)),
+                                sheet: SpriteSheet.tiles(sheet), palette: sheet.palette))
+    }
+    return out
 }
 
 func cmdSprites(_ args: [String]) -> Int32 {
     guard let operation = args.first, ["import", "show"].contains(operation) else {
         print(spritesUsage); return 2
     }
-    var positional: [String] = [], options: [String: String] = [:], sets: [Int] = []
+    var positional: [String] = [], options: [String: String] = [:], sets: [Int] = [], enemies: [Int] = []
     var i = 1
     while i < args.count {
-        if ["--project", "--frame", "--onion", "--png", "--scale", "--set"].contains(args[i]) {
+        if ["--project", "--frame", "--onion", "--png", "--scale", "--set", "--enemy"].contains(args[i]) {
             guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
-            if args[i] == "--set" {
+            if args[i] == "--enemy" {
+                guard let n = Int(args[i + 1]) else { print("--enemy takes 0-254"); return 2 }
+                enemies.append(n)
+            } else if args[i] == "--set" {
                 guard let n = Int(args[i + 1]) ?? CTSpriteROM.names.firstIndex(of: args[i + 1]) else {
                     print("--set takes 0-6 or a name"); return 2
                 }
@@ -60,15 +71,32 @@ func cmdSprites(_ args: [String]) -> Int32 {
         case "import":
             guard positional.count == 1, let path = options["--project"] else { print(spritesUsage); return 2 }
             var project = try CTProject.load(from: URL(fileURLWithPath: path))
-            let ids = try CTSpriteROM.importSprites(rom: try readROM(positional[0]), into: &project,
-                                                   sets: sets.isEmpty ? Array(0..<CTSpriteROM.sets) : sets)
+            let rom = try readROM(positional[0])
+            let all = sets.isEmpty && enemies.isEmpty
+            var ids: [String] = []
+            if all || !sets.isEmpty {
+                let wanted: [Int] = all ? Array(0..<CTSpriteROM.sets) : sets
+                ids = try CTSpriteROM.importSprites(rom: rom, into: &project, sets: wanted)
+            }
+            var foes: (ids: [String], skipped: [Int]) = ([], [])
+            if all || !enemies.isEmpty {
+                let wanted: [Int]? = all ? nil : enemies
+                foes = try CTEnemySpriteROM.importSprites(rom: rom, into: &project, ids: wanted)
+            }
             try project.save()
             for id in ids {
                 let s = project.sprites[id]!
                 print("\(id): set \(s.rom!.set), \(s.rom!.tileCount) tiles, \(s.frames.count) frames, " +
                       "\(s.animations.count) animations -> \(s.sheet)")
             }
-            let linked = project.characters.values.filter { c in c.sprite.map(ids.contains) ?? false }.map(\.id).sorted()
+            if !foes.ids.isEmpty || !foes.skipped.isEmpty {
+                var layouts = [0, 0, 0]
+                for id in foes.ids { layouts[project.sprites[id]!.rom!.layout ?? 0] += 1 }
+                print("enemies: \(foes.ids.count) sprites (frame layouts 0/1/2: \(layouts.map(String.init).joined(separator: "/")))" +
+                      " -> sprites/enemy_NNN.*" + (foes.skipped.isEmpty ? "" :
+                        "; left out (layout 3, no OBJ assembly): " + foes.skipped.map(String.init).joined(separator: " ")))
+            }
+            let linked = project.characters.values.filter { c in c.sprite.map((ids + foes.ids).contains) ?? false }.map(\.id).sorted()
             if !linked.isEmpty { print("characters with these sprites: \(linked.joined(separator: " "))") }
         default:
             guard (1...2).contains(positional.count) else { print(spritesUsage); return 2 }

@@ -162,6 +162,11 @@ original fields; files with only those still load and save unchanged.
 - `hitbox` and `weapon` are Studio fields about the origin; they are not
   written to the ROM.
 - `rom` records where the import read the set (see [Sprites](sprites.md)).
+  An enemy's battle sprite (`sprites/enemy_NNN.*`) has `rom.family` `ct-enemy`,
+  `rom.set` the enemy id, `rom.layout` its frame layout (0–2) and `rom.packed`
+  (tiles unpacked from a pack); its `stream` is 8 × 2, 16 × 2 or 8 × 6 at
+  baseTile 64. It is read-only: `rom.sprites` takes only `ct-pc` sets
+  ([Enemy sprites](sprites.md#enemy-sprites)).
 
 ## `tilesets/<id>.tileset.json`
 ```json
