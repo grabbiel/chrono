@@ -13,6 +13,9 @@ usage: chronoforge music list <rom.sfc>
        chronoforge music spc-render <snapshot.spc> [--seconds N] [--ipl ipl.rom] [--voices MASK] [--counter N]
                                                 [--timers-first] [--out song.wav]
        chronoforge music play <rom.sfc> <song> [--seconds N] [--ipl ipl.rom] [--volume V]
+       chronoforge music events <rom.sfc|song.ctsong> [song] [--json] [--steps N]
+       chronoforge music edit <song.ctsong> <roundtrip|semitone|length|delete|insert|control> ... [--out song.ctsong]
+       chronoforge music verify-model <rom.sfc> [--driver-steps N] [--songs a,b,...]
 
 driver-check --ipl uploads the boot blocks through the supplied 64-byte S-SMP
 IPL image instead of copying them into ARAM. No IPL image is bundled.
@@ -29,10 +32,18 @@ access in each clock (default: access first), libgme's order for those ties.
 play does render's load and plays the song live on the default output for N
 seconds (default 10) at volume V (0 to 1, default 1), as the Studio does, then
 reports the seconds played and any buffer underruns as JSON.
+events prints the event model's timeline (docs/music_tracker.md): each track's
+notes, rests and commands at the song step they happen, up to its song loop
+(--steps N runs N steps instead, through loops). edit changes a listing by
+line number (see `music edit` alone for its forms) and checks that it still
+assembles. verify-model reads every ROM song into the model and writes it back
+byte for byte; --driver-steps also plays each on the emulated driver and
+compares its key-ons and step timing with the model's over N steps.
 """
 
 func cmdMusic(_ args: [String]) -> Int32 {
     let operations = ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load", "render", "spc-render", "play"]
+    if let operation = args.first, ["events", "edit", "verify-model"].contains(operation) { return cmdMusicModel(args) }
     guard let operation = args.first, operations.contains(operation) else {
         print(musicUsage); return 2
     }
@@ -204,4 +215,208 @@ func cmdMusic(_ args: [String]) -> Int32 {
 /// A song number as `disasm`, `song-load` and `render` take it: decimal or `$` hex.
 private func songNumber(_ text: String) -> Int? {
     text.hasPrefix("$") ? Int(text.dropFirst(), radix: 16) : Int(text)
+}
+
+// MARK: - The event model (events, edit, verify-model)
+
+private let editUsage = """
+usage: chronoforge music edit <song.ctsong> roundtrip
+       chronoforge music edit <song.ctsong> semitone <line> <C..B>
+       chronoforge music edit <song.ctsong> length <line> <steps> [--shift]
+       chronoforge music edit <song.ctsong> delete <line>
+       chronoforge music edit <song.ctsong> insert <track> <step> <note, e.g. C#4> <steps>
+       chronoforge music edit <song.ctsong> control <line> <sample|volume|pan|...> <$XX>
+Lines are the listing's line numbers (a note's line for length and delete).
+--out writes the edited listing (default: standard output); roundtrip reads
+the listing into the model and checks it writes back the same text and bytes.
+"""
+
+private struct EventJSON: Encodable {
+    let step: Int, line: Int, kind: String, text: String
+    var length: Int?, note: String?, number: Int?, sample: Int?, volume: Int?, pan: Int?
+    var keyOn: Bool?, drum: Bool?, pass: Int?
+}
+
+private struct TrackJSON: Encodable {
+    let track: Int, stop: String, endStep: Int
+    let loopStart: Int?, loopEnd: Int?
+    let notes: Int
+    let events: [EventJSON]
+}
+
+private func modelDocument(_ path: String, song: String?) throws -> (CTSongDocument, CTSongTables?, String) {
+    if path.hasSuffix(".ctsong") {
+        let doc = CTSongDocument(listing: try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8))
+        return (doc, doc.tables, (path as NSString).lastPathComponent)
+    }
+    let rom = try readROM(path)
+    let songs = try CTSong.romSongs(rom)
+    guard let song, let n = songNumber(song), songs.indices.contains(n) else {
+        throw CTSongError("song must be 0-\(songs.count - 1)")
+    }
+    let tables = CTSongTables.rom(rom, song: n)
+    let listing = try CTSongListing.render(try CTSong(data: songs[n].data), tables: tables)
+    return (CTSongDocument(listing: listing), tables, String(format: "song $%02X", n))
+}
+
+private func eventsJSON(_ track: CTSongTimeline.Track) -> [EventJSON] {
+    let notes = Dictionary(track.notes.map { ($0.start, $0) }, uniquingKeysWith: { a, _ in a })
+    return track.events.map { e in
+        var j = EventJSON(step: e.step, line: e.item + 1, kind: e.statement.name,
+                          text: e.statement.text.trimmingCharacters(in: .whitespaces))
+        if e.length > 0 { j.length = e.length }
+        if case .note = e.statement, let n = notes[e.step], n.item == e.item {
+            j.length = n.length; j.note = CTSongTimeline.noteName(n.number); j.number = n.number
+            j.sample = n.sample; j.volume = n.volume; j.pan = n.pan; j.keyOn = n.keyOn; j.drum = n.drum; j.pass = n.pass
+        }
+        return j
+    }
+}
+
+func cmdMusicModel(_ args: [String]) -> Int32 {
+    let operation = args[0]
+    var positional: [String] = [], out: String?, json = false, shift = false, steps: Int?, driverSteps: Int?, only: [Int]?
+    var i = 1
+    while i < args.count {
+        switch args[i] {
+        case "--json" where operation == "events": json = true; i += 1
+        case "--shift" where operation == "edit": shift = true; i += 1
+        case "--out" where operation == "edit", "--steps" where operation == "events",
+             "--driver-steps" where operation == "verify-model", "--songs" where operation == "verify-model":
+            guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
+            let value = args[i + 1]
+            switch args[i] {
+            case "--out": out = value
+            case "--steps", "--driver-steps":
+                guard let n = Int(value), (1...200_000).contains(n) else { print("\(args[i]) must be 1-200000"); return 2 }
+                if args[i] == "--steps" { steps = n } else { driverSteps = n }
+            default:
+                let numbers = value.split(separator: ",").map { songNumber(String($0)) }
+                guard !numbers.isEmpty, numbers.allSatisfy({ $0 != nil }) else { print("--songs takes song numbers a,b,..."); return 2 }
+                only = numbers.map { $0! }
+            }
+            i += 2
+        default: positional.append(args[i]); i += 1
+        }
+    }
+    do {
+        switch operation {
+        case "events":
+            guard (1...2).contains(positional.count) else { print(musicUsage); return 2 }
+            let (doc, tables, title) = try modelDocument(positional[0], song: positional.count > 1 ? positional[1] : nil)
+            var options = CTSongTimeline.Options()
+            if let steps { options = .init(untilLoop: false, maxSteps: steps) }
+            let timeline = try CTSongTimeline(doc, tables: tables, options: options)
+            let tracks = timeline.tracks.filter { $0.stop != "none" }
+            if json {
+                let out = tracks.map { t in
+                    TrackJSON(track: t.index, stop: t.stop, endStep: t.endStep, loopStart: t.loopStart, loopEnd: t.loopEnd,
+                              notes: t.notes.count, events: eventsJSON(t))
+                }
+                FileHandle.standardOutput.write(try CTProject.jsonEncoder.encode(out))
+                print()
+                return 0
+            }
+            print("\(title): \(tracks.count) tracks, \(timeline.length) steps")
+            for t in tracks {
+                let loop = t.loopStart.map { " loop \($0)-\(t.loopEnd!)" } ?? ""
+                print("track \(t.index): \(t.notes.count) notes, stops at \(t.endStep) (\(t.stop))\(loop)")
+                for e in eventsJSON(t) {
+                    var line = String(format: "%7d  line %5d  %@", e.step, e.line, e.text)
+                    if let note = e.note {
+                        line += "  ; \(note) \(e.length!) steps" + (e.sample.map { String(format: " sample $%02X", $0) } ?? "")
+                            + (e.keyOn == false ? " legato" : "") + (e.drum == true ? " drum" : "")
+                    }
+                    print(line)
+                }
+            }
+            return 0
+        case "edit":
+            guard positional.count >= 2 else { print(editUsage); return 2 }
+            let path = positional[0]
+            let text = try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)
+            var doc = CTSongDocument(listing: text)
+            let words = Array(positional.dropFirst(2))
+            func line(_ s: String) throws -> Int {
+                guard let n = Int(s), doc.items.indices.contains(n - 1) else { throw CTSongError("\(s) is not a line of the listing") }
+                return n - 1
+            }
+            func note(at item: Int) throws -> CTSongTimeline.Note {
+                let timeline = try CTSongTimeline(doc)
+                guard let n = timeline.tracks.flatMap(\.notes).first(where: { $0.item == item }) else {
+                    throw CTSongError("no track plays a note at line \(item + 1)")
+                }
+                return n
+            }
+            switch (positional[1], words.count) {
+            case ("roundtrip", 0):
+                let back = doc.listing
+                let a = try CTSongListing.assembleSong(text), b = try doc.assemble()
+                let same = back == text && a.data == b.data && a.tables == b.tables
+                print("\(doc.items.count) lines; text \(back == text ? "identical" : "DIFFERENT"); "
+                      + "\(b.data.count) bytes \(a.data == b.data && a.tables == b.tables ? "identical" : "DIFFERENT")")
+                return same ? 0 : 1
+            case ("semitone", 2):
+                guard let s = CTSongISA.noteNames.firstIndex(of: words[1]) else { throw CTSongError("\(words[1]) is not C..B") }
+                try doc.setSemitone(try line(words[0]), s)
+            case ("length", 2):
+                guard let n = Int(words[1]) else { throw CTSongError("\(words[1]) is not a step count") }
+                try doc.setLength(try note(at: try line(words[0])), n, shift: shift)
+            case ("delete", 1):
+                try doc.deleteNote(try note(at: try line(words[0])))
+            case ("insert", 4):
+                guard let track = Int(words[0]), (0...7).contains(track), let step = Int(words[1]), let length = Int(words[3]),
+                      let name = CTSongISA.noteNames.sorted(by: { $0.count > $1.count }).first(where: { words[2].hasPrefix($0) }),
+                      let octave = Int(words[2].dropFirst(name.count)) else {
+                    throw CTSongError("expected insert <track 0-7> <step> <note, e.g. C#4> <steps>")
+                }
+                let number = octave * 12 + CTSongISA.noteNames.firstIndex(of: name)!
+                try doc.insertNote(track: track, step: step, number: number, steps: length, timeline: try CTSongTimeline(doc))
+            case ("control", 3):
+                guard words[2].count == 3, words[2].hasPrefix("$"), let v = UInt8(words[2].dropFirst(), radix: 16) else {
+                    throw CTSongError("\(words[2]) is not a $XX byte")
+                }
+                try doc.setControl(before: try line(words[0]), words[1], v)
+            default:
+                print(editUsage); return 2
+            }
+            let (data, _) = try doc.assemble()
+            let edited = doc.listing
+            if let out { try Data(edited.utf8).write(to: URL(fileURLWithPath: out), options: .atomic) }
+            else { print(edited, terminator: "") }
+            FileHandle.standardError.write(Data("edited; \(data.count) bytes assemble\n".utf8))
+            return 0
+        default:
+            guard positional.count == 1 else { print(musicUsage); return 2 }
+            let rom = try readROM(positional[0])
+            let songs = try CTSong.romSongs(rom)
+            var exact = 0, checked = 0, passed = 0, failures = 0
+            for s in songs where only?.contains(s.index) ?? true {
+                let tables = CTSongTables.rom(rom, song: s.index)
+                let listing = try CTSongListing.render(try CTSong(data: s.data), tables: tables)
+                let doc = CTSongDocument(listing: listing)
+                let back = try doc.assemble()
+                let same = doc.listing == listing && back.data == s.data && back.tables == tables
+                if same { exact += 1 }
+                let timeline = try CTSongTimeline(doc, tables: tables)
+                var line = #"{"song": \#(s.index), "byte_exact": \#(same), "steps": \#(timeline.length), "notes": \#(timeline.tracks.reduce(0) { $0 + $1.notes.count }), "stops": "\#(timeline.tracks.filter { $0.stop != "none" }.map(\.stop).joined(separator: ","))""#
+                if let driverSteps, timeline.tracks.contains(where: { $0.stop != "none" }) {
+                    let trace = try CTSongDriverTrace.trace(rom: rom, song: s.index, steps: driverSteps)
+                    let comparison = try CTSongDriverTrace.compare(doc, tables: tables, trace: trace)
+                    checked += 1
+                    if comparison.passed { passed += 1 } else { failures += 1 }
+                    line += #", "driver_steps": \#(driverSteps), "key_ons": \#(comparison.driverKeyOns.reduce(0, +)), "key_ons_match": \#(comparison.mismatches.isEmpty), "pass_mismatches": \#(comparison.passMismatches), "max_pass_error": \#(comparison.maxPassError)"#
+                    if !comparison.mismatches.isEmpty {
+                        line += #", "mismatches": [\#(comparison.mismatches.map { "\"\($0)\"" }.joined(separator: ", "))]"#
+                    }
+                }
+                print(line + "}")
+            }
+            let total = only.map { o in songs.filter { o.contains($0.index) }.count } ?? songs.count
+            print("\(exact)/\(total) songs byte-exact through the model" + (driverSteps != nil ? "; \(passed)/\(checked) match the driver" : ""))
+            return exact == total && failures == 0 ? 0 : 1
+        }
+    } catch {
+        print("music \(operation) failed: \(error)"); return 1
+    }
 }

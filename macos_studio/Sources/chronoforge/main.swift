@@ -270,7 +270,7 @@ default:
       chronoforge tilesets <import|show|verify> ...              (location tilesets and palettes)
       chronoforge items <import|show> ...                        (item, gear and consumable tables)
       chronoforge sfx <encode|synth|info|render> ...             (BRR samples: WAV import, synth, S-DSP render)
-      chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render> ...
+      chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render|play|events|edit|verify-model> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]
                         [--entry 0] [--flag symbol] [--steps 1000]
       chronoforge render-tileset <ctproj|rom> --out out.png [--tileset id]
