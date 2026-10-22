@@ -296,7 +296,7 @@ private struct ItemForm: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            fieldRow("byte3", "Read with the amount by the use routine")
+            fieldRow("byte3", "No reader named")
         }
     }
 

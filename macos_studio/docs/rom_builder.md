@@ -1,8 +1,8 @@
 # ROM builder (`.sfc`)
 
 `chronoforge rom build` (and **Story → Build ROM…** or **Characters → Build ROM…**
-in Studio) writes a project's event packs, songs, playable-character records and
-tech tables into a copy of the clean Chrono Trigger US 1.0 ROM and
+in Studio) writes a project's event packs, songs, playable-character records,
+tech tables and item tables into a copy of the clean Chrono Trigger US 1.0 ROM and
 fixes the header checksum. It starts from the unmodified ROM every time (SHA-256
 `06d1c2b0…829a9`; a 512-byte copier header is dropped); a built ROM is refused as
 a base. The output is game data: keep it local.
@@ -21,9 +21,15 @@ a base. The output is game data: keep it local.
     { "song": 1, "listing": "audio/songs/song01.ctsong" }
   ],
   "characters": ["crono", "robo"],
-  "techs": true
+  "techs": true,
+  "items": true
 }
 ```
+
+`items` writes each ROM item's record A and B, name and target mode, ItemBoosts
+and (when a text changed) the description table (see [items](items.md));
+`chronoforge items import` sets it and Studio sets it with **Items → Write items
+to ROM**.
 
 `techs` writes `tech_system.json`'s writable fields over the base ROM's tech
 tables (see [techs](techs.md)); `chronoforge characters techs import` sets it and
@@ -75,7 +81,11 @@ lower, listings that exist, and song listings that assemble.
    TechRec parts and bits, PcTechAct script and frames, MpCost, the effect
    records, TechTpCost, the combination requirements, the new-game tech state and
    each record's +$02 bit 4), after the checks in [techs](techs.md).
-7. Writes the `Evt_PackPtrs` entries and the checksum and complement.
+7. With `rom.items`, writes each ROM item's record A, record B, name glyphs and
+   target mode and the ItemBoosts table in place, and repacks the description
+   table within its own span when a description changed, after the checks in
+   [items](items.md).
+8. Writes the `Evt_PackPtrs` entries and the checksum and complement.
 
 Pack and table placement never crosses a bank (a song may): `Decomp_ToWram` reads a pack with DB = its bank
 and a 16-bit index, and `TextWin_Init` reads the table's entries as addresses in
@@ -96,9 +106,11 @@ The report (`--report`, or `<name>.build.json` from Studio, schema
 placement, each message table with each message's address and source text,
 each song's address, size, data SHA-256 and placement, each character's record
 address with the values written (and growth rows when written),
-the tech tables written (`techs`, when built), every byte range written (one
+the tech tables written (`techs`, when built), the items and item tables
+written (`items`, `itemTables`, when built), every byte range written (one
 per changed character field, such as `character robo power`, and per changed
-tech span, such as `tech $02 target` or `TechTpCost`), and the free space left.
+tech span, such as `tech $02 target` or `TechTpCost`, and per changed item span,
+such as `item $5C record B`, `ItemBoosts` or `item descriptions`), and the free space left.
 
 ## The packer
 
@@ -141,16 +153,27 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
   with the report, read-only bytes, ranges, combination records, the new-game
   state and +$02), and the ROM's own `AwardTechPoints` learns from the built
   tables as the rule says; ten damaged copies are rejected.
+- **Items** (`CTItemsTests`, `macos_studio/tools/verify_item_build.py`): importing
+  the items and building gives the clean ROM with no write; an edited build is
+  checked by `ct_rom_check.py`:
+  - each reported item is decoded independently and compared with the report;
+  - ranges, icons, ItemBoosts and the read-only stat tables are checked;
+  - unreported items are unchanged;
+  - each description pointer leads to the clean bytes or to the reference
+    encoder's bytes for the new text.
+
+  The ROM's own `Menu_BuildItemTables` and `Menu_RefreshAllChars` on the built
+  ROM agree with the menu-stat rule. Eight damaged copies are rejected.
 
 ## Limitations
 
 - No emulator run: the evidence is the ROM's own loader, decompressor and text
   routines as traced or transcribed, not a booted game.
 - Only event packs, message tables, song sequences (with their per-song table
-  rows), the playable characters' records and growth rows and the tech tables'
-  writable fields are written. New locations, maps, graphics, samples, sound
-  effects, items, new techs or tech names, enemies, ExpToLevel and other tables
-  are not.
+  rows), the playable characters' records and growth rows, the tech tables'
+  writable fields and the item tables' writable fields are written. New
+  locations, maps, graphics, samples, sound effects, new items or item ids, new
+  techs or tech names, enemies, ExpToLevel and other tables are not.
 - Lowered packs cover the Studio statements in `event_bytecode.md`; cross-map calls
   are refused.
 - Free space is limited to the confirmed padding; ExHiROM (6/8 MB) expansion is not

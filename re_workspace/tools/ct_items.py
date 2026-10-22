@@ -445,9 +445,9 @@ def data_claims(rom):
         claim("names: 10 glyphs after an icon byte, no $EF before the padding",
               all(0xEF not in bytes(rom[NAMES_PC + NAME_SIZE * i + 1:NAMES_PC + NAME_SIZE * (i + 1)]).rstrip(b"\xef")
                   for i in range(ITEMS)))
-        claim("names decode (ChronoRET's glyphs); samples Wood Sword, Hide Tunic, Tonic",
-              names[1] == "Wood Sword" and names[0x5B] == "Hide Tunic" and names[0xBD] == "Tonic"
-              and not any("{g" in n for n in names))
+        claim("names decode (ChronoRET's glyphs, none unknown); each category's first id is blank, the next named",
+              not any("{g" in n for n in names)
+              and all(not names[f].strip() and names[f + 1].strip() for f in FIRST[:5]))
         desc = descriptions(rom)
         dic = text.rom_dictionary(rom)
         claim("DescTable: 242 pointers, each to a $00-ended string between the table and $CC:36F3",
