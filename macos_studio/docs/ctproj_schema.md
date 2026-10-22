@@ -125,6 +125,66 @@ original fields; files with only those still load and save unchanged.
   written to the ROM.
 - `rom` records where the import read the set (see [Sprites](sprites.md)).
 
+## `tilesets/<id>.tileset.json`
+```json
+{
+  "id": "t12_02", "kind": "bg12", "sheet": "tilesets/t12_02.png", "bpp": 4, "tileCount": 1024,
+  "metatiles": [ { "chips": [ { "tile": 300, "pal": 2, "priority": false, "hflip": false, "vflip": false },
+                              "… 4 chips: TL, TR, BL, BR" ] } ],
+  "collision": [],
+  "vram": { "charBase": 4096,
+            "slots": [ { "slot": 0, "vram": 8192, "firstTile": 256, "tiles": 128, "pack": 0,
+                         "source": "$E0:0000", "ownTiles": 128 } ],
+            "known": [ { "firstTile": 256, "tiles": 764 } ] },
+  "tileAnimations": [ { "tile": 297, "tiles": 4, "steps": [64, "… 8"], "frames": [0, "… 8"] } ],
+  "animSheet": "tilesets/t12_02_anim.png",
+  "preview": { "palette": "pal_02", "layer3": "t3_01" },
+  "rom": { "family": "ct-loc12", "index": 2, "table": "$ED:0000", "packedBytes": 0,
+           "list": "$F6:1C10", "animations": "$FD:F310", "locations": [1, 2] }
+}
+{
+  "id": "pal_02", "kind": "palette", "bpp": 4, "tileCount": 0, "metatiles": [], "collision": [],
+  "palettes": [ [ "0x0000", "… 16 BGR555 words" ], "… 8 rows" ],
+  "paletteCycles": [ { "kind": "list-frames", "first": 65, "count": 2, "delay": 3,
+                       "frames": [ [ "0x0000", "… count words" ] ], "order": [0, 1], "source": "$F6:0000" } ],
+  "rom": { "family": "ct-locpal", "index": 2, "table": "$F6:2664", "animations": "$FD:FA77", "locations": [1, 2] }
+}
+```
+(Values elided; `chronoforge tilesets import` fills them from your ROM.)
+
+- **The original fields.** `id`, `sheet`/`blob`, `bpp`, `tileCount`,
+  `metatiles` and `collision` are the original fields. Every other field is
+  optional, so files with only the original fields still load and save
+  unchanged.
+- **A chip is a SNES tilemap word.** `tile` is bits 0–9, `pal` 10–12,
+  `priority` 13, `hflip` 14 and `vflip` 15. Chrono Trigger's `Map_Meta12`/`Meta3`
+  words use exactly this order; see [Tilesets](tilesets.md).
+- **`kind`.**
+  - `"bg12"`: layers 1/2, 4bpp. Characters are at VRAM word
+    `vram.charBase` (`$1000`).
+  - `"bg3"`: layer 3, 2bpp, at `$5000`.
+  - `"palette"`: palettes and cycles only, with no sheet.
+  - Absent: a plain tile bank.
+- **Sheet tiles.** In a `bg12`/`bg3` sheet, tile *k* is character *k* (16 per
+  row, 1024 tiles). `vram.known` lists the characters the tileset sets. The
+  others are blank in the sheet; the game shows whatever VRAM holds there.
+- **`vram.slots`.** These are the uploads. `ownTiles` < `tiles` means the
+  upload's tail is an earlier pack's stage bytes.
+- **`palettes[r]`.** This is CGRAM row *r* (16 hex BGR555 words). A location
+  sets colours 1–15 of rows 1–7. `paletteCycles` kinds:
+  - `rotate-down` / `rotate-up` turn colours `first … first+count` by one.
+  - `rom-frames` copies frame *k* of `frames` to colours `first…`, with *k*
+    stepping 0, 1, ….
+  - `list-frames` does the same with *k* taken from `order`.
+
+  Each cycle acts every `delay` frames (0 means 256). Colours are CGRAM
+  indices (16 × row + colour).
+- **`tileAnimations`.** Four characters from `tile` show `animSheet` tiles
+  `frames[f]…+3`. The accumulator increases by 4 × `steps[f]` per upload, and
+  f is accumulator bits 9–11. There is one upload every other frame.
+- **Provenance.** `preview` names the entries the Studio previews with, and
+  `rom` records where the import read the entry.
+
 ## `party.json`
 ```json
 { "schema": "ct-party/1",

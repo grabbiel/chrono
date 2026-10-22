@@ -141,6 +141,19 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_techs.py check --run >/tmp/verify_tech_claims.log 2>&1
   RC=$?
   note "Tech evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_tech_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Location tilesets: source, code and data claims, the ROM's decompressor, both
+  # animation-list loaders and PalAnim_TickAll run; then a CLI import into a fixture
+  # copy, checked by `tilesets verify` and by ct_tilesets.py.
+  $PY re_workspace/tools/ct_tilesets.py check --run >/tmp/verify_tileset_claims.log 2>&1
+  RC=$?
+  note "Tileset evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_tileset_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  TILESET_DIR=$(mktemp -d)
+  cp -R macos_studio/Tests/ChronoForgeCoreTests/Resources/MyGame.ctproj "$TILESET_DIR/p.ctproj" \
+    && macos_studio/.build/debug/chronoforge tilesets import re_workspace/ct_clean.sfc --project "$TILESET_DIR/p.ctproj" >/tmp/verify_tileset_import.log 2>&1 \
+    && macos_studio/.build/debug/chronoforge tilesets verify re_workspace/ct_clean.sfc --project "$TILESET_DIR/p.ctproj" >>/tmp/verify_tileset_import.log 2>&1 \
+    && $PY re_workspace/tools/ct_tilesets.py verify-import "$TILESET_DIR/p.ctproj" >>/tmp/verify_tileset_import.log 2>&1
+  note "Tileset import (CLI = ct_tilesets.py decode)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
+  rm -rf "$TILESET_DIR"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

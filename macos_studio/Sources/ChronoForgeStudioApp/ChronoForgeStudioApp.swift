@@ -32,9 +32,22 @@ enum StudioModule: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// `--open <project.ctproj>` loads a project at launch and `--module <name>`
+/// (e.g. Tilesets) opens that module.
+enum LaunchArguments {
+    static func value(_ flag: String) -> String? {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+    static var module: StudioModule? {
+        value("--module").flatMap { name in StudioModule.allCases.first { $0.rawValue.lowercased() == name.lowercased() } }
+    }
+}
+
 struct RootView: View {
     @Bindable var store: ProjectStore
-    @State private var selection: StudioModule? = .characters
+    @State private var selection: StudioModule? = LaunchArguments.module ?? .characters
 
     var body: some View {
         NavigationSplitView {
@@ -79,6 +92,11 @@ struct RootView: View {
                         .font(.caption)
                         .foregroundStyle(store.statusIsError ? .red : .secondary)
                 }
+            }
+        }
+        .onAppear {
+            if store.project == nil, let path = LaunchArguments.value("--open") {
+                store.load(url: URL(fileURLWithPath: path))
             }
         }
         .fileImporter(isPresented: $store.requestOpen,
