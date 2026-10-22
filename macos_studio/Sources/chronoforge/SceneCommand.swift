@@ -230,9 +230,18 @@ func cmdSceneROM(_ args: [String]) -> Int32 {
         switch operation {
         case "raise":
             if json {
-                struct Raised: Encodable { let document: CTSceneDocument; let analysis: CTSceneAnalysis }
-                try emit(try encoded(Raised(document: doc, analysis: analysis)))
-            } else { try emit(renderScene(analysis, location: location, entry: entry)) }
+                struct Raised: Encodable {
+                    let document: CTSceneDocument; let analysis: CTSceneAnalysis; let encounters: [CTSceneFormation.Group]
+                }
+                try emit(try encoded(Raised(document: doc, analysis: analysis, encounters: CTSceneFormation.groups(analysis, rom: rom))))
+            } else {
+                var text = renderScene(analysis, location: location, entry: entry)
+                for g in CTSceneFormation.groups(analysis, rom: rom) {
+                    text += String(format: "encounter $%04X obj %d: Battle_Unk2989 $%02X; enemies that can join: %@\n",
+                                   g.offset, g.object, g.unk2989, g.label)
+                }
+                try emit(text)
+            }
         case "graph":
             let graph = CTSceneGraph(analysis)
             try emit(json ? try encoded(graph) : graph.render())

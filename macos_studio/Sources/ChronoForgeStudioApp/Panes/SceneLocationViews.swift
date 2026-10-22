@@ -95,6 +95,9 @@ struct LocationSceneEditor: View {
     @State private var tab = LaunchArguments.value("--scene-tab") ?? "Map"
     @State private var diagnostic = ""
     @State private var showListing = LaunchArguments.value("--scene-listing") != "hide"
+    /// The last VM run (Timeline) and its playhead, which the map canvas follows.
+    @State private var vmRun: CTSceneRun.Result?
+    @State private var playhead = 0
 
     private var dirty: Bool { doc != savedDoc }
 
@@ -109,19 +112,23 @@ struct LocationSceneEditor: View {
                             Text("Map").tag("Map")
                             Text("Node Graph").tag("Graph")
                             Text("Timeline").tag("Timeline")
+                            Text("Sketch").tag("Sketch")
                             Text("Objects").tag("Objects")
                         }.pickerStyle(.segmented)
                         switch tab {
                         case "Graph": SceneNodeGraph(analysis: analysis, selection: $selection)
-                        case "Timeline": SceneTimelineView(document: doc, analysis: analysis, selection: $selection)
+                        case "Timeline":
+                            SceneRunTimelineView(store: store, rom: rom, location: location, document: doc, analysis: analysis,
+                                                 selection: $selection, run: $vmRun, playhead: $playhead)
+                        case "Sketch": SceneTimelineView(document: doc, analysis: analysis, selection: $selection)
                         case "Objects": objects(analysis)
                         default:
                             SceneMapCanvas(store: store, project: project, rom: rom, location: location, document: doc,
-                                           analysis: analysis, selection: $selection, edit: edit)
+                                           analysis: analysis, selection: $selection, edit: edit, run: vmRun, playhead: playhead)
                         }
                         Divider()
                         SceneStatementInspector(analysis: analysis, selection: $selection, edit: edit,
-                                                romPath: store.sceneROMPath)
+                                                romPath: store.sceneROMPath, rom: rom, run: vmRun)
                     }
                     .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .clipped()
@@ -135,7 +142,17 @@ struct LocationSceneEditor: View {
             }
         }
         .padding()
-        .onAppear(perform: open)
+        .onAppear {
+            open()
+            // `--scene-playhead N` at launch runs the location (CTSceneRun defaults) and sets the playhead (screenshots, demos).
+            if let n = LaunchArguments.value("--scene-playhead").flatMap({ Int($0) }), let doc, vmRun == nil {
+                var o = CTSceneRun.Options()
+                o.frames = max(n + 1, 600)
+                o.pack = try? doc.pack()
+                vmRun = try? CTSceneRun.run(rom: rom, location: location, options: o)
+                playhead = n
+            }
+        }
         .onChange(of: selection) { _, s in followSelectionInText(s) }
         .onChange(of: textSelection) { _, t in followTextSelection(t) }
     }
@@ -193,6 +210,7 @@ struct LocationSceneEditor: View {
         do {
             let a = try d.analyze()
             let (t, offsets) = try d.annotatedListing(title: String(format: "loc_%03d", location))
+            if doc != d { vmRun = nil }
             doc = d; analysis = a; text = t; textOffsets = offsets; listingEdited = false
             if let k = selection.object, k >= a.objectCount { selection = SceneSelection() }
         } catch { diagnostic = "\(error)" }
@@ -297,6 +315,9 @@ struct SceneStatementInspector: View {
     let edit: ((inout CTSceneDocument) throws -> Void) -> Void
     /// The ROM a message statement's dialogue box preview reads.
     var romPath: String? = nil
+    /// The ROM image (enemy names) and the last VM run (the battles it reached).
+    var rom: [UInt8]? = nil
+    var run: CTSceneRun.Result? = nil
     @State private var operands = ""
     @State private var insertOp = "OpAD_WaitRuns"
     @State private var insertOperands = "$10"
@@ -359,6 +380,7 @@ struct SceneStatementInspector: View {
             }.font(.caption)
             Text("Evt_OpD8_StartBattle: FieldBtl_EvtFlags bit 5 FieldBtl_EvtNoReset, bit 6 FieldBtl_EvtKeepMusic, bit 7 FieldBtl_EvtUnk80.")
                 .font(.caption2).foregroundStyle(.secondary)
+            battle(s)
         } else if s.opcode == 0xC8, let arg = s.operands.first {
             let m = CTSceneAnalysis.menu(arg)
             Text(String(format: "BankC2 argument %d → menu mode $%02X", m.bankArgument, m.mode)
@@ -368,6 +390,25 @@ struct SceneStatementInspector: View {
         } else if let message = Self.message(s, analysis) {
             DialoguePreviewView(source: .message(table: message.table, index: message.index), romPath: romPath,
                                 place: message.place, scale: 1.5)
+        }
+    }
+
+    /// Battle_Unk2989's bits, the enemies that can join and, after a run, the ones that did.
+    @ViewBuilder private func battle(_ s: CTSceneAnalysis.Statement) -> some View {
+        let bits = CTSceneFormation.describe2989(s.operands[0])
+        if !bits.isEmpty {
+            Text("Battle_Unk2989: " + bits.joined(separator: "; ")).font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let g = CTSceneFormation.groups(analysis, rom: rom).first(where: { $0.offset == s.offset }) {
+            Text("Encounter group: \(g.label)").font(.caption).bold()
+            Text("The enemies are the location's kind-5/6 objects (`$83`) on screen when it starts (Field_Unk0617, FieldBtl_SaveObj).")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        if let b = run?.battles.first(where: { $0.offset == s.offset }) {
+            let names = b.enemies.map { "\($0.name ?? String(format: "$%02X", $0.enemyId)) (obj \($0.object), slot \($0.record))" }
+            Text("In the run, frame \(b.frame): " + (names.isEmpty ? "no enemy on screen" : names.joined(separator: ", ")))
+                .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
         }
     }
 

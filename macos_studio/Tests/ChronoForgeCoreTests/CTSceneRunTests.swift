@@ -251,4 +251,41 @@ final class CTSceneRunTests: XCTestCase {
         }
         if checked == 0 { throw XCTSkip("no sampled location finishes a scroll-to in 600 frames") }
     }
+    func testDirectionMovesAreChoreographyPointsWithTheirSpeed() throws {
+        // $92 before any $89 walks at Obj_Unk1A00Init's $10; after $89 $30 at $30. $96 stays a tile target.
+        let p = try pack([0x92, 0x40, 0x08, 0x89, 0x30, 0x9C, 0xC0, 0x04, 0x96, 0x05, 0x06, 0xB2])
+        let points = try XCTUnwrap(CTSceneChoreography.extract(p).first).points
+        XCTAssertEqual(points.map(\.kind), [.direction, .direction, .walk])
+        XCTAssertEqual(points.map(\.angle), [0x40, 0xC0, nil])
+        XCTAssertEqual(points.map(\.frames), [8, 4, nil])
+        XCTAssertEqual(points.map(\.speed), [0x10, 0x30, nil])
+        var doc = try CTSceneDocument.raise(bytes: p.bytes)
+        XCTAssertThrowsError(try doc.addPoint(.direction, column: 1, row: 1, after: nil, object: 0, function: 1))
+    }
+
+    func testADirectionPathEndsWhereTheHandlerMovesTheObject() throws {
+        let rom = try rom()
+        // $92 angle frames from tile (64, 64), run by the duration harness's frame loop
+        // (handler, then Obj_MoveStep); the path the Map draws must end where it does.
+        for (angle, frames, speed) in [(0x00, 24, 0x10), (0x40, 16, 0x20), (0xA0, 30, 0x10), (0xE0, 12, 0x30)] {
+            let p = try pack([0x92, UInt8(angle), UInt8(frames), 0xB2])
+            func hex(_ b: [UInt8]) -> String { b.map { String(format: "%02x", $0) }.joined() }
+            let regions: [[Any]] = [
+                [0x7E1100, "04"], [WRAM.objUnk1000, "01"], [WRAM.objSpeed, hex([UInt8(speed)])],
+                [WRAM.objPosX, "8040"], [WRAM.objPosY, "8040"], [WRAM.objXUnk7F0B00, "80"],
+            ]
+            let input: [String: Any] = [
+                "packs": ["p": hex(p.bytes)], "formations": [Any](),
+                "durations": [["id": 0, "pack": "p", "y": 0x21, "slot": 0, "frames": 300, "regions": regions]],
+            ]
+            let out = try CTSceneRunVectors.run(rom: rom, casesJSON: JSONSerialization.data(withJSONObject: input))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: out) as? [String: Any])
+            let rows = try XCTUnwrap((json["durations"] as? [[String: Any]])?.first?["frames"] as? [[Int]])
+            let last = try XCTUnwrap(rows.last)
+            let (dx, dy) = CTSceneChoreography.directionDelta(angle: angle, frames: frames, speed: speed, rom: rom)
+            let label = "angle $\(String(angle, radix: 16)) frames \(frames) speed \(speed)"
+            XCTAssertEqual(Double(last[2] - 0x4080) / 256, dx, label)
+            XCTAssertEqual(Double(last[3] - 0x4080) / 256, dy, label)
+        }
+    }
 }

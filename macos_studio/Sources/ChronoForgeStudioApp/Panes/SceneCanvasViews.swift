@@ -16,6 +16,9 @@ struct SceneMapCanvas: View {
     let analysis: CTSceneAnalysis
     @Binding var selection: SceneSelection
     let edit: ((inout CTSceneDocument) throws -> Void) -> Void
+    /// The Timeline's VM run and playhead: objects where the run has them at that frame.
+    var run: CTSceneRun.Result? = nil
+    var playhead = 0
 
     enum Tool: String, CaseIterable { case select = "Select", pan = "Pan", walk = "Walk", move = "Move", camera = "Camera", place = "Place", copy = "Copy Object" }
 
@@ -28,6 +31,7 @@ struct SceneMapCanvas: View {
     @State private var dragTile: TilePoint?
     @State private var hover: TilePoint?
     @State private var allPaths = false
+    @State private var showRun = true
     @State private var assets: LocationScene.Assets?
     @State private var assetsKey = ""
     @State private var sprites: [Int: NSImage] = [:]
@@ -42,12 +46,10 @@ struct SceneMapCanvas: View {
     var body: some View {
         let paths = choreography
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Picker("Tool", selection: $tool) {
-                    ForEach(Tool.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 480)
-                Stepper("×\(zoom)", value: $zoom, in: 1...4)
-                Toggle("All paths", isOn: $allPaths).toggleStyle(.checkbox)
+            // The tools and the view options on one row when they fit, else on two.
+            ViewThatFits(in: .horizontal) {
+                HStack { toolPicker; viewOptions }
+                VStack(alignment: .leading, spacing: 4) { toolPicker; HStack { viewOptions } }
             }.font(.caption)
             ScrollView([.horizontal, .vertical]) {
                 canvas(paths)
@@ -59,6 +61,21 @@ struct SceneMapCanvas: View {
             }.font(.caption)
         }
         .onAppear(perform: load)
+    }
+
+    private var toolPicker: some View {
+        Picker("Tool", selection: $tool) {
+            ForEach(Tool.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }.pickerStyle(.segmented).labelsHidden().fixedSize()
+    }
+
+    @ViewBuilder private var viewOptions: some View {
+        Stepper("×\(zoom)", value: $zoom, in: 1...4).fixedSize()
+        Toggle("All paths", isOn: $allPaths).toggleStyle(.checkbox).fixedSize()
+        if run != nil {
+            Toggle("Run at f\(playhead)", isOn: $showRun).toggleStyle(.checkbox).fixedSize()
+                .help("Objects and the camera where the Timeline's VM run has them at the playhead")
+        }
     }
 
     private var help: String {
@@ -162,6 +179,22 @@ struct SceneMapCanvas: View {
                 var last: [Int: CGPoint] = [:]
                 if let p = analysis.objects[c.object].placement { last[-1] = center(p.column, p.row, s) }
                 for p in c.points {
+                    if p.kind == .direction {
+                        // $92/$9C: Obj_Direction for Obj_MoveFrames frames at the walk's speed (blocked tiles not taken).
+                        guard let from = last[p.function] ?? last[-1], let angle = p.angle, let n = p.frames else { continue }
+                        let d = CTSceneChoreography.directionDelta(angle: angle, frames: n, speed: p.speed ?? 0x10, rom: rom)
+                        let to = CGPoint(x: from.x + CGFloat(d.dx) * s, y: from.y + CGFloat(d.dy) * s)
+                        var line = Path(); line.move(to: from); line.addLine(to: to)
+                        ctx.stroke(line, with: .color(Color.orange.opacity(hot ? 0.95 : 0.35)),
+                                   style: StrokeStyle(lineWidth: hot ? 2.5 : 1.2, dash: [2, 3]))
+                        let head = CGRect(x: to.x - s * 0.15, y: to.y - s * 0.15, width: s * 0.3, height: s * 0.3)
+                        ctx.fill(Path(ellipseIn: head), with: .color(.orange))
+                        if selection.offset == p.offset {
+                            ctx.stroke(Path(ellipseIn: head.insetBy(dx: -s * 0.2, dy: -s * 0.2)), with: .color(.yellow), lineWidth: 2)
+                        }
+                        last[p.function] = to
+                        continue
+                    }
                     let at = dragging == p.offset && dragTile != nil ? center(dragTile!.x, dragTile!.y, s) : center(p.column, p.row, s)
                     let selected = selection.offset == p.offset
                     switch p.kind {
@@ -172,6 +205,7 @@ struct SceneMapCanvas: View {
                         ctx.fill(Path(ellipseIn: CGRect(x: at.x - s * 0.25, y: at.y - s * 0.25, width: s * 0.5, height: s * 0.5)),
                                  with: .color(.purple.opacity(hot ? 1 : 0.5)))
                         ctx.draw(Text("cam").font(.system(size: 9)).foregroundColor(.purple), at: CGPoint(x: at.x, y: at.y - s * 0.45))
+                    case .direction: break
                     case .place, .walk, .move:
                         let from = last[p.function] ?? last[-1]
                         if let from, p.kind != .place {
@@ -210,7 +244,32 @@ struct SceneMapCanvas: View {
                     ctx.draw(Text(o.kind).font(.system(size: 9)).foregroundColor(color(o)), at: CGPoint(x: r.midX, y: r.maxY + 6))
                 }
             }
+            if let run, showRun { drawRun(run, ctx, s) }
             if let hover { ctx.stroke(Path(rect(hover.x, hover.y, s)), with: .color(.white.opacity(0.7)), lineWidth: 1) }
+        }
+    }
+
+    /// The run at the playhead: each object at its Obj_Pos (pixels), the selected
+    /// one's path so far, and the camera's 256x224 frame (Map_TileOriginX/Y).
+    private func drawRun(_ r: CTSceneRun.Result, _ ctx: GraphicsContext, _ s: CGFloat) {
+        let z = CGFloat(zoom), ox = picture ? cameraX : 0, oy = picture ? cameraY : 0
+        func point(_ x: Int, _ y: Int) -> CGPoint { CGPoint(x: CGFloat(x - ox) * z, y: CGFloat(y - oy) * z) }
+        if let k = selection.object, let track = r.tracks.first(where: { $0.object == k }) {
+            var line = Path(), started = false
+            for p in track.points where p.frame <= playhead {
+                if started { line.addLine(to: point(p.x, p.y)) } else { line.move(to: point(p.x, p.y)); started = true }
+            }
+            ctx.stroke(line, with: .color(.yellow.opacity(0.8)), lineWidth: 1.5)
+        }
+        for (o, at) in r.positions(at: playhead) {
+            let c = point(at.x, at.y), d = s * 0.45
+            let box = CGRect(x: c.x - d / 2, y: c.y - d, width: d, height: d)
+            ctx.stroke(Path(roundedRect: box, cornerRadius: 2), with: .color(selection.object == o ? .yellow : .pink), lineWidth: 2)
+            ctx.draw(Text("\(o)").font(.system(size: 8, weight: .bold)).foregroundColor(.pink), at: CGPoint(x: box.midX, y: box.minY - 5))
+        }
+        if let cam = r.cameraAt(playhead) {
+            let o = point(cam.x, cam.y)
+            ctx.stroke(Path(CGRect(x: o.x, y: o.y, width: 256 * z, height: 224 * z)), with: .color(.purple), lineWidth: 2)
         }
     }
 
