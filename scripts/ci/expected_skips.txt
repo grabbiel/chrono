@@ -68,3 +68,4 @@ ChronoForgeCoreTests.CTMapsTests/testImportVerifyAndRenderEveryLocation         
 ChronoForgeCoreTests.CTStoryTests/testROMScanReconcilesWithThePythonTwin                        skip      # local ROM
 ChronoForgeCoreTests.CTStoryTests/testROMPathSetsTheRecordedFlagsInThePreview                   skip      # local ROM
 ChronoForgeCoreTests.CTStoryTests/testROMImportIntoAProjectValidates                            skip      # local ROM
+ChronoForgeCoreTests.CTMapTilesetBuildTests/testEveryMapAndTilesetRebuildsFromItsImport         skip      # local ROM

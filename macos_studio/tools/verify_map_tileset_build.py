@@ -242,7 +242,7 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-maps-') as directory:
     bad = [(name, detail) for name, ok, *detail in claims if not ok]
     if bad:
         fail(f'the ROM routines on the built ROM disagree with the decode: {bad}')
-    print(f'maps/tilesets: {len(claims)} run claims hold on the built ROM (LocLoad_UnkA33B and Map_LoadTreasureTiles on '
+    print(f'maps/tilesets: {len(claims)} of {len(claims)} run claims hold on the built ROM (LocLoad_UnkA33B and Map_LoadTreasureTiles on '
           f'{len(near)} locations; Decomp_ToWram on {len(tables)} tables and packs {edited_packs}; both list loaders, PalAnim_TickAll)')
 
     # --- The checker notices damage that keeps the header and report consistent ---------------
