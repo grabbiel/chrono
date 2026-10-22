@@ -52,7 +52,8 @@ public enum CTROMBuilder {
     }
 
     /// One enemy to write: its stat and reward records over the base ROM's
-    /// `enemy.enemyId`, and its name when given and changed.
+    /// `enemy.enemyId`, its name when given and changed, and its AI script
+    /// when its `ai.text` differs from the base ROM's (CTEnemyAIPatch).
     public struct EnemyRequest: Sendable {
         public let id: String
         public let enemy: CharacterDef.Enemy
@@ -145,6 +146,7 @@ public enum CTROMBuilder {
         public var tilesets: [CTTilesetPatch.ReportTileset]? = nil // absent: not requested
         public var relocations: [Relocation]? = nil               // absent: nothing moved
         public var enemies: [Enemy]? = nil                        // absent: none requested
+        public var enemyScripts: [CTEnemyAIPatch.ReportScript]? = nil // absent: no script written
         public var sprites: [CTSpritePatch.ReportSprite]? = nil   // absent: none requested
         public var samples: [CTSamplePatch.ReportSample]? = nil   // absent: none requested
         public var sampleTables: CTSamplePatch.ReportTables? = nil // absent: the tables were not moved
@@ -443,6 +445,13 @@ public enum CTROMBuilder {
         let tilesetReport = tilesets.isEmpty ? nil : try CTTilesetPatch.apply(
             requests: tilesets, base: base, space: &space, write: { write($0, at: $1, $2) },
             relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
+        // Enemy AI scripts next: a relocated script needs bank $CC's padding (docs/enemies.md).
+        let scriptRequests = enemyRequests.compactMap { e -> CTEnemyAIPatch.Request? in
+            e.enemy.ai?.text.map { CTEnemyAIPatch.Request(id: e.id, enemyId: e.enemy.enemyId, text: $0) }
+        }
+        let scriptReport = try CTEnemyAIPatch.apply(
+            scriptRequests, base: base, space: &space, write: { write($0, at: $1, $2) },
+            relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
 
         // Message tables first: their addresses go inside the packs.
         let codec = try textProfile.map { try CTTextCodec(profile: $0) }
@@ -634,6 +643,7 @@ public enum CTROMBuilder {
                             writes: changed, freeBytesLeft: space.total, maps: mapReport, tilesets: tilesetReport,
                             relocations: relocations.isEmpty ? nil : relocations)
         report.enemies = enemyReport.isEmpty ? nil : enemyReport
+        report.enemyScripts = scriptReport.isEmpty ? nil : scriptReport
         report.sprites = spriteRequests.isEmpty ? nil : spriteReport
         report.samples = sampleRequests.isEmpty ? nil : sampleReport
         report.sampleTables = sampleTables

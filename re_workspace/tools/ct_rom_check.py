@@ -63,7 +63,14 @@ records, reward records and names may change; each decodes to the reported
 values, in the ranges the battle code keeps (HP below $8000, level 0-99, an
 attack record that exists, item ids below $F2), and its name is the reported
 one (or unchanged); every other enemy, the attack and tech records, the
-effect records, the AI pointers and every AI script are as in the clean ROM.
+effect records, the AI pointers and every AI script are as in the clean ROM,
+but for the reported AI scripts. Enemy AI scripts, when reported: only their
+pointers (when relocated) and spans are written; each re-decodes (the
+parser's twin in tools/ct_enemies.py) to the reported text, bytes and hash,
+has no test byte $FF or target code past the table, and its reaction part is
+where BattleAi_FindReactPart's scan finds it; a script in place lies in its
+own unshared span, a relocated one in bank $CC's padding; scripts never
+overlap; every unreported enemy's pointer and script are unchanged.
 Sprites (tools/ct_sprites.py), when reported: only the reported playable
 characters' tile blocks, frame records, frame-id and duration rows and
 colours 1-12 may change; the bank-$E4 pointer tables and sprite records are
@@ -299,13 +306,18 @@ def check_enemies(clean, built, report):
         else:
             check(i < ce.NAMED and ce.decode_name(ce.name_record(built, i), glyphs) == name,
                   f"enemy {e['id']}: the name is not {name!r}")
-    # Every other enemy table, from the names' end to the AI pointers' end, and every AI script.
+    # Every other enemy table, from the names' end to the AI pointers, and every AI script but
+    # those the report writes (check_enemy_scripts).
     start = ce.NAMES_PC + ce.NAME_SIZE * ce.NAMED
-    stop = ce.AI_PTRS_PC + 2 * ce.ENEMIES
-    check(clean[start:stop] == built[start:stop], "an enemy attack, tech, effect or AI pointer table changed")
+    check(clean[start:ce.AI_PTRS_PC] == built[start:ce.AI_PTRS_PC], "an enemy attack, tech or effect table changed")
+    written = {s["enemyId"] for s in report.get("enemyScripts") or []}
     lengths = ce.act_lengths(clean)
     bank = ce.AI_BANK & 0x3F
     for i in range(ce.ENEMIES):
+        if i in written:
+            continue
+        check(clean[ce.AI_PTRS_PC + 2 * i:ce.AI_PTRS_PC + 2 * i + 2] == built[ce.AI_PTRS_PC + 2 * i:ce.AI_PTRS_PC + 2 * i + 2],
+              f"enemy {i}'s AI pointer changed but its script is not reported")
         at = clean[ce.AI_PTRS_PC + 2 * i] | clean[ce.AI_PTRS_PC + 2 * i + 1] << 8
         try:
             _, end = ce.parse_script(clean[bank << 16:(bank + 1) << 16], at, lengths)
@@ -313,6 +325,63 @@ def check_enemies(clean, built, report):
             continue
         check(clean[(bank << 16) + at:(bank << 16) + end] == built[(bank << 16) + at:(bank << 16) + end],
               f"enemy {i}'s AI script changed")
+
+
+def script_zones(clean, report):
+    """The spans the builder may write for each reported AI script: the
+    script's own span (in place) or its new span and its pointer (relocated)."""
+    out = []
+    for s in report.get("enemyScripts") or []:
+        out.append(range(s["pc"], s["pc"] + s["bytes"]))
+        if s.get("placement") == "free":
+            out.append(range(ce.AI_PTRS_PC + 2 * s["enemyId"], ce.AI_PTRS_PC + 2 * s["enemyId"] + 2))
+    return out
+
+
+def check_enemy_scripts(clean, built, report, inside):
+    """Each reported script: its pointer, its bytes re-decoded to the report's
+    text, in place only inside its own unshared span, else inside bank $CC's
+    padding; the game's ends ($FF of each part) where the parser finds them."""
+    scripts = report.get("enemyScripts") or []
+    ids = [s["enemyId"] for s in scripts]
+    check(len(set(ids)) == len(ids) and all(0 <= i < ce.EMPTY_ID for i in ids), f"enemy script ids {ids}")
+    listed = {e["enemyId"] for e in report.get("enemies") or []}
+    check(set(ids) <= listed, f"scripts written for enemies the report does not list: {sorted(set(ids) - listed)}")
+    lengths = ce.act_lengths(clean)
+    spans = ce.script_spans(clean, lengths)
+    shared = ce.sharers(spans)
+    data = ce.bank(built)
+    free = range(ce.AI_FREE_PC, ce.AI_FREE_PC + ce.AI_FREE_SIZE)
+    placed = []
+    for s in scripts:
+        i = s["enemyId"]
+        at = ce.script_pointer(built, i)
+        check(ce.pc(ce.AI_BANK, at) == s["pc"], f"enemy {i}'s AI pointer is ${at:04X}, the report says {s['address']}")
+        try:
+            parts, end = ce.parse_script(data, at, lengths)
+        except ce.ScriptError as e:
+            check(False, f"enemy {i}'s written AI script does not parse: {e}")
+            continue
+        span = range(s["pc"], ce.pc(ce.AI_BANK, end))
+        check(len(span) == s["bytes"] and packs.sha(data[at:end]) == s["sha256"], f"enemy {i}: script bytes")
+        check(ce.format_parts(parts) == s["text"], f"enemy {i}: the script does not re-decode to the reported text")
+        check(ce.ai_assemble(s["text"], lengths) == data[at:end], f"enemy {i}: the reported text does not assemble to it")
+        check(not ce.write_problems(parts), f"enemy {i}: {ce.write_problems(parts)}")
+        check(data.index(ce.PART_END, at) == at + len(ce.assemble_parts(parts[:1])) - 1,
+              f"enemy {i}: BattleAi_FindReactPart would not find the reaction part")
+        check(i not in spans or clean[spans[i].start:spans[i].stop] != data[at:end], f"enemy {i}: reported but unchanged")
+        if s["placement"] == "original":
+            check(i in spans and i not in shared and span.start == spans[i].start and span.stop <= spans[i].stop
+                  and ce.script_pointer(clean, i) == at, f"enemy {i}: in place outside its own unshared span")
+        else:
+            check(s["placement"] == "free" and span.start >= free.start and span.stop <= free.stop,
+                  f"enemy {i}: relocated outside bank $CC's padding")
+        check(inside(span), f"enemy {i}: script outside the write zones")
+        placed.append(span)
+    ordered = sorted(placed, key=lambda r: r.start)
+    for a, b in zip(ordered, ordered[1:]):
+        check(a.stop <= b.start, f"scripts at ${a.start:06X} and ${b.start:06X} overlap")
+    return placed
 
 
 def sprite_zones(clean, report):
@@ -852,6 +921,7 @@ def main():
     zones += map_zones(clean, report, zones[:len(rom_layout["freeRegions"])])
     zones += tileset_zones(clean, report)
     zones += enemy_zones(report)
+    zones += script_zones(clean, report)
     zones += sprite_zones(clean, report)
     zones += csm.zones(clean, report)
 
@@ -907,6 +977,9 @@ def main():
     check_maps(clean, built, report, inside)
     check_tilesets(clean, built, report, inside)
     check_enemies(clean, built, report)
+    for span in check_enemy_scripts(clean, built, report, inside):
+        if span.start >= ce.AI_FREE_PC:
+            new_spans[span.start] = span
     check_sprites(clean, built, report)
 
     # New packs and tables.
@@ -965,6 +1038,7 @@ def main():
           + (f", {len(report['maps'])} maps" if report.get("maps") is not None else "")
           + (f", {len(report['tilesets'])} tilesets" if report.get("tilesets") is not None else "")
           + (f", {len(report['enemies'])} enemies" if report.get("enemies") is not None else "")
+          + (f", {len(report['enemyScripts'])} AI scripts" if report.get("enemyScripts") is not None else "")
           + (f", {len(report['sprites'])} sprites" if report.get("sprites") is not None else "")
           + (f", {len(report['samples'])} samples" if report.get("samples") is not None else "") + ")")
 

@@ -1,8 +1,9 @@
 // CTEnemiesTests.swift — enemies: the AI script parser and assembler against
 // the Python twin's synthetic vectors, the stat/reward/name codecs, the
-// project model (old files still load), the checks, and with the local ROM:
-// every script round-trips, import then build is identical, an edit writes
-// only its fields, refusals.
+// project model (old files still load), the checks, the script writer's
+// refusals and budget, and with the local ROM: every script round-trips,
+// import then build is identical, an edit writes only its fields, refusals,
+// and edited scripts go back in place or into bank $CC's padding.
 import XCTest
 @testable import ChronoForgeCore
 
@@ -142,6 +143,61 @@ final class CTEnemiesTests: XCTestCase {
         XCTAssertTrue(issues.contains { $0.contains("no enemy record") }, "\(issues)")
     }
 
+    // MARK: Script write-back (synthetic)
+
+    private let lengths = CTEnemyAIPatch.listedLengths
+    private let plain = "main\n  block\n    test $00 Always b1=$00 b2=$00 b3=$00\n" +
+        "    act $01 Attack id=$01 target=$03 arg=$00\nreaction\nend\n"
+
+    func testWriterRefusesWhatTheGameCannotStep() throws {
+        let bytes = try CTEnemyAIPatch.assemble(text: plain, lengths: lengths)
+        XCTAssertEqual(bytes, [0, 0, 0, 0, 0xFE, 0x01, 0x01, 0x03, 0x00, 0xFE, 0xFF, 0xFF])
+        func refuse(_ text: String, _ message: String, line: UInt = #line) {
+            XCTAssertThrowsError(try CTEnemyAIPatch.assemble(text: text, lengths: lengths), line: line) { error in
+                XCTAssertTrue("\(error)".contains(message), "\(error)", line: line)
+            }
+        }
+        refuse(plain.replacingOccurrences(of: "end\n", with: ""), "no end line")
+        refuse(plain.replacingOccurrences(of: "test $00 Always b1=$00", with: "test $17 Chance percent=$FF"), "holds $FF")
+        refuse(plain.replacingOccurrences(of: "target=$03", with: "target=$39"), "past BattleAi_TargetTable")
+        refuse(plain.replacingOccurrences(of: "act $01 Attack id=$01 target=$03 arg=$00", with: "act $03 Nop03"), "no act $03")
+        refuse(plain.replacingOccurrences(of: "act $01 Attack id=$01 target=$03 arg=$00", with: "act $05 ChooseRepeat"), "no act $05")
+        refuse(plain.replacingOccurrences(of: "act $01 Attack id=$01 target=$03 arg=$00", with: "act $09 Leave action=$FE"), "$FE or $FF")
+        refuse(plain.replacingOccurrences(of: "test $00 Always", with: "test $29 Always"), "no test $29")
+        // a comment after end, and end with a comment, still end the script
+        XCTAssertEqual(try CTEnemyAIPatch.assemble(text: plain.replacingOccurrences(of: "end\n", with: "end ; done\n"),
+                                                   lengths: lengths), bytes)
+    }
+
+    func testSharersAndPlan() throws {
+        let spans: [Int: Range<Int>] = [1: 10..<20, 2: 15..<30, 3: 30..<40]
+        XCTAssertEqual(CTEnemyAIPatch.sharers(spans), [1: [2], 2: [1]])
+        let bytes = try CTEnemyAIPatch.assemble(text: plain, lengths: lengths)
+        let hash = CTEventPack.sha256(bytes)
+        typealias Script = CharacterDef.Enemy.Script
+        XCTAssertEqual(CTEnemyAIPatch.plan(Script(address: "$CC:9000", text: plain), bytes: bytes), .unknown)
+        XCTAssertEqual(CTEnemyAIPatch.plan(Script(address: "$CC:9000", size: 12, shared: [], sha256: hash), bytes: bytes), .unchanged)
+        XCTAssertEqual(CTEnemyAIPatch.plan(Script(address: "$CC:9000", size: 12, shared: [], sha256: "x"), bytes: bytes), .inPlace)
+        XCTAssertEqual(CTEnemyAIPatch.plan(Script(address: "$CC:9000", size: 11, shared: [], sha256: "x"), bytes: bytes), .relocated)
+        XCTAssertEqual(CTEnemyAIPatch.plan(Script(address: "$CC:9000", size: 40, shared: [4], sha256: "x"), bytes: bytes), .relocated)
+
+        var project = try CTProject.load(from: fixtureURL())
+        var c = project.characters["rat_a"]!
+        c.enemy = synthetic()
+        c.enemy!.ai = Script(address: "$CC:9000", text: plain, size: 8, shared: [], sha256: "x")
+        project.characters["rat_a"] = c
+        project.project.rom = .init(enemies: ["rat_a"])
+        XCTAssertEqual(CTEnemyAIPatch.budget(project).used, 12)
+        project.characters["rat_a"]!.enemy!.ai!.text = "main\nend\n"
+        XCTAssertEqual(CTEnemyAIPatch.budget(project).broken, ["rat_a"])
+        XCTAssertTrue(Validator.validate(project).contains { $0.gate == 4 && $0.message.contains("AI") }, "\(Validator.validate(project))")
+        project.characters["rat_a"]!.enemy!.ai!.text = "main\n" + String(repeating: "  block\n    test $00 Always $00 $00 $00\n" +
+            "    act $01 Attack id=$01 target=$03 arg=$00\n", count: 100) + "reaction\nend\n"
+        XCTAssertGreaterThan(CTEnemyAIPatch.budget(project).used, CTEnemyAIPatch.freeBytes)
+        XCTAssertTrue(Validator.validate(project).contains { $0.gate == 4 && $0.message.contains("bank $CC") },
+                      "\(Validator.validate(project))")
+    }
+
     // MARK: Local ROM
 
     private func clean() throws -> [UInt8] { [UInt8](try Repo.romData()) }
@@ -236,5 +292,88 @@ final class CTEnemiesTests: XCTestCase {
         refuse({ $0.project.rom!.enemies.append("nobody") }, "no characters/nobody.json")
         refuse({ $0.project.rom!.enemies.append("robo") }, "has no enemy record")
         refuse({ $0.project.rom!.enemies.append(a) }, "built twice")
+    }
+
+    func testImportRecordsScriptFactsAndSharedScripts() throws {
+        let rom = try clean()
+        let project = try importedProject(rom)
+        let lengths = CTEnemyROM.actLengths(rom: rom)
+        XCTAssertEqual(lengths, CTEnemyAIPatch.listedLengths)
+        let spans = CTEnemyAIPatch.spans(rom: rom, lengths: lengths)
+        XCTAssertEqual(spans.count, 255)
+        XCTAssertNil(spans[127])
+        let shared = CTEnemyAIPatch.sharers(spans)
+        XCTAssertEqual(shared[98], [97])
+        let ai = try XCTUnwrap(project.characters[CTEnemyROM.fileID(98)]?.enemy?.ai)
+        XCTAssertEqual(ai.shared, [97])
+        XCTAssertEqual(ai.size, spans[98]?.count)
+        let budget = CTEnemyAIPatch.budget(project, lengths: lengths)
+        XCTAssertEqual(budget.used, 0)
+        XCTAssertEqual(budget.unknown, [])
+        XCTAssertEqual(budget.broken, [])
+    }
+
+    func testEditedScriptsGoInPlaceOrIntoBankCCPadding() throws {
+        let rom = try clean()
+        var project = try importedProject(rom)
+        let lengths = CTEnemyROM.actLengths(rom: rom)
+        let spans = CTEnemyAIPatch.spans(rom: rom, lengths: lengths)
+        let shared = CTEnemyAIPatch.sharers(spans)
+        let fails = "  block\n    test $04 EnemyIdPresent b1=$00 id=$EE absent=$00\n    act $0F Message byte=$02\n"
+        let small = "main\n  block\n    test $00 Always b1=$00 b2=$00 b3=$00\n    act $09 Leave action=$01\nreaction\nend\n"
+        let smallBytes = try CTEnemyAIPatch.assemble(text: small, lengths: lengths)
+        let inPlace = try XCTUnwrap((1..<CTEnemyROM.count).first { id in
+            id != 98 && id != 97 && shared[id] == nil && (spans[id]?.count ?? 0) >= smallBytes.count
+        })
+        project.characters[CTEnemyROM.fileID(inPlace)]!.enemy!.ai!.text = small
+        project.characters[CTEnemyROM.fileID(98)]!.enemy!.ai!.text = small
+        let grown = "main\n" + String(repeating: fails, count: 40) + "reaction\nend\n"
+        project.characters[CTEnemyROM.fileID(5)]!.enemy!.ai!.text = grown
+        let (built, report) = try CTROMBuilder.build(base: rom, project: project)
+        let scripts = try XCTUnwrap(report.enemyScripts)
+        XCTAssertEqual(scripts.map(\.enemyId).sorted(), [5, 98, inPlace].sorted())
+        var placements: [Int: String] = [:]
+        for s in scripts { placements[s.enemyId] = s.placement }
+        XCTAssertEqual(placements, [inPlace: "original", 98: "free", 5: "free"])
+        let bank = Array(built[CTEnemyAIPatch.bankPC..<(CTEnemyAIPatch.bankPC + 0x10000)])
+        for s in scripts {
+            let at = CTEnemyAIPatch.pointer(built, s.enemyId)
+            XCTAssertEqual(CTEnemyAIPatch.bankPC + at, s.pc)
+            XCTAssertEqual(try CTEnemyAI.text(bank, at: at, lengths: lengths), s.text)
+            if s.placement == "free" {
+                XCTAssertTrue((CTEnemyAIPatch.freePC..<CTEnemyAIPatch.freeEnd).contains(s.pc))
+            }
+        }
+        XCTAssertEqual(scripts.first { $0.enemyId == inPlace }?.pc, spans[inPlace]?.lowerBound)
+        // Every other script (97 among them) is unchanged byte for byte, and only these bytes differ.
+        for (id, span) in spans where ![5, 98, inPlace].contains(id) {
+            XCTAssertEqual(CTEnemyAIPatch.pointer(built, id), CTEnemyAIPatch.pointer(rom, id))
+            XCTAssertEqual(Array(built[span]), Array(rom[span]), "enemy \(id)")
+        }
+        XCTAssertEqual(CTEnemyAIPatch.pointer(built, 127), CTEnemyAIPatch.pointer(rom, 127))
+        var allowed = Set(CTROMLayout.complementPC..<(CTROMLayout.complementPC + 4))
+        for s in scripts { allowed.formUnion(s.pc..<(s.pc + s.bytes)) }
+        for id in [5, 98] { allowed.formUnion((CTEnemyROM.aiPointersPC + 2 * id)..<(CTEnemyROM.aiPointersPC + 2 * id + 2)) }
+        let differing = Set((0..<rom.count).filter { rom[$0] != built[$0] })
+        XCTAssertTrue(differing.isSubset(of: allowed))
+        XCTAssertEqual(report.relocations?.count, 2)
+    }
+
+    func testBuilderScriptRefusals() throws {
+        let rom = try clean()
+        let project = try importedProject(rom)
+        let a = CTEnemyROM.fileID(1)
+        func refuse(_ text: String, _ message: String, line: UInt = #line) {
+            var p = project
+            p.characters[a]!.enemy!.ai!.text = text
+            XCTAssertThrowsError(try CTROMBuilder.build(base: rom, project: p), line: line) { error in
+                XCTAssertTrue("\(error)".contains(message), "\(error)", line: line)
+            }
+        }
+        refuse(plain.replacingOccurrences(of: "target=$03", with: "target=$39"), "past BattleAi_TargetTable")
+        refuse(plain.replacingOccurrences(of: "end\n", with: ""), "no end line")
+        let huge = "main\n" + String(repeating: "  block\n    test $00 Always $00 $00 $00\n    act $01 Attack id=$01 target=$03 arg=$00\n",
+                                         count: 100) + "reaction\nend\n"
+        refuse(huge, "no room")
     }
 }

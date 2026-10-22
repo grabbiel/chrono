@@ -951,6 +951,213 @@ def run_claims(rom, ref=REF):
              "and the certain drop (id $FF: nothing, it is !Battle_EntryNone)", not bad_reward, f"differs for {bad_reward[:8]}")]
 
 
+# --- Writing scripts (the twin of macos_studio's CTEnemyAIPatch) -------------------------
+
+AI_FREE_PC = pc(0xCC, 0xFC4F)        # Padding_CCFC4F: 945 x $FF, confirmed (manifests/rom_layout.json)
+AI_FREE_SIZE = 945
+SCRIPTS_PC, SCRIPTS_END = pc(0xCC, 0x8D08), pc(0xCC, 0xCBC9)   # the fixed scripts, then the enemies';
+                                                               # BattleRom_ScriptMsgStrings follows
+SCRIPT_MSG_PC = SCRIPTS_END
+
+
+def script_spans(rom, lengths=None):
+    """{id: range of PC addresses} of every pointer that leads to a script that parses."""
+    lengths = lengths or act_lengths(rom)
+    data, out = bank(rom), {}
+    for e in range(ENEMIES):
+        at = script_pointer(rom, e)
+        try:
+            _, end = parse_script(data, at, lengths)
+        except ScriptError:
+            continue
+        out[e] = range(pc(AI_BANK, at), pc(AI_BANK, end))
+    return out
+
+
+def sharers(spans):
+    """{id: [other ids whose script overlaps its span]} (ids with none left out)."""
+    out = {}
+    for a, ra in spans.items():
+        others = [b for b, rb in spans.items() if b != a and ra.start < rb.stop and rb.start < ra.stop]
+        if others:
+            out[a] = sorted(others)
+    return out
+
+
+def write_problems(parts):
+    """What the writer refuses beyond the parser: a test byte $FF (BattleAi_FindReactPart
+    takes the first $FF as the main part's end) and a target code past BattleAi_TargetTable."""
+    out = []
+    for blocks in parts:
+        for tests, actions in blocks:
+            for t in tests:
+                if PART_END in t[1:]:
+                    out.append(f"test ${t[0]:02X} holds $FF")
+            for kind, recs, table in (("test", tests, TESTS), ("act", actions, ACTIONS)):
+                for r in recs:
+                    for i, label in enumerate(table[r[0]][1] or ()):
+                        if label == "target" and r[1 + i] >= len(TARGETS):
+                            out.append(f"{kind} ${r[0]:02X}: target ${r[1 + i]:02X} past the table")
+    return out
+
+
+def region_claims(rom, ref=REF):
+    """Where scripts live and what a writer may use: [(name, ok, detail)]."""
+    out = []
+
+    def claim(name, ok, detail=""):
+        out.append((name, bool(ok), detail))
+
+    c1 = rom[pc(0xC1, 0):pc(0xC1, 0xFFFF) + 1]
+    claim("bank $C1 holds the long operand $CC8B08 (AiScriptPtrs) exactly twice: RunMainPart and FindReactPart",
+          c1.count(_long(0xCC8B08)) == 2 and _has(_body(rom, 0xC1, 0xAFD2, 0xAFDA), b"\xbf\x08\x8b\xcc")
+          and _has(_body(rom, 0xC1, 0xB488, 0xB490), b"\xbf\x08\x8b\xcc"), f"{c1.count(_long(0xCC8B08))} sites")
+    if ref.exists():
+        lines = [(f.name, line.split(";")[0].strip()) for f in sorted((ref / "asm").glob("bank*/*.asm"))
+                 for line in f.read_text().splitlines()]
+        ptr = [ln for _, ln in lines if "!BattleRom_AiScriptPtrs" in ln]
+        bank_reads = [ln for _, ln in lines if re.search(r"!BattleRom_ScriptBank\b(?!Enemy|Pc)", ln)]
+        claim("ChronoRET: the pointer table is read only as LDA.l !BattleRom_AiScriptPtrs,X (u16, X = id x 2)",
+              len(ptr) == 2 and all(ln == "LDA.l !BattleRom_AiScriptPtrs,X" for ln in ptr), f"{ptr}")
+        claim("ChronoRET: every script byte is read as LDA.l !BattleRom_ScriptBank+k,X (k 0-15, 16-bit X): "
+              "a script must lie inside bank $CC", bank_reads and all(
+                  re.fullmatch(r"LDA\.l !BattleRom_ScriptBank(\+(\d+|!BattleAi_RecordSize))?,X", ln) for ln in bank_reads),
+              f"{len(bank_reads)} reads")
+        cc = (ref / "asm" / "data" / "bankCC.asm").read_text()
+        claim("ChronoRET: $CC:8B08-$CC:CBC8 is the pointers and scripts; BattleRom_ScriptMsgStrings starts at "
+              "$CC:CBC9; Padding_CCFC4F is 945 x $FF, confirmed",
+              "$CC:8B08-$CC:CBC8" in cc and "org $CCCBC9\nBattleRom_ScriptMsgStrings:" in cc
+              and "$CC:FC4F-$CC:FFFF (945 B), padding, confirmed" in cc)
+    lengths = act_lengths(rom)
+    spans = script_spans(rom, lengths)
+    data = bank(rom)
+    fixed = [range(pc(AI_BANK, a), pc(AI_BANK, parse_script(data, a, lengths)[1])) for a in FIXED_SCRIPTS]
+    covered = set()
+    for r in list(spans.values()) + fixed:
+        covered.update(r)
+    gap = sorted(set(range(SCRIPTS_PC, SCRIPTS_END)) - covered)
+    p127 = pc(AI_BANK, script_pointer(rom, 127))
+    claim("the fixed scripts and the 255 parsed scripts fill $CC:8D08-$CC:CBC8 but for the bytes at the unparsed "
+          "pointer (enemy 127)", min(r.start for r in spans.values()) >= SCRIPTS_PC and max(
+              r.stop for r in spans.values()) == SCRIPTS_END and gap and gap[0] == p127
+          and gap == list(range(p127, p127 + len(gap))), f"{len(gap)} bytes from {snes(p127)}")
+    starts = [r.start for r in spans.values()]
+    shared = sharers(spans)
+    claim("no two pointers share a start; scripts overlap only where one's tail is the next one's head",
+          len(set(starts)) == len(starts) and all(
+              all(spans[a].start < spans[b].start < spans[a].stop <= spans[b].stop
+                  or spans[b].start < spans[a].start < spans[b].stop <= spans[a].stop for b in bs)
+              for a, bs in shared.items()), f"shared {shared}")
+    free = rom[AI_FREE_PC:AI_FREE_PC + AI_FREE_SIZE]
+    claim("bank $CC's padding $CC:FC4F-$CC:FFFF is 945 x $FF and a confirmed free region of the layout manifest",
+          free == b"\xff" * AI_FREE_SIZE and AI_FREE_PC + AI_FREE_SIZE == pc(0xCD, 0) and _layout_free(AI_FREE_PC, AI_FREE_SIZE))
+    parts = [parse_script(data, script_pointer(rom, e), lengths)[0] for e in spans]
+    claim("no ROM script has a test byte $FF or a target code past BattleAi_TargetTable (the writer refuses both)",
+          not any(write_problems(p) for p in parts))
+    claim("BattleFD_AiActLength = the table ChronoRET lists (SYNTHETIC_LENGTHS, CTEnemyAIPatch.listedLengths)",
+          lengths == SYNTHETIC_LENGTHS)
+    return out
+
+
+def _layout_free(at, size):
+    path = WS / "manifests" / "rom_layout.json"
+    if not path.exists():
+        return False
+    regions = json.loads(path.read_text())["freeRegions"]
+    return any(r["pc"] == at and r["size"] == size and r["fill"] == 0xFF for r in regions)
+
+
+class RomAi:
+    """The game's script reader BattleAi_RunMainPart ($C1:AFD2) and
+    BattleAi_FindReactPart ($C1:B488), run by ChronoRET's 65816 interpreter
+    over `image` with battle RAM zeroed except: PCs 0-2 present, enemy entry
+    `entry` holding id `e` (the only enemy) and no block chosen before. The
+    pointer table and bank $CC from $CC:8D08 are given as known memory, so
+    the run lists every script byte it reads."""
+
+    B252, B242, B24A, AEFF, ENEMY_COUNT = 0x7EB252, 0x7EB242, 0x7EB24A, 0x7EAEFF, 0x7EAEC6
+    CHOSEN, ACT_CODE, SCRIPT_POS, B1D2, TARGETS = 0x7EB26B, 0x7EAEE3, 0x7EB1E4, 0x7EB1D2, 0x7EAECC
+
+    def __init__(self, image, ref=REF):
+        if str(ref / "tools") not in sys.path:
+            sys.path.insert(0, str(ref / "tools"))
+        import absint
+        self.absint = absint
+        self.image = bytes(image)
+        self.machine = absint.Machine(self.image, bytearray(b"\x01") * len(image),
+                                      max_steps=10 ** 6, callee_steps=10 ** 5)
+        self.machine.widen_after = 10 ** 9
+
+    def _known(self, e, entry):
+        known = {0x7E0000 + i: 0 for i in range(0x10000)}
+        known[self.B252] = entry
+        for i in range(11):
+            known[self.AEFF + i] = i if i < 3 else 0xFF
+        known[self.AEFF + 3 + entry] = e
+        known[self.ENEMY_COUNT] = entry + 1
+        for i in range(8):
+            known[self.CHOSEN + i] = 0xFF
+        for a in list(range(AI_PTRS_PC, AI_PTRS_PC + 2 * ENEMIES)) + list(range(SCRIPTS_PC, pc(0xCD, 0))):
+            known[0xC00000 | a] = self.image[a]
+        return known
+
+    def _run(self, entry_pc, a, known):
+        s = self.absint.State()
+        s.pc, s.a, s.b, s.x, s.y = entry_pc, a, 0, 0, 0
+        s.d, s.db, s.m, s.xf, s.c = 0, 0x7E, True, False, False
+        s.z = s.n = s.v = False
+        s.sp, s.spt, s.mem, s.memt, s.frames = [], [], {}, {}, []
+        s.at = s.xt = s.yt = s.ft = self.absint.E
+        s.depth = 0
+        ends = self.machine.run(s, known)
+        if len(ends) != 1 or ends[0][1] != "rts" or self.machine.opaque:
+            raise RuntimeError(f"${entry_pc:06X}: {[how for _, how in ends]} opaque {self.machine.opaque}")
+        mem = {**known, **ends[0][0].mem}
+        reads = sorted(a & 0x3FFFFF for a in self.machine.reads if a >= 0xC00000)
+        return mem, reads
+
+    def main(self, e, entry=0):
+        """RunMainPart for id `e`: (outcome, script PC addresses read, written battle RAM)."""
+        known = self._known(e, entry)
+        mem, reads = self._run(0xC1AFD2, e, known)
+        word = lambda a: mem[a] | mem[a + 1] << 8
+        outcome = {"test": mem[self.B242 + entry], "result": mem[self.B24A + entry],
+                   "block": mem[self.CHOSEN + entry], "act": mem[self.ACT_CODE],
+                   "action": word(self.SCRIPT_POS + 2 * entry), "target": mem[self.TARGETS]}
+        written = {a: v for a, v in mem.items() if known.get(a) != v}
+        return outcome, reads, written
+
+    def reaction(self, e, entry=0):
+        """FindReactPart for id `e`: the bank-$CC address of the reaction part."""
+        mem, reads = self._run(0xC1B488, e, self._known(e, entry))
+        return mem[self.B1D2] | mem[self.B1D2 + 1] << 8, reads
+
+
+def expected_main(parts, start, present, entry=0):
+    """What RunMainPart chooses for a script at bank-$CC address `start`
+    made only of the tests $00 (Always) and $04 (EnemyIdPresent, over the
+    enemy ids `present`), with no block chosen before: the first block whose
+    tests hold, its first action, and the target slot of a Self ($03) action."""
+    at = start
+    for number, (tests, actions) in enumerate(parts[0]):
+        holds = True
+        for t in tests:
+            if t[0] == 0x00:
+                continue
+            if t[0] != 0x04:
+                raise ValueError(f"test ${t[0]:02X} is not modelled")
+            holds = holds and ((t[2] in present) == (t[3] == 0))
+        action = at + 4 * len(tests) + 1
+        if holds:
+            a = actions[0]
+            labels = ACTIONS[a[0]][1]
+            target = a[1 + labels.index("target")] if "target" in labels else None
+            return {"test": tests[-1][0], "result": 0, "block": number, "act": a[0], "action": action,
+                    "target": 3 + entry if target == 0x03 else None}
+        at = action + sum(len(a) for a in actions) + 1
+    return None
+
+
 # --- Synthetic vectors for the Swift twin ------------------------------------------------
 
 class Lcg:
@@ -1047,6 +1254,7 @@ def main():
         print(script.get("text") or f"; not a script: {script['error']}", end="\n" if "error" in script else "")
     else:
         results = code_claims(rom) + data_claims(rom)
+        results += region_claims(rom)
         if REF.exists():
             results += table_claims(rom) + asm_claims()
         if args.run:

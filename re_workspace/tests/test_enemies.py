@@ -2,11 +2,16 @@
 
 ROM-free: the field table covers each stat byte once, the codecs round-trip
 synthetic records, the AI script parser and assembler agree on synthetic
-scripts and refuse malformed ones, and the Swift vectors file is current.
+scripts and refuse malformed ones, the Swift vectors file is current, and
+the script writer's extra refusals, the overlap finder and the model of
+the script reader's choice behave on synthetic scripts.
 
-Local (ROM, ChronoRET): every code, data, table and source claim of
-`check`, and the ROM's own loader BattleFD_UnkB438 and reward routine
-BattleFD_AddEnemyRewards run in ChronoRET's 65816 interpreter for every id.
+Local (ROM, ChronoRET): every code, data, table, source and script-region
+claim of `check`, the ROM's own loader BattleFD_UnkB438 and reward routine
+BattleFD_AddEnemyRewards run in ChronoRET's 65816 interpreter for every id,
+and the ROM's script reader BattleAi_RunMainPart / FindReactPart follows an
+invented script moved into bank $CC's padding while the enemy that shared
+the old one behaves as before.
 """
 
 import os
@@ -161,3 +166,66 @@ def test_every_enemy_decodes(rom, chronoret):
     assert len(named) >= 200
     scripts = [e for e in out["enemies"] if "text" in e["ai"]]
     assert len(scripts) == 255
+
+
+# --- writing scripts ---------------------------------------------------------------------
+
+def _parts(text):
+    return ce.parse_script(ce.ai_assemble(text, LENGTHS), 0, LENGTHS)[0]
+
+
+def test_writer_refuses_a_test_byte_ff_and_a_target_past_the_table():
+    ok = "main\n  block\n    test $00 Always $00 $00 $00\n    act $01 Attack id=$01 target=$03 arg=$00\nreaction\nend\n"
+    assert ce.write_problems(_parts(ok)) == []
+    ff = ok.replace("test $00 Always $00 $00 $00", "test $17 Chance percent=$FF b2=$00 b3=$00")
+    assert ce.write_problems(_parts(ff)) == ["test $17 holds $FF"]
+    far = ok.replace("target=$03", "target=$39")
+    assert ce.write_problems(_parts(far)) == ["act $01: target $39 past the table"]
+    test_far = ok.replace("test $00 Always $00 $00 $00", "test $01 HpHalfOrLess target=$40 b2=$00 b3=$00")
+    assert ce.write_problems(_parts(test_far)) == ["test $01: target $40 past the table"]
+
+
+def test_sharers_are_overlapping_spans():
+    spans = {1: range(10, 20), 2: range(15, 30), 3: range(30, 40), 4: range(40, 41)}
+    assert ce.sharers(spans) == {1: [2], 2: [1]}
+
+
+def test_expected_main_takes_the_first_block_that_holds():
+    text = ("main\n  block\n    test $04 EnemyIdPresent b1=$00 id=$EE absent=$00\n"
+            "    act $01 Attack id=$01 target=$03 arg=$00\n"
+            "  block\n    test $04 EnemyIdPresent b1=$00 id=$EE absent=$01\n"
+            "    act $0F Message byte=$02\n    act $01 Attack id=$01 target=$03 arg=$00\nreaction\nend\n")
+    parts = _parts(text)
+    want = ce.expected_main(parts, 0x9000, {0x12}, entry=2)
+    assert want == {"test": 0x04, "result": 0, "block": 1, "act": 0x0F, "action": 0x9000 + 10 + 5,
+                    "target": None}
+    assert ce.expected_main(parts, 0x9000, {0xEE})["block"] == 0
+
+
+def test_script_region_claims(rom, chronoret):
+    _assert_all(ce.region_claims(rom, chronoret))
+
+
+def test_rom_script_reader_follows_a_moved_script(rom, chronoret):
+    """An invented script in bank $CC's padding, enemy 98 pointed at it: the
+    ROM's reader chooses as the script says; enemy 97, which shared 98's old
+    bytes, behaves as on the clean ROM."""
+    text = ("main\n  block\n    test $04 EnemyIdPresent b1=$00 id=$EE absent=$00\n"
+            "    act $01 Attack id=$01 target=$03 arg=$00\n"
+            "  block\n    test $00 Always b1=$00 b2=$00 b3=$00\n    act $01 Attack id=$02 target=$03 arg=$00\n"
+            "reaction\n  block\n    test $00 Always b1=$00 b2=$00 b3=$00\n    act $09 Leave action=$01\nend\n")
+    lengths = ce.act_lengths(rom)
+    data = ce.ai_assemble(text, lengths)
+    assert ce.sharers(ce.script_spans(rom, lengths)).get(98) == [97]
+    image = bytearray(rom)
+    at = ce.AI_FREE_PC & 0xFFFF
+    image[ce.AI_FREE_PC:ce.AI_FREE_PC + len(data)] = data
+    image[ce.AI_PTRS_PC + 2 * 98:ce.AI_PTRS_PC + 2 * 98 + 2] = bytes([at & 0xFF, at >> 8])
+    moved, before = ce.RomAi(bytes(image), chronoret), ce.RomAi(rom, chronoret)
+    parts = ce.parse_script(data, 0, lengths)[0]
+    outcome, reads, _ = moved.main(98, 1)
+    want = ce.expected_main(parts, at, {98}, entry=1)
+    assert outcome == want and want["block"] == 1 and want["target"] == 4
+    assert set(reads) <= set(range(ce.AI_FREE_PC, ce.AI_FREE_PC + len(data))) | {ce.AI_PTRS_PC + 196, ce.AI_PTRS_PC + 197}
+    assert moved.reaction(98)[0] == at + len(ce.assemble_parts(parts[:1]))
+    assert moved.main(97, 1) == before.main(97, 1) and moved.reaction(97) == before.reaction(97)
