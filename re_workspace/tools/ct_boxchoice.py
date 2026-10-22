@@ -36,6 +36,13 @@ four characters are the 64 bytes Field_UploadUnk57E0 sends from $FF:9260 to
 VRAM $57E0: BG3's characters start at $5000 (BG34NBA $05), so $57E0 is
 character $0FC.
 
+Over the map (EngFD_UnkC124's band records, Hdma_InitChannelsFD): in the band
+the HDMA writes, besides the box's BG1SC/BG3SC ($1C), its VOFS and TM (5 or
+1), HOFS 0 for BG1 and BG3 (each scroll pair's first word) and TS = TMW = TSW
+= 0 (the 4-register TM record); the gradient's CGADSUB/COLDATA on every line
+but the last, which keeps the map's CGADSUB with COLDATA black. Outside it the
+records are the map's own (TM/TS from Ppu_Unk0BD7/0BD8, its tilemaps).
+
 No ROM bytes are kept here: everything is read from the user's ROM.
 
     ct_boxchoice.py place UNK30 SCREEN_Y                the place for Field_Unk30 and the speaker's Obj_ScreenY
@@ -176,6 +183,19 @@ ASM_CLAIMS = (
                                        "BIT.b #!Pad_Unk00F8Bit7", "LDA #$03", "STA.b !Field_Unk62")),
     ("bankC0/bankC0.asm", "Irq_DrawChoiceCursor", ("LDA.w !DP_Field+!Field_Unk63", "LDX.w #!ChoiceCursor_VramRow0",
                                                    "LDX.w #!ChoiceCursor_TileTop", "LDX.w #!ChoiceCursor_TileBottom")),
+    ("bankFD/bankFD.asm", "EngFD_UnkC124", ("LDA.w #0", "STA.w !Hdma_Unk7F14F8", "LDA.w #!Hdma_ScrollPair0",
+                                           "STA.w !Hdma_Unk7F14F8+2", "LDA.w #0", "STA.w !Hdma_Unk7F14F8+4",
+                                           "LDA.w #!Hdma_ScrollPair1", "LDA.w #0", "STA.w !Hdma_Unk7F14F8+8",
+                                           "LDA.w #!Hdma_ScrollPair2", "LDA.w #0", "STA.w !Hdma_Unk7F14F8+12",
+                                           "LDA.w #!Hdma_ScrollPair3", "LDA.l !Ppu_Unk0BD7", "STA.w !Hdma_Unk7F1520",
+                                           "LDA.b #5", "STA.w !Hdma_Unk7F1524", "LDA.b #0", "STA.w !Hdma_Unk7F1524+1",
+                                           "LDA.b #0", "STA.w !Hdma_Unk7F1524+2", "STA.w !Hdma_Unk7F1524+3",
+                                           "LDA.b #1", "STA.w !Hdma_Unk7F1528", "LDA.b #0", "STA.w !Hdma_Unk7F1528+1",
+                                           "LDA.b #0", "STA.w !Hdma_Unk7F1528+2", "STA.w !Hdma_Unk7F1528+3")),
+    ("bankFD/bankFD.asm", "Hdma_InitChannelsFD", ("LDA.b #!DMAP_HdmaIndirect|!DMAP_FourRegs", "STA.b DMAP4-!DP_DMA",
+                                                  "LDA.b #!BBAD_BG1HOFS", "STA.b BBAD1-!DP_DMA",
+                                                  "LDA.b #!BBAD_BG3HOFS", "STA.b BBAD3-!DP_DMA",
+                                                  "LDA.b #!BBAD_TM", "STA.b BBAD4-!DP_DMA")),
     ("bankC0/bankC0.asm", "Field_UploadUnk57E0", ("LDX.w #!FieldRom_Unk9260&$FFFF", "LDX.w #!Field_UploadVram57E0",
                                                   "LDX.w #!Field_UploadUnk57E0Bytes")),
 )

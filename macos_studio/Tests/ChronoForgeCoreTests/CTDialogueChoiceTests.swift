@@ -121,6 +121,49 @@ final class CTDialogueChoiceTests: XCTestCase {
         let early = box.render(layout, at: max(0, first - 2), cursor: 0)
         let o = ((14 + 8) * 256 + 24) * 4
         XCTAssertNotEqual(Array(early[o..<(o + 3)]), [grey, grey, grey])
-        XCTAssertEqual(CTChoiceCursor.pixels(mem).flatMap { $0 }.filter { $0 == 3 }.count, 256)
+        let pixels: [UInt8] = CTChoiceCursor.pixels(mem).flatMap { $0 }
+        XCTAssertEqual(pixels.filter { $0 == 3 }.count, 256)
+    }
+
+    func testBoxOverAMapKeepsTheMapOutsideTheBand() throws {
+        let image = CTDialogueTests.handMade()
+        let layout = try CTDialogueLayout.bytes([0xA0, 0x00], rom: image, settings: CTDialogueSettings(place: 2, press: 3))
+        // A stand-in field picture: scrolled layers, a sub screen, windows, its own math and colours.
+        var map = PPUFrame()
+        map.setAllLines { r in
+            r.bgmode = 0x09
+            r.bg[0].hofs = 37
+            r.bg[2].hofs = 5
+            r.bg[0].sc = 0x61
+            r.tm = 0x17
+            r.ts = 0x04
+            r.tmw = 0x01
+            r.cgadsub = 0x12
+        }
+        for i in 0..<256 { map.cgram[i] = UInt16(i * 97 & 0x7FFF) }
+        map.vram[0x6000] = 0x1234
+        let box = CTDialogueBox(rom: image, style: 0)
+        let end = try XCTUnwrap(layout.pageFrame(0))
+        let f = box.frame(layout, at: end, over: map, cursor: nil)
+        let band = CTDialogueBox.boxLines(place: 2)
+        for y in 0..<f.height {
+            let r = f.lines[y]
+            if band.contains(y) {
+                XCTAssertEqual([r.bg[0].sc, r.bg[2].sc], [0x1C, 0x1C], "line \(y)")
+                XCTAssertEqual([r.bg[0].hofs, r.bg[2].hofs], [0, 0], "line \(y)")
+                XCTAssertEqual([r.ts, r.tmw, r.tsw], [0, 0, 0], "line \(y)")
+                if y == band.upperBound - 1 { XCTAssertEqual(r.cgadsub, 0x12, "the last band line keeps the map's") }
+            } else {
+                XCTAssertEqual(r, map.lines[y], "line \(y) is the map's")
+            }
+        }
+        XCTAssertEqual(Array(f.cgram[16...]), Array(map.cgram[16...]))
+        XCTAssertEqual(f.cgram[0], map.cgram[0])
+        XCTAssertEqual(f.vram[0x6000], 0x1234)
+        XCTAssertEqual(f.vram[CTDialogueROM.tilemapText], CTDialogueWindow.textTilemap()[0][0])
+        // Without a map the band is as before (the blank frame's zero registers).
+        let alone = box.frame(layout, at: end)
+        XCTAssertEqual(alone.lines[band.lowerBound + 20].ts, 0)
+        XCTAssertEqual(alone.lines[band.upperBound - 1].cgadsub, 0)
     }
 }

@@ -115,9 +115,10 @@ private func analysisOutput(_ r: CTTextAnalyzer.Report, json: Bool) throws -> Da
 let textBoxUsage = """
        chronoforge text preview <rom> <TABLE:INDEX | --text "..."> [--page N | --frame F] [--png out.png]
                     [--frames] [--layout-json] [--press N] [--place 1|2] [--style 0-7]
-                    [--opcode BB|C0-C4 [--speaker-y Y]] [--choice K]
+                    [--opcode BB|C0-C4 [--speaker-y Y]] [--choice K] [--location N --project P [--camera X,Y]]
                     (--opcode: the box's place as that opcode sets it, by the speaker's screen Y for BB/C0;
-                     --choice: a choice message's cursor on box line K, from the end wait)
+                     --choice: a choice message's cursor on box line K, from the end wait;
+                     --location: the box over that imported location's field picture)
        chronoforge text preview <rom> --help-line item|tech <N | --text "..."> [--png out.png] [--layout-json]
                     (an item's or a tech's description in the menu's help line)
        chronoforge text font <rom> [--json]
@@ -156,7 +157,7 @@ func cmdTextBox(_ args: [String]) -> Int32 {
             flags.insert(a)
             i += 1
         } else if ["--text", "--page", "--frame", "--png", "--press", "--place", "--style", "--help-line",
-                    "--opcode", "--speaker-y", "--choice"].contains(a) {
+                    "--opcode", "--speaker-y", "--choice", "--location", "--project", "--camera"].contains(a) {
             guard i + 1 < args.count else { print("missing value for \(a)"); return 2 }
             options[a] = args[i + 1]
             i += 2
@@ -243,7 +244,19 @@ func cmdTextBox(_ args: [String]) -> Int32 {
                 }
                 frame = at
             }
-            let rgba = CTDialogueBox(mem: mem, style: style).render(layout, at: frame, cursor: cursor)
+            let box = CTDialogueBox(mem: mem, style: style)
+            var picture = box.frame(layout, at: frame, cursor: cursor)
+            if let loc = options["--location"] {
+                guard let n = parseNumber(loc), let path = options["--project"] else {
+                    print("--location takes a location number and needs --project P"); return 2
+                }
+                let xy = (options["--camera"] ?? "0,0").split(separator: ",").compactMap { Int($0) }
+                guard xy.count == 2 else { print("--camera takes X,Y"); return 2 }
+                let project = try CTProject.load(from: URL(fileURLWithPath: path))
+                let map = try CTDialogueOverMap.picture(project: project, location: n, cameraX: xy[0], cameraY: xy[1])
+                picture = box.frame(layout, at: frame, over: map, cursor: cursor)
+            }
+            let rgba = PPUReferenceRenderer.render(picture)
             let url = URL(fileURLWithPath: png)
             try PNG.writeRGBA(width: PPUFrame.width, height: 224, rgba: rgba).write(to: url, options: .atomic)
             print("wrote \(url.path) (frame \(min(frame, layout.frameCount - 1)))")

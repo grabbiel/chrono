@@ -246,7 +246,7 @@ private struct ItemForm: View {
                 GridRow {
                     Text("In a dialogue box").foregroundStyle(.secondary)
                     DialoguePreviewView(source: .text(text), romPath: romPath, scale: 1.5,
-                                        names: CTDialogueSettings.projectNames(project))
+                                        names: CTDialogueSettings.projectNames(project), project: project)
                         .help("The text through the field's dialogue box (font, widths, frame, pacing); "
                               + "the menu draws descriptions in its own help line")
                 }

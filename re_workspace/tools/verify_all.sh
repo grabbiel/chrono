@@ -235,6 +235,16 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_dialogue.py verify-cli macos_studio/.build/debug/chronoforge >/tmp/verify_dialogue_cli.log 2>&1
   RC=$?
   note "dialogue CLI = ct_dialogue ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_dialogue_cli.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Menu help line (every item and tech description through Menu_TextStepLoop) and the box's place and
+  # choice cursor (Field_Unk1F87, Sub_1ADF, Irq_DrawChoiceCursor run); the Swift twins' vectors are current.
+  $PY re_workspace/tools/ct_helpline.py check --run >/tmp/verify_helpline.log 2>&1
+  RC=$?
+  note "help line claims ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_helpline.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  { $PY re_workspace/tools/ct_boxchoice.py check --run
+    $PY re_workspace/tools/ct_helpline.py vectors --check macos_studio/Tests/ChronoForgeCoreTests/Resources/dialogue/helpline_vectors.json
+    $PY re_workspace/tools/ct_boxchoice.py vectors --check macos_studio/Tests/ChronoForgeCoreTests/Resources/dialogue/choice_vectors.json; } >/tmp/verify_boxchoice.log 2>&1
+  RC=$?
+  note "box place and choice claims ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_boxchoice.log | tail -1) claims), vectors current" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   # Sprites: the PC sets' write-back (identical rebuild, edits re-decoded, the ROM's frame decoder
   # on the built ROM, damaged copies rejected, refusals).
   $PY macos_studio/tools/verify_sprite_build.py >/tmp/verify_sprite_build.log 2>&1

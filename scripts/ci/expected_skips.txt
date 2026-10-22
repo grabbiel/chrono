@@ -96,3 +96,4 @@ ChronoForgeCoreTests.CTFieldRuntimeTests/testDebuggerLogsFlagChangesAndStopsOnBr
 ChronoForgeCoreTests.CTFieldRuntimeTests/testThePictureDrawsTheObjects                          skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testSummaryNamesTheLimitations                         skip      # local ROM
 ChronoForgeCoreTests.CTEnemySpritePatchTests/testImportThenBuildIsIdentical                 skip      # local ROM
+ChronoForgeCoreTests.CTHelpLineTests/testEveryROMDescriptionFits                                skip      # local ROM

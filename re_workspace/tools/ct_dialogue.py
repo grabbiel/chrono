@@ -44,7 +44,7 @@ No ROM bytes are kept here: everything is read from the user's ROM.
 
     ct_dialogue.py font [--rom PATH]                     the font and window as JSON (counts and digests)
     ct_dialogue.py layout <table:index> [--rom PATH]     one message's layout and pacing (numbers only)
-    ct_dialogue.py check [--rom PATH] [--run]            every evidence claim (exit 1 on a failure)
+    ct_dialogue.py check [--rom PATH] [--run]            every evidence claim, ct_helpline and ct_boxchoice included (exit 1 on a failure)
     ct_dialogue.py verify-cli <chronoforge> [--rom PATH] the Swift CLI's font and layouts against this decode
     ct_dialogue.py vectors (--out | --check) P           synthetic vectors for the Swift twin
 """
@@ -1319,7 +1319,21 @@ def main():
     claims = asm_claims() + code_claims(rom) + data_claims(rom)
     if args.run:
         claims += run_claims(rom, messages=args.messages)
+    claims += traced_claims(rom, args.run)
     return report(claims)
+
+
+def traced_claims(rom, run):
+    """The traces built on this decoder: the menu help line (ct_helpline.py)
+    and the box's place and choice cursor (ct_boxchoice.py)."""
+    import ct_boxchoice
+    import ct_helpline
+    out = []
+    for m in (ct_helpline, ct_boxchoice):
+        out += m.asm_claims() + m.code_claims(rom) + m.data_claims(rom)
+        if run:
+            out += m.run_claims(rom)
+    return out
 
 
 if __name__ == "__main__":

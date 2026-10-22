@@ -26,6 +26,20 @@ enum DialogueAssets {
         cache[path] = (rom, codec)
         return (rom, codec)
     }
+
+    private static var maps: [String: PPUFrame] = [:]
+
+    /// A location's field picture with the camera at the map's centre (CTDialogueOverMap), once per project and location.
+    static func map(_ project: CTProject, location: Int) -> PPUFrame? {
+        let key = "\(project.url.path)/\(location)"
+        if let hit = maps[key] { return hit }
+        guard let m = project.maps[CTMaps.id(location)] else { return nil }
+        let x = m.width * 8 - 128
+        let y = m.height * 8 - 112
+        guard let f = try? CTDialogueOverMap.picture(project: project, location: location, cameraX: x, cameraY: y) else { return nil }
+        maps[key] = f
+        return f
+    }
 }
 
 struct DialoguePreviewView: View {
@@ -45,6 +59,10 @@ struct DialoguePreviewView: View {
     var choice: Int? = nil
     /// Display names by character id (CTDialogueSettings.projectNames); the defaults otherwise.
     var names: [Int: String] = [:]
+    /// The project whose imported locations can show behind the box.
+    var project: CTProject? = nil
+    /// The location to show behind the box at first (the event pack's, in a scene).
+    var location: Int? = nil
 
     enum PlaceMode: Hashable { case given, top, bottom, speaker }
 
@@ -60,6 +78,7 @@ struct DialoguePreviewView: View {
     @State private var operand = 0x01
     @State private var cursor = 0
     @State private var party = [0, 1, 2]
+    @State private var behind: Int?
     @FocusState private var focused: Bool
 
     private var boxPlace: Int {
@@ -76,6 +95,7 @@ struct DialoguePreviewView: View {
     private struct Built {
         var layout: CTDialogueLayout?
         var box: CTDialogueBox?
+        var map: PPUFrame?
         var problem: String?
     }
 
@@ -96,7 +116,9 @@ struct DialoguePreviewView: View {
                 let at = CTDialogueLayout.messageAddress(rom: assets.rom, table: table, index: index)
                 layout = try CTDialogueLayout(mem: CTDialogueMemory(rom: assets.rom), text: at, settings: settings)
             }
-            return Built(layout: layout, box: CTDialogueBox(rom: assets.rom, style: style))
+            var map: PPUFrame?
+            if let project, let behind { map = DialogueAssets.map(project, location: behind) }
+            return Built(layout: layout, box: CTDialogueBox(rom: assets.rom, style: style), map: map)
         } catch {
             return Built(problem: String(describing: error))
         }
@@ -109,7 +131,8 @@ struct DialoguePreviewView: View {
                 let pages = layout.pageCount
                 let shown = min(page, pages - 1)
                 DialogueBoxPicture(layout: layout, box: box, frame: layout.pageFrame(shown) ?? 0, playing: playing,
-                                   speed: speed, player: player, scale: scale, cursor: activeChoice == nil ? nil : cursor)
+                                   speed: speed, player: player, scale: scale, cursor: activeChoice == nil ? nil : cursor,
+                                   map: built.map)
                     .frame(width: 256 * scale, height: CGFloat(CTDialogueROM.bandLines) * scale)
                     .focusable()
                     .focused($focused)
@@ -149,6 +172,7 @@ struct DialoguePreviewView: View {
         }
         .onChange(of: source) { _, _ in page = 0; playing = false }
         .onAppear {
+            if behind == nil { behind = location }
             if let choice {
                 choiceOn = true
                 operand = choice & 0x0F
@@ -196,6 +220,18 @@ struct DialoguePreviewView: View {
         }
         .font(.caption)
         HStack(spacing: 6) {
+            if let project {
+                let locations = CTDialogueOverMap.locations(project)
+                Picker("Behind", selection: $behind) {
+                    Text("Backdrop").tag(Int?.none)
+                    ForEach(locations, id: \.self) { n in
+                        Text(String(format: "Location $%03X", n) + (project.maps[CTMaps.id(n)].map { " \($0.name)" } ?? ""))
+                            .tag(Int?.some(n))
+                    }
+                }.frame(width: 230)
+                    .help(locations.isEmpty ? "Import locations (Maps) to show the field behind the box"
+                                            : "The location's field picture (camera at its centre) behind the box")
+            }
             Text("Party").foregroundStyle(.secondary)
             ForEach(0..<3, id: \.self) { slot in
                 Picker("", selection: Binding(get: { party[slot] }, set: { party[slot] = $0 })) {
@@ -234,6 +270,7 @@ private struct DialogueBoxPicture: NSViewRepresentable {
     let player: DialoguePlayer
     let scale: CGFloat
     var cursor: Int?
+    var map: PPUFrame?
 
     final class Coordinator {
         var key: String = ""
@@ -273,7 +310,8 @@ private struct DialogueBoxPicture: NSViewRepresentable {
         let blank = c.blank!
         let mem = box.mem
         let cursorFrom = cursor == nil ? nil : CTChoiceCursor.firstFrame(layout)
-        let picture: (Int) -> PPUFrame = { [cursor] n in
+        let picture: (Int) -> PPUFrame = { [cursor, map] n in
+            if let map { return box.frame(layout, at: n, over: map, cursor: cursor) }
             var f = blank
             let t = min(max(0, n), layout.frames.count - 1)
             CTDialogueBox.storeText(&f, layout, through: t)
