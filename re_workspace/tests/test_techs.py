@@ -225,4 +225,6 @@ def test_techs_manifest_update_verifies(manifest_path, rom_path):
     updated = cs.techs_manifest_update(manifest)
     assert cs.verify_manifest(updated, "items and techs (updated)") == []
     before, after = cs.field_stats(manifest), cs.field_stats(updated)
-    assert after["verified"] >= 10 and after["verified"] > before["verified"]
+    # >=: once the update is applied to the manifest, it changes nothing.
+    assert after["verified"] >= 10 and after["verified"] >= before["verified"]
+    assert cs.techs_manifest_update(updated) == updated
