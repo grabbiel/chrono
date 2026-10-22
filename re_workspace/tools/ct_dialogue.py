@@ -892,13 +892,14 @@ class RomRunner:
                                 callee_steps=10 ** 8)
         self.steps = 0
 
-    def run(self, entry, memory, d=0, m=True, x=False, limit=2_000_000, strict=True, trace=None):
+    def run(self, entry, memory, d=0, m=True, x=False, limit=2_000_000, strict=True, trace=None, a=0, db=0):
         """Run from `entry` to its return; `memory` ({address: byte}) is read and
-        updated (`strict`: a byte written from unknown inputs is an error)."""
+        updated (`strict`: a byte written from unknown inputs is an error).
+        `a` and `db` are the entry's A (low byte) and data bank."""
         absint, machine = self.absint, self.machine
         s = absint.State()
-        s.pc, s.a, s.b, s.x, s.y = entry, 0, 0, 0, 0
-        s.d, s.db, s.m, s.xf, s.c = d, 0, m, x, False
+        s.pc, s.a, s.b, s.x, s.y = entry, a, 0, 0, 0
+        s.d, s.db, s.m, s.xf, s.c = d, db, m, x, False
         s.z = s.n = s.v = False
         s.sp, s.spt, s.mem, s.memt, s.frames = [], [], {}, {}, []
         s.at = s.xt = s.yt = s.ft = absint.E
