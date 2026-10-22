@@ -4,6 +4,7 @@ import ChronoForgeCore
 private let runtimeUsage = """
 usage: chronoforge runtime run <rom.sfc> <location> [--frames N] [--input script] [--trace] [--json out.json]
                               [--party 0,1,2] [--entry x,y[,facing]] [--flag addr=value ...]
+                              [--png out.png [--project p.ctproj]]
        chronoforge runtime vectors <rom.sfc> <cases.json> --out <results.json>
 """
 
@@ -104,6 +105,16 @@ private func runtimeRun(rom: [UInt8], location: String, options: [String: String
         try field.step(input: script.held(at: f))
     }
     let s = field.summary()
+    if let png = options["--png"] {
+        var map: GameMap?, assets: LocationScene.Assets?
+        if let path = options["--project"] {
+            let project = try CTProject.load(from: URL(fileURLWithPath: path))
+            map = project.maps[CTMaps.id(field.location)]
+            if let m = map { assets = try LocationScene.assets(for: m, project: project) }
+        }
+        let rgba = CTFieldPicture.render(field, map: map, assets: assets)
+        try PNG.writeRGBA(width: 256, height: 224, rgba: rgba).write(to: URL(fileURLWithPath: png))
+    }
     if let out = options["--json"] {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
