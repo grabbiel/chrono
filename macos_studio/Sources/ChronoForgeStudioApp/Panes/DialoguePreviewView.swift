@@ -219,19 +219,20 @@ struct DialoguePreviewView: View {
             }
         }
         .font(.caption)
+        if let project {
+            let locations = CTDialogueOverMap.locations(project)
+            Picker("Behind", selection: $behind) {
+                Text("Backdrop").tag(Int?.none)
+                ForEach(locations, id: \.self) { n in
+                    Text(String(format: "Location $%03X", n) + (project.maps[CTMaps.id(n)].map { " \($0.name)" } ?? ""))
+                        .tag(Int?.some(n))
+                }
+            }.frame(width: 230)
+                .help(locations.isEmpty ? "Import locations (Maps) to show the field behind the box"
+                                        : "The location's field picture (camera at its centre) behind the box")
+                .font(.caption)
+        }
         HStack(spacing: 6) {
-            if let project {
-                let locations = CTDialogueOverMap.locations(project)
-                Picker("Behind", selection: $behind) {
-                    Text("Backdrop").tag(Int?.none)
-                    ForEach(locations, id: \.self) { n in
-                        Text(String(format: "Location $%03X", n) + (project.maps[CTMaps.id(n)].map { " \($0.name)" } ?? ""))
-                            .tag(Int?.some(n))
-                    }
-                }.frame(width: 230)
-                    .help(locations.isEmpty ? "Import locations (Maps) to show the field behind the box"
-                                            : "The location's field picture (camera at its centre) behind the box")
-            }
             Text("Party").foregroundStyle(.secondary)
             ForEach(0..<3, id: \.self) { slot in
                 Picker("", selection: Binding(get: { party[slot] }, set: { party[slot] = $0 })) {
