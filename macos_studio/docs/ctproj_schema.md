@@ -246,6 +246,26 @@ is never built. For a ROM item, `stats` holds record B under the category's keys
 `char5Attack` are read-only: the builder refuses values that differ from the base
 ROM's. See [items](items.md) for each field's meaning and evidence.
 
+## `audio/samples/<id>.json`
+
+The sidecar of `audio/samples/<id>.brr` (`[u16 LE byte length][9-byte BRR
+blocks]`; bare blocks also load). `<id>.wav` beside it is the S-DSP decode,
+written by the SFX Lab for preview; it can be regenerated. See
+[the SFX Lab](sfx_lab.md).
+
+| Field | Meaning |
+| --- | --- |
+| `brr` | project-relative path of the BRR file |
+| `rate` | sample rate in Hz; the preview pitch is `rate × $1000 / 32000` |
+| `loop`, `loopStartSample`, `loopEndSample` | loop on 16-sample block boundaries; the sidecar, not the data's flags, decides looping |
+| `adsr` | `[ADSR1, ADSR2]` register bytes (ADSR1 bit 7 set) or `[attack 0-15, decay 0-7, sustain level 0-7, sustain rate 0-31]`; other values are ignored |
+| `gain` | GAIN register byte, used when `adsr` is absent |
+| `synth` | optional generator spec (`wave`: pulse, saw, triangle, sine, noise or fm; `frequency`, `endFrequency`, `duration`, `duty`, `fmRatio`, `fmIndex`, `fmDecay`, `decay`, `amplitude`, `rate`, `seed`, `loop`); missing keys take defaults |
+| `source` | optional WAV import record: `wav`, `sourceRate`, `normalizeDBFS`, `crossfade`, `beam`, and the measured `snrDB` and `maxError` |
+| `fx` | optional voice effects: `tickDivider` (1-256, default 32 = 4 ms ticks), `bendSemitones`/`bendTicks`, `vibratoCents`/`vibratoPeriodTicks`/`vibratoDelayTicks`, `noise`/`noiseClock` (0-31), `gainStart` (GAIN direct level at key-on, 0-127), `keyOffTick` (preview release) |
+
+`synth`, `source` and `fx` are absent from older sidecars, which load and save unchanged.
+
 ## Conventions (binding for all modules)
 - **Color**: stored as hex BGR555 word `"bgr555": "0x7FFF"` + derived `"srgb": [r,g,b]`
   (regenerated on load; BGR555 is authoritative).

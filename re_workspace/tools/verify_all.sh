@@ -161,6 +161,16 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_items.py check --run >/tmp/verify_item_claims.log 2>&1
   RC=$?
   note "Item evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_item_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # SFX Lab: a synth sample encoded into a fixture copy and checked on the S-DSP
+  # (every frame = the decode), a render with vibrato, key-off and its envelope.
+  SFX_DIR=$(mktemp -d)
+  cp -R macos_studio/Tests/ChronoForgeCoreTests/Resources/MyGame.ctproj "$SFX_DIR/p.ctproj" \
+    && macos_studio/.build/debug/chronoforge sfx synth fm --freq 880 --end-freq 220 --duration 0.3 --project "$SFX_DIR/p.ctproj" --id blip --verify >/tmp/verify_sfx.log 2>&1 \
+    && macos_studio/.build/debug/chronoforge sfx render "$SFX_DIR/p.ctproj" blip --out "$SFX_DIR/blip.wav" --vibrato 30,12 --key-off 40 --envelope "$SFX_DIR/env.csv" >>/tmp/verify_sfx.log 2>&1 \
+    && macos_studio/.build/debug/chronoforge validate "$SFX_DIR/p.ctproj" >>/tmp/verify_sfx.log 2>&1
+  RC=$?
+  note "SFX Lab CLI ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_sfx.log | tail -1) frames S-DSP parity)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  rm -rf "$SFX_DIR"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

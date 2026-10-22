@@ -255,6 +255,7 @@ case "characters":      exit(cmdCharacters(rest))
 case "sprites":         exit(cmdSprites(rest))
 case "tilesets":        exit(cmdTilesets(rest))
 case "items":           exit(cmdItems(rest))
+case "sfx":             exit(cmdSFX(rest))
 default:
     print("""
     chronoforge — ChronoForge Studio CLI
@@ -268,6 +269,7 @@ default:
       chronoforge sprites <import|show> ...                      (playable-character sprites)
       chronoforge tilesets <import|show|verify> ...              (location tilesets and palettes)
       chronoforge items <import|show> ...                        (item, gear and consumable tables)
+      chronoforge sfx <encode|synth|info|render> ...             (BRR samples: WAV import, synth, S-DSP render)
       chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]
                         [--entry 0] [--flag symbol] [--steps 1000]

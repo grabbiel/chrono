@@ -83,11 +83,32 @@ public final class SPCStream {
         /// GAIN register when ADSR is off; $7F is a fixed full envelope.
         public var gain: UInt8 = 0x7F
         public var volume: Int8 = 0x7F
+        /// Pitch per timer-0 tick (a bend or vibrato), written by a small
+        /// SPC700 program; empty keeps `pitch`.
+        public var pitchCurve: [UInt16] = []
+        /// The ticks of `pitchCurve` from this one to its end repeat (a
+        /// vibrato cycle); nil holds the last value.
+        public var pitchRepeatFrom: Int? = nil
+        /// Timer 0 divider: a tick every `tickDivider` / 8000 s (0 is 256).
+        public var tickDivider: UInt8 = 32
+        /// Play the noise generator instead of the sample (NON), clocked at
+        /// `noiseClock` (FLG bits 0-4, the envelope rate table).
+        public var noise = false
+        public var noiseClock: UInt8 = 0
+        /// GAIN at key-on; the envelope set by `adsr` / `gain` takes over on the first tick.
+        public var gainStart: UInt8? = nil
+        /// Tick at which the voice is keyed off (KOFF), for previews of the release.
+        public var keyOffTick: Int? = nil
         public init() {}
 
         public static func == (a: Voice, b: Voice) -> Bool {
             a.pitch == b.pitch && a.adsr?.0 == b.adsr?.0 && a.adsr?.1 == b.adsr?.1 && a.gain == b.gain && a.volume == b.volume
+                && a.pitchCurve == b.pitchCurve && a.pitchRepeatFrom == b.pitchRepeatFrom && a.tickDivider == b.tickDivider
+                && a.noise == b.noise && a.noiseClock == b.noiseClock && a.gainStart == b.gainStart && a.keyOffTick == b.keyOffTick
         }
+
+        /// True when the voice needs the tick program (otherwise the CPU stops).
+        var hasScript: Bool { !pitchCurve.isEmpty || gainStart != nil || keyOffTick != nil }
 
         /// From a ctproj sample sidecar. `rate` sets the pitch (32 kHz = $1000).
         /// `adsr` is used when it holds hardware fields: two raw bytes
@@ -105,6 +126,14 @@ public final class SPCStream {
                 }
             }
             if let g = meta.gain, (0...255).contains(g) { gain = UInt8(g) }
+            if let fx = meta.fx {
+                if let d = fx.tickDivider, (1...256).contains(d) { tickDivider = UInt8(d & 0xFF) }
+                (pitchCurve, pitchRepeatFrom) = SFXPitch.curve(base: pitch, fx: fx)
+                noise = fx.noise ?? false
+                if let c = fx.noiseClock, (0...31).contains(c) { noiseClock = UInt8(c) }
+                if let g = fx.gainStart, (0...127).contains(g) { gainStart = UInt8(g) }
+                if let k = fx.keyOffTick, k >= 0 { keyOffTick = k }
+            }
         }
     }
 
@@ -126,6 +155,16 @@ public final class SPCStream {
                             with: [UInt8(sampleData & 0xFF), UInt8(sampleData >> 8), UInt8(loop & 0xFF), UInt8(loop >> 8)])
         ram[sampleProgram] = 0xFF  // STOP: the DSP runs on its own
         ram.replaceSubrange(sampleData..<(sampleData + brr.count), with: brr)
+        if voice.hasScript {
+            let script = sampleScript(voice)
+            let at = sampleData + brr.count
+            guard at + script.bytes.count <= 0xFF00 else { throw CTSongError("sample and its tick script do not fit in ARAM") }
+            ram.replaceSubrange(at..<(at + script.bytes.count), with: script.bytes)
+            let again = at + script.repeatOffset
+            ram.replaceSubrange(0..<4, with: [UInt8(at & 0xFF), UInt8(at >> 8), UInt8(again & 0xFF), UInt8(again >> 8)])
+            ram.replaceSubrange(sampleProgram..<(sampleProgram + tickProgram.count), with: tickProgram)
+            ram[sampleProgram + 1] = voice.tickDivider
+        }
 
         var registers = [UInt8](repeating: 0, count: 128)
         let volume = UInt8(bitPattern: voice.volume)
@@ -134,19 +173,95 @@ public final class SPCStream {
         registers[0x04] = 0                                                     // SRCN
         registers[0x05] = voice.adsr?.0 ?? 0; registers[0x06] = voice.adsr?.1 ?? 0
         registers[0x07] = voice.gain
+        if let start = voice.gainStart { registers[0x05] &= 0x7F; registers[0x07] = start & 0x7F }
+        registers[0x3D] = voice.noise ? 0x01 : 0                                // NON
         registers[0x0C] = 0x7F; registers[0x1C] = 0x7F                          // MVOL L/R
         registers[0x4C] = 0x01                                                  // KON voice 0
         registers[0x5D] = UInt8(sampleDirectory >> 8)                           // DIR
-        registers[0x6C] = 0x20                                                  // FLG: echo writes off
+        registers[0x6C] = 0x20 | voice.noiseClock & 0x1F                        // FLG: echo writes off, noise clock
         registers[0x6D] = 0xFF                                                  // ESA (unused)
         let dsp = SDSP()
         dsp.load(registers: registers)
         let bus = try SSMPBus(ram: ram, dsp: dsp)
         let cpu = SPC700(bus: bus, registers: .init(pc: UInt16(sampleProgram), sp: 0xEF))
         let loops = brr[brr.count - 9] & 0x02 != 0
+        if voice.keyOffTick != nil {
+            // The program stops after the key-off tick; then the release ends.
+            return SPCStream(cpu: cpu, bus: bus, dsp: dsp) { dsp in
+                cpu.stopped && dsp.voiceEnvelope(0) == (0, .release)
+            }
+        }
         return SPCStream(cpu: cpu, bus: bus, dsp: dsp) { dsp in
             !loops && dsp.registers[0x7C] & 0x01 != 0 && dsp.voiceEnvelope(0).level == 0
         }
+    }
+
+    /// The preview's tick program at $0400. Direct page $00/$01 points at the
+    /// script, $02/$03 at where it repeats. Each timer-0 tick reads a count
+    /// and that many (DSP register, value) pairs and writes them; count $FE
+    /// jumps to the repeat point, $FF stops the CPU.
+    static let tickProgram: [UInt8] = [
+        0x8F, 0x20, 0xFA,   // $0400 MOV $FA,#divider (patched)
+        0x8F, 0x01, 0xF1,   // $0403 MOV $F1,#$01      timer 0 on
+        0xE4, 0xFD,         // $0406 wait: MOV A,$FD   ticks since the last read
+        0xF0, 0xFC,         // $0408 BEQ wait
+        0x8D, 0x00,         // $040A tick: MOV Y,#0
+        0xF7, 0x00,         // $040C MOV A,[$00]+Y     count
+        0x68, 0xFE,         // $040E CMP A,#$FE
+        0x90, 0x09,         // $0410 BCC writes ($041B)
+        0xF0, 0x01,         // $0412 BEQ again ($0415)
+        0xFF,               // $0414 STOP
+        0xBA, 0x02,         // $0415 again: MOVW YA,$02
+        0xDA, 0x00,         // $0417 MOVW $00,YA
+        0x2F, 0xEF,         // $0419 BRA tick ($040A)
+        0x5D,               // $041B writes: MOV X,A
+        0x3A, 0x00,         // $041C INCW $00
+        0xC8, 0x00,         // $041E next: CMP X,#0
+        0xF0, 0xE4,         // $0420 BEQ wait ($0406)
+        0xF7, 0x00,         // $0422 MOV A,[$00]+Y     register
+        0xC4, 0xF2,         // $0424 MOV $F2,A
+        0x3A, 0x00,         // $0426 INCW $00
+        0xF7, 0x00,         // $0428 MOV A,[$00]+Y     value
+        0xC4, 0xF3,         // $042A MOV $F3,A
+        0x3A, 0x00,         // $042C INCW $00
+        0x1D,               // $042E DEC X
+        0x2F, 0xED,         // $042F BRA next ($041E)
+    ]
+
+    /// The voice's per-tick register writes: pitch from `pitchCurve` (its
+    /// repeat unrolled up to a key-off), the envelope taking over from
+    /// `gainStart` on tick 0, and KOFF at `keyOffTick`.
+    static func sampleScript(_ voice: Voice) -> (bytes: [UInt8], repeatOffset: Int) {
+        let curve = voice.pitchCurve
+        let repeats = voice.pitchRepeatFrom.map { min(max(0, $0), max(0, curve.count - 1)) }
+        var ticks = curve.count
+        if voice.gainStart != nil { ticks = max(ticks, 1) }
+        if let k = voice.keyOffTick { ticks = max(ticks, k + 1) }
+        func pitch(_ t: Int) -> UInt16? {
+            guard !curve.isEmpty else { return nil }
+            if t < curve.count { return curve[t] }
+            guard let r = repeats else { return nil }
+            return curve[r + (t - r) % (curve.count - r)]
+        }
+        var bytes: [UInt8] = [], offsets: [Int] = []
+        for t in 0..<ticks {
+            offsets.append(bytes.count)
+            var writes: [(UInt8, UInt8)] = []
+            if let p = pitch(t) { writes += [(0x02, UInt8(p & 0xFF)), (0x03, UInt8(p >> 8 & 0x3F))] }
+            if t == 0, voice.gainStart != nil {
+                writes.append((0x07, voice.gain))
+                if let adsr = voice.adsr { writes.append((0x05, adsr.0)) }
+            }
+            if t == voice.keyOffTick { writes.append((0x5C, 0x01)) }
+            bytes.append(UInt8(writes.count))
+            for (r, v) in writes { bytes += [r, v] }
+        }
+        if voice.keyOffTick == nil, let r = repeats, curve.count > r {
+            bytes.append(0xFE)
+            return (bytes, offsets[r])
+        }
+        bytes.append(0xFF)
+        return (bytes, 0)
     }
 
     /// A ctproj sample for the SFX preview: `file` is the `.brr` file (bare
