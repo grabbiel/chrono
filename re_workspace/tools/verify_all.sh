@@ -154,6 +154,21 @@ if [ -f macos_studio/Package.swift ]; then
     && $PY re_workspace/tools/ct_tilesets.py verify-import "$TILESET_DIR/p.ctproj" >>/tmp/verify_tileset_import.log 2>&1
   note "Tileset import (CLI = ct_tilesets.py decode)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   rm -rf "$TILESET_DIR"
+  # Location maps: source, code and data claims, LocLoad_UnkA33B and
+  # Map_LoadTreasureTiles run for all 512 locations; then a CLI import into a
+  # fixture copy, checked by `maps verify`, by ct_maps.py and by the validator.
+  $PY re_workspace/tools/ct_maps.py check --run >/tmp/verify_map_claims.log 2>&1
+  RC=$?
+  note "Map evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_map_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  MAP_DIR=$(mktemp -d)
+  cp -R macos_studio/Tests/ChronoForgeCoreTests/Resources/MyGame.ctproj "$MAP_DIR/p.ctproj" \
+    && macos_studio/.build/debug/chronoforge maps import re_workspace/ct_clean.sfc --project "$MAP_DIR/p.ctproj" >/tmp/verify_map_import.log 2>&1 \
+    && macos_studio/.build/debug/chronoforge maps verify re_workspace/ct_clean.sfc --project "$MAP_DIR/p.ctproj" >>/tmp/verify_map_import.log 2>&1 \
+    && $PY re_workspace/tools/ct_maps.py verify-import "$MAP_DIR/p.ctproj" >>/tmp/verify_map_import.log 2>&1 \
+    && macos_studio/.build/debug/chronoforge validate "$MAP_DIR/p.ctproj" >>/tmp/verify_map_import.log 2>&1
+  RC=$?
+  note "Map import (CLI = ct_maps.py decode, $(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_map_import.log | tail -1) maps)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  rm -rf "$MAP_DIR"
   # Items: CLI import = ct_items.py decode, identical rebuild, edits checked by
   # ct_rom_check.py and by the ROM's own Menu_BuildItemTables / Menu_RefreshAllChars.
   $PY macos_studio/tools/verify_item_build.py >/tmp/verify_item_build.log 2>&1

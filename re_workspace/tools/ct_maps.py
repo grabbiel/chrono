@@ -244,7 +244,8 @@ def pack_props(p):
     for layer in (1, 2, 3):
         if layer in p["planes"]:
             out += bytes(v & 0xFF for v in p["planes"][layer])
-    hi, a, b = p["hiBits"], p["attrA"], p["attrB"]
+    # HiBits bit 7 starts a run, so a tile cannot keep it: shapes stop at $1F.
+    hi, a, b = [v & 0x7F for v in p["hiBits"]], p["attrA"], p["attrB"]
     i = 0
     while i < len(hi):
         j = i + 1

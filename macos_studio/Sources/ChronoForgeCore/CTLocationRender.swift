@@ -81,13 +81,12 @@ public enum LocationScene {
         return r
     }
 
-    /// A layer's scroll (pixels) for a camera: layer 2 at half rate when the map
-    /// says so (Map_InitOrigin), a layer that moves by its own step only stays
-    /// at its origin (0) and drifts step/16 pixels a frame (Map_Unk91AC).
+    /// A layer's scroll (pixels) for a camera, taken as the entry origin, after
+    /// `frame` frames: Map_InitOrigin starts a half-rate layer 2 at half of it,
+    /// and Map_Unk91AC adds a layer's own step (Move2 / Move3) every frame on
+    /// both of its paths; the own-step bits only drop the camera's later steps
+    /// and the shake, which a still camera does not have.
     public static func scroll(_ m: GameMap, layer: Int, cameraX: Int, cameraY: Int, frame: Int = 0) -> (x: Int, y: Int) {
-        // The camera is taken as the entry origin: Map_InitOrigin starts a half-rate
-        // layer 2 at half of it, and Map_Unk91AC adds a layer's own step every
-        // frame (the own-step bits only drop the camera's later steps).
         guard let s = m.settings, layer > 1 else { return (cameraX, cameraY) }
         let step = CTMapROM.ownStep(layer == 2 ? s.move2 : s.move3)
         let half = layer == 2 && s.halfRate2

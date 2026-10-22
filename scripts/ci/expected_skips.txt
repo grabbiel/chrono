@@ -64,3 +64,4 @@ ChronoForgeCoreTests.CTSongModelTests/testEveryROMSongRoundTripsThroughTheModel 
 ChronoForgeCoreTests.CTSongModelTests/testROMEchoAndInstrumentTables                            skip      # local ROM
 ChronoForgeCoreTests.CTSongModelTests/testModelKeyOnsAndStepTimingMatchTheDriver                skip      # local ROM
 ChronoForgeCoreTests.CTSongModelTests/testEditedSongPlaysAsTheModelSays                         skip      # local ROM
+ChronoForgeCoreTests.CTMapsTests/testImportVerifyAndRenderEveryLocation                         skip      # local ROM

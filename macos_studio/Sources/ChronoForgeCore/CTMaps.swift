@@ -149,15 +149,16 @@ public enum CTMapROM {
     public static func packProps(_ p: Props) -> [UInt8] {
         var out: [UInt8] = [p.size1, p.size3, p.move2, p.move3, p.screens, p.colorMath].map { UInt8($0 & 0xFF) }
         for layer in 1...3 { if let plane = p.planes[layer] { out += plane.map { UInt8($0 & 0xFF) } } }
+        // HiBits bit 7 starts a run, so a tile cannot keep it: shapes stop at $1F.
+        let hi = p.hiBits.map { $0 & 0x7F }
         var i = 0
-        while i < p.hiBits.count {
+        while i < hi.count {
             var j = i + 1
-            while j < p.hiBits.count, j - i < 256,
-                  (p.hiBits[j], p.attrA[j], p.attrB[j]) == (p.hiBits[i], p.attrA[i], p.attrB[i]) { j += 1 }
+            while j < hi.count, j - i < 256, (hi[j], p.attrA[j], p.attrB[j]) == (hi[i], p.attrA[i], p.attrB[i]) { j += 1 }
             if j - i >= 2 {
-                out += [p.hiBits[i] | 0x80, p.attrA[i], p.attrB[i], UInt8((j - i) & 0xFF)]
+                out += [hi[i] | UInt8(runFlag), p.attrA[i], p.attrB[i], UInt8((j - i) & 0xFF)]
             } else {
-                out += [p.hiBits[i], p.attrA[i], p.attrB[i]]
+                out += [hi[i], p.attrA[i], p.attrB[i]]
             }
             i = j
         }

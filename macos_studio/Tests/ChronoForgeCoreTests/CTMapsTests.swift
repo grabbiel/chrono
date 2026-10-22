@@ -120,6 +120,13 @@ final class CTMapsTests: XCTestCase {
             XCTAssertEqual([q.hiBits, q.attrA, q.attrB], [p.hiBits, p.attrA, p.attrB])
             if p.staleTiles == 0 { XCTAssertEqual(try CTMapROM.parseProps(image), p) }
         }
+        // HiBits bit 7 starts a run: the packer drops it from an edited tile instead of corrupting the triples.
+        var edited = try CTMapROM.decode(image, 0).props
+        edited.hiBits[0] |= 0x80
+        let q = try CTMapROM.parseProps(CTMapROM.packProps(edited))
+        XCTAssertEqual(q.used, q.length)
+        XCTAssertEqual(q.hiBits[0], edited.hiBits[0] & 0x7F)
+        XCTAssertEqual(Array(q.attrA[1...]), Array(edited.attrA[1...]))
     }
 
     func testFormulas() {

@@ -126,3 +126,8 @@ re_workspace/tests/test_items.py::test_asm_claims	local ChronoRET checkout not p
 re_workspace/tests/test_items.py::test_code_and_data_claims	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_items.py::test_rom_routine_agrees_with_the_synthetic_vectors	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_items.py::test_rom_routines_agree_with_the_model	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_maps.py::test_source_claims	local ChronoRET checkout not present (re_workspace/refs/ChronoRET)
+re_workspace/tests/test_maps.py::test_code_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_maps.py::test_data_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_maps.py::test_run_claims_on_a_few_locations	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_maps.py::test_location_1_matches_the_manifest	local ROM not present (re_workspace/ct_clean.sfc)

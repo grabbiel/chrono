@@ -188,6 +188,58 @@ original fields; files with only those still load and save unchanged.
 - **Provenance.** `preview` names the entries the Studio previews with, and
   `rom` records where the import read the entry.
 
+## `maps/<id>.map.json`
+```json
+{
+  "id": "loc_001", "name": "Location 001", "tileset": "t12_02", "width": 64, "height": 64,
+  "layers": [ { "bg": 1, "metatiles": [12, "… width x height"] },
+              { "bg": 2, "metatiles": [0, "…"], "width": 64, "height": 64 },
+              { "bg": 3, "metatiles": [0, "…"], "width": 64, "height": 64 } ],
+  "exits": [ { "x": 10, "y": 13, "map": "loc_496", "toX": 55, "toY": 35,
+               "span": 1, "vertical": false, "facing": 1, "facingBit7": false } ],
+  "triggers": [],
+  "location": { "music": 30, "tileset12": 2, "tileset3": 1, "palette": 2, "events": 323, "unk06": 0,
+                "limits": [0, 0, 15, 13] },
+  "settings": { "screens": 75, "colorMath": 3, "move2": 0, "move3": 0,
+                "halfRate2": false, "ownStep2": false, "ownStep3": false },
+  "tileProps": { "width": 64, "height": 64, "hiBits": "00…", "attrA": "00…", "attrB": "01…" },
+  "treasure": [ { "x": 6, "y": 5, "contents": 291 } ],
+  "rom": { "location": 1, "record": "$F6:000E", "mapProps": 60, "packedAt": "$F1:325B",
+           "packedBytes": 5879, "unpackedBytes": 16745, "staleTiles": 0,
+           "exitsAt": "$E5:…", "treasureList": 1, "treasureAt": null }
+}
+```
+(Values elided or illustrative; `chronoforge maps import` fills them from your ROM.)
+
+- **The original fields.** `id`, `name`, `tileset`, `width`, `height`,
+  `layers` (`bg`, `metatiles`), `exits` (`x`, `y`, `map`, `toX`, `toY`) and
+  `triggers` are the original fields. Every other field is optional, so
+  hand-made maps still load and save unchanged.
+- **Layers.** `width` and `height` are layer 1's size in 16×16 metatiles. A
+  layer with its own `width`/`height` (layers 2 and 3 of an imported map) has
+  that size. `metatiles` index the map's tileset: `t12_NN` for BG1/BG2,
+  0–1023, and the location's `t3_NN` for BG3, 0–255.
+- **`tileProps`.** One byte per layer-1 cell for each of HiBits, AttrA and
+  AttrB, as lowercase hex, row by row. HiBits bits 0/1 must equal bit 8 of the
+  layer-1/layer-2 metatile. The bits are listed in [Maps](maps.md#tile-properties).
+- **`exits`.**
+  - `span` counts the extra tiles, and `vertical` runs them down the column.
+  - `facing` is 0–15.
+  - `facingBit7` is the record's byte 4 bit 7.
+  - A `map` of `loc_496` or above is a world map.
+- **`location`.** The LocRom record. `limits` is left, top, right and bottom
+  in tiles; left bit 7 means layer 1's edges.
+- **`settings`.** The MapProps head: `screens` and `colorMath` give TM, TS and
+  CGADSUB, and the steps are explained in [Maps](maps.md#the-6-byte-head).
+- **`treasure`.** This location's chest list, taken from the redirected list
+  where there is one. `contents` bit 15 means gold (bits 0–14 × 2), bit 14
+  means empty, and otherwise bits 0–8 are an item.
+- **`rom`.** Where the import read the map, for write-back. `staleTiles`
+  counts the tile-property triples the ROM's map lacks; they are 0 in the
+  project.
+- **`t12_none`.** Locations without either tileset use the empty tileset
+  `t12_none` (one chip-less metatile, `tileCount` 0).
+
 ## `party.json`
 ```json
 { "schema": "ct-party/1",

@@ -127,6 +127,10 @@ def test_pack_props_round_trips():
     for k in (1, 2, 3):
         assert [v & 0xFF for v in q["planes"][k]] == p["planes"][k]
     assert (q["hiBits"], q["attrA"], q["attrB"]) == (hi, p["attrA"], p["attrB"])
+    # HiBits bit 7 starts a run: an edited tile loses it instead of corrupting the triples.
+    p["hiBits"] = [0x84] + hi[1:]
+    q = cm.parse_props(cm.pack_props(p))
+    assert q["used"] == q["length"] and q["hiBits"] == [0x04] + hi[1:] and q["attrA"] == p["attrA"]
 
 
 def test_synthetic_locations(synthetic):
