@@ -1,7 +1,8 @@
 # ROM builder (`.sfc`)
 
-`chronoforge rom build` (and **Story → Build ROM…** in Studio) writes a project's
-event packs and songs into a copy of the clean Chrono Trigger US 1.0 ROM and
+`chronoforge rom build` (and **Story → Build ROM…** or **Characters → Build ROM…**
+in Studio) writes a project's event packs, songs and playable-character records
+into a copy of the clean Chrono Trigger US 1.0 ROM and
 fixes the header checksum. It starts from the unmodified ROM every time (SHA-256
 `06d1c2b0…829a9`; a 512-byte copier header is dropped); a built ROM is refused as
 a base. The output is game data: keep it local.
@@ -18,9 +19,14 @@ a base. The output is game data: keep it local.
   ],
   "songs": [
     { "song": 1, "listing": "audio/songs/song01.ctsong" }
-  ]
+  ],
+  "characters": ["crono", "robo"]
 }
 ```
+
+`characters` writes each listed character's `pc` record and `growth` rows (see
+[characters](characters.md)); `chronoforge characters import` lists all seven and
+Studio sets them with **Characters → Write to ROM**.
 
 `songs` replaces `Audio_SongTable` entries (0–82) with `ct-song/1` listings. See
 [song sequences](music_sequences.md); Studio sets these rows in **Music → CT Songs**.
@@ -57,7 +63,10 @@ lower, listings that exist, and song listings that assemble.
 4. Places each song (length word, then data) with the same order of preference.
    A song stays at its old place only if it fits inside that place. Then the
    builder writes its `Audio_SongTable` pointer.
-5. Writes the `Evt_PackPtrs` entries and the checksum and complement.
+5. Writes each character's decoded record fields in place (`$CC:0000` + id ×
+   `$50`; the undecoded bytes stay the base ROM's) and its HP, MP and stat growth
+   rows, after the range and equipment checks in [characters](characters.md).
+6. Writes the `Evt_PackPtrs` entries and the checksum and complement.
 
 Pack and table placement never crosses a bank (a song may): `Decomp_ToWram` reads a pack with DB = its bank
 and a 16-bit index, and `TextWin_Init` reads the table's entries as addresses in
@@ -76,8 +85,10 @@ implemented.
 The report (`--report`, or `<name>.build.json` from Studio, schema
 `ct-rom-build/1`) lists each pack's address, sizes, unpacked SHA-256 and
 placement, each message table with each message's address and source text,
-each song's address, size, data SHA-256 and placement,
-every byte range written, and the free space left.
+each song's address, size, data SHA-256 and placement, each character's record
+address with the values written (and growth rows when written),
+every byte range written (one per changed character field, such as
+`character robo power`), and the free space left.
 
 ## The packer
 
@@ -108,14 +119,21 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
   checksums and report hashes) are each rejected.
 - **Songs** (`CTSongTests`): all 83 songs rebuilt from their listings leave the
   ROM identical.
+- **Characters** (`CTCharactersTests`, `macos_studio/tools/verify_character_build.py`):
+  importing the seven records and building gives the clean ROM with no write; an
+  edited build is checked by `ct_rom_check.py` (each record decoded independently
+  and compared with the report, ranges, equipment against the clean ROM, undecoded
+  bytes, unreported records and rows and ExpToLevel unchanged); five damaged copies
+  are rejected.
 
 ## Limitations
 
 - No emulator run: the evidence is the ROM's own loader, decompressor and text
   routines as traced or transcribed, not a booted game.
-- Only event packs, message tables and song sequences are written. New locations,
-  maps, graphics, samples, per-song tables, sound effects, items and other tables
-  are not.
+- Only event packs, message tables, song sequences (with their per-song table
+  rows) and the playable characters' records and growth rows are written. New
+  locations, maps, graphics, samples, sound effects, items, techs, enemies,
+  ExpToLevel and other tables are not.
 - Lowered packs cover the Studio statements in `event_bytecode.md`; cross-map calls
   are refused.
 - Free space is limited to the confirmed padding; ExHiROM (6/8 MB) expansion is not

@@ -115,6 +115,14 @@ if [ -f macos_studio/Package.swift ]; then
   $PY macos_studio/tools/verify_rom_build.py >/tmp/verify_rom_build.log 2>&1
   RC=$?
   note "ROM build ($(grep -oE '[0-9]+ checks passed' /tmp/verify_rom_build.log))" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Playable characters: CLI import = ct_characters.py decode, CLI curves = its rule,
+  # identical rebuild, edits checked by ct_rom_check.py, damaged copies rejected.
+  $PY macos_studio/tools/verify_character_build.py >/tmp/verify_character_build.log 2>&1
+  note "Character records (import, curves, build)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
+  # The game's own level-up routine run in ChronoRET's interpreter against the rule.
+  $PY re_workspace/tools/ct_characters.py check --run >/tmp/verify_character_claims.log 2>&1
+  RC=$?
+  note "Character evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_character_claims.log) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

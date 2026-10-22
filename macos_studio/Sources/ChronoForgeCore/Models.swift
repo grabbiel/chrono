@@ -15,11 +15,14 @@ public struct Project: Codable, Equatable, Sendable {
     public var rom: ROMBuild? = nil
 
     /// Event packs to replace in the base ROM, by Evt_PackPtrs entry (each
-    /// lowered from Studio scenes or assembled from a ct-events/1 listing), and
-    /// songs by Audio_SongTable index (each assembled from a ct-song/1 listing).
+    /// lowered from Studio scenes or assembled from a ct-events/1 listing),
+    /// songs by Audio_SongTable index (each assembled from a ct-song/1 listing),
+    /// and playable characters by their `characters/<id>.json` (its `pc`
+    /// record and `growth` rows; docs/characters.md).
     public struct ROMBuild: Codable, Equatable, Sendable {
         public var eventPacks: [EventPack]
         public var songs: [Song]
+        public var characters: [String]
         public struct Song: Codable, Equatable, Sendable {
             public var song: Int
             public var listing: String         // project-relative path
@@ -33,17 +36,21 @@ public struct Project: Codable, Equatable, Sendable {
                 self.entry = entry; self.scenes = scenes; self.listing = listing
             }
         }
-        public init(eventPacks: [EventPack] = [], songs: [Song] = []) { self.eventPacks = eventPacks; self.songs = songs }
-        private enum CodingKeys: String, CodingKey { case eventPacks, songs }
+        public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = []) {
+            self.eventPacks = eventPacks; self.songs = songs; self.characters = characters
+        }
+        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             eventPacks = try c.decodeIfPresent([EventPack].self, forKey: .eventPacks) ?? []
             songs = try c.decodeIfPresent([Song].self, forKey: .songs) ?? []
+            characters = try c.decodeIfPresent([String].self, forKey: .characters) ?? []
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(eventPacks, forKey: .eventPacks)
             if !songs.isEmpty { try c.encode(songs, forKey: .songs) }
+            if !characters.isEmpty { try c.encode(characters, forKey: .characters) }
         }
     }
 
@@ -85,6 +92,93 @@ public struct CharacterDef: Codable, Equatable, Sendable, Identifiable {
     public var level: Int?
     public var stats: Stats?
     public var palette: [String]?      // 16 BGR555 hex words
+    /// A playable character's game record ($CC:0000 + id x $50), imported
+    /// from the ROM and written back by `rom build` (absent: not a PC record).
+    public var pc: Record? = nil
+    /// Its HP, MP and stat growth rows ($CC:258A, $CC:25C2, $CC:25FA).
+    public var growth: Growth? = nil
+
+    public init(id: String, name: String, kind: String, sprite: String? = nil, level: Int? = nil,
+                stats: Stats? = nil, palette: [String]? = nil, pc: Record? = nil, growth: Growth? = nil) {
+        self.id = id; self.name = name; self.kind = kind; self.sprite = sprite; self.level = level
+        self.stats = stats; self.palette = palette; self.pc = pc; self.growth = growth
+    }
+
+    /// The seven stats in the record's order (+$0B-$11). Also the growth base
+    /// (+$2F-$35, stored there in the growth order) and the growth per level.
+    public struct StatBlock: Codable, Equatable, Sendable {
+        public var power: Int
+        public var stamina: Int
+        public var speed: Int
+        public var magic: Int
+        public var hit: Int
+        public var evade: Int
+        public var magicDefense: Int
+        public static let names = ["power", "stamina", "speed", "magic", "hit", "evade", "magicDefense"]
+        public static let labels = ["Power", "Stamina", "Speed", "Magic", "Hit", "Evade", "Magic Def"]
+        public init(_ values: [Int]) {
+            precondition(values.count == 7)
+            power = values[0]; stamina = values[1]; speed = values[2]; magic = values[3]
+            hit = values[4]; evade = values[5]; magicDefense = values[6]
+        }
+        public var values: [Int] {
+            get { [power, stamina, speed, magic, hit, evade, magicDefense] }
+            set { self = StatBlock(newValue) }
+        }
+        public subscript(i: Int) -> Int {
+            get { values[i] }
+            set { var v = values; v[i] = newValue; values = v }
+        }
+    }
+
+    /// The decoded, writable fields of a character record (docs/characters.md).
+    public struct Record: Codable, Equatable, Sendable {
+        public var charId: Int                 // +$00, fixed by the record's slot
+        public var level: Int                  // +$12
+        public var exp: Int                    // +$13 u24
+        public var expToNext: Int              // +$2B u16
+        public var hp: Int                     // +$03
+        public var maxHp: Int                  // +$05
+        public var mp: Int                     // +$07
+        public var maxMp: Int                  // +$09
+        public var stats: StatBlock            // +$0B-$11
+        public var growthBase: StatBlock       // +$2F-$35
+        public var equipment: Equipment        // +$27-$2A
+        public var techPoints: Int             // +$16 u24 (partial)
+        public var techPointsToNext: Int       // +$2D u16 (partial)
+        public struct Equipment: Codable, Equatable, Sendable {
+            public var helmet: Int
+            public var armor: Int
+            public var weapon: Int
+            public var accessory: Int
+            public init(helmet: Int, armor: Int, weapon: Int, accessory: Int) {
+                self.helmet = helmet; self.armor = armor; self.weapon = weapon; self.accessory = accessory
+            }
+        }
+        public init(charId: Int, level: Int, exp: Int, expToNext: Int, hp: Int, maxHp: Int, mp: Int, maxMp: Int,
+                    stats: StatBlock, growthBase: StatBlock, equipment: Equipment, techPoints: Int,
+                    techPointsToNext: Int) {
+            self.charId = charId; self.level = level; self.exp = exp; self.expToNext = expToNext
+            self.hp = hp; self.maxHp = maxHp; self.mp = mp; self.maxMp = maxMp; self.stats = stats
+            self.growthBase = growthBase; self.equipment = equipment; self.techPoints = techPoints
+            self.techPointsToNext = techPointsToNext
+        }
+    }
+
+    /// Growth per level: HP and MP rows of 4 (top level, gain) steps, the
+    /// first step whose top level reaches the new level giving the gain; and
+    /// per-stat growth x (level - 1) / 100 over the growth base (speed unused).
+    public struct Growth: Codable, Equatable, Sendable {
+        public var hp: [Step]
+        public var mp: [Step]
+        public var stats: StatBlock
+        public struct Step: Codable, Equatable, Sendable {
+            public var toLevel: Int
+            public var gain: Int
+            public init(toLevel: Int, gain: Int) { self.toLevel = toLevel; self.gain = gain }
+        }
+        public init(hp: [Step], mp: [Step], stats: StatBlock) { self.hp = hp; self.mp = mp; self.stats = stats }
+    }
 
     public struct Stats: Codable, Equatable, Sendable {
         public var hp: Int
@@ -98,6 +192,27 @@ public struct CharacterDef: Codable, Equatable, Sendable, Identifiable {
             self.def = def; self.mag = mag; self.spd = spd
         }
     }
+}
+
+// MARK: - party.json
+
+/// Party-wide game data imported with the characters: the experience table
+/// the level curve uses, and the equipment the editor offers (read-only: the
+/// builder checks equipment against the base ROM).
+public struct PartyDef: Codable, Equatable, Sendable {
+    public var schema: String = "ct-party/1"
+    public var expToLevel: [Int]               // 100 entries: [L] = exp from level L to L + 1
+    public var equipment: [EquipItem]
+    public struct EquipItem: Codable, Equatable, Sendable, Identifiable {
+        public var id: Int                     // item id
+        public var name: String
+        public var slot: String                // weapon | armor | helmet | accessory
+        public var equipMask: Int              // bit $80 >> character id
+        public init(id: Int, name: String, slot: String, equipMask: Int) {
+            self.id = id; self.name = name; self.slot = slot; self.equipMask = equipMask
+        }
+    }
+    public init(expToLevel: [Int], equipment: [EquipItem]) { self.expToLevel = expToLevel; self.equipment = equipment }
 }
 
 // MARK: - sprites/<id>.sprite.json  (OAM assemblies)
