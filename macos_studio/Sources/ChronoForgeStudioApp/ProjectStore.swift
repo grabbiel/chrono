@@ -2,6 +2,7 @@
 import SwiftUI
 import Observation
 import ChronoForgeCore
+import ChronoForgeAudio
 
 @MainActor
 @Observable
@@ -13,10 +14,13 @@ public final class ProjectStore {
     public var issuesText = ""
     public var statusMessage = ""
     public var statusIsError = false
+    /// Live S-SMP/S-DSP playback shared by the Music and SFX panes.
+    public let audio = AKAOAudioEngine()
 
     public init() {}
 
     public func load(url: URL) {
+        audio.stop()
         do {
             project = try CTProject.load(from: url)
             sceneDrafts = [:]
@@ -192,6 +196,7 @@ public final class ProjectStore {
         do {
             var rom = [UInt8](try Data(contentsOf: url))
             if rom.count == CTROMBuilder.romSize + 512 { rom.removeFirst(512) }
+            if playbackROMPath == nil, CTEventPack.sha256(rom) == CTSPCDriver.cleanROMSHA256 { playbackROMPath = url.path }
             let songs = try CTSong.romSongs(rom)
             guard songs.indices.contains(song) else { throw CTSongError("song must be 0-\(songs.count - 1)") }
             let s = songs[song]
@@ -217,5 +222,68 @@ public final class ProjectStore {
 
     public func fileURL(_ rel: String) -> URL? {
         project?.fileURL(relative: rel)
+    }
+
+    // MARK: Playback
+
+    /// The verified US 1.0 ROM the sound driver boots from for song playback
+    /// (headered or not); remembered across launches.
+    public var playbackROMPath: String? = UserDefaults.standard.string(forKey: "playbackROMPath") {
+        didSet { UserDefaults.standard.set(playbackROMPath, forKey: "playbackROMPath") }
+    }
+
+    /// Remembers `url` as the playback ROM if it is the verified ROM.
+    @discardableResult
+    public func setPlaybackROM(_ url: URL) -> Bool {
+        do {
+            let rom = try Self.playbackROM(url.path)
+            guard CTEventPack.sha256(rom) == CTSPCDriver.cleanROMSHA256 else {
+                throw CTSongError("\(url.lastPathComponent) is not the verified unheadered CT USA 1.0 ROM")
+            }
+            playbackROMPath = url.path
+            statusMessage = "playback ROM: \(url.lastPathComponent)"
+            statusIsError = false
+            return true
+        } catch {
+            statusMessage = "playback ROM: \(error)"
+            statusIsError = true
+            return false
+        }
+    }
+
+    /// Plays ROM song `song` as the driver loads it.
+    public func playROMSong(_ song: Int) {
+        guard let path = playbackROMPath else { return needPlaybackROM() }
+        Task { await audio.play(String(format: "ROM song $%02X", song)) {
+            try SPCStream.ctSong(rom: try Self.playbackROM(path), song: song)
+        } }
+    }
+
+    /// Plays a ct-song/1 listing in place of ROM song `song`.
+    public func playListing(_ text: String, replacing song: Int, title: String) {
+        guard let path = playbackROMPath else { return needPlaybackROM() }
+        Task { await audio.play(String(format: "%@ as song $%02X", title, song)) {
+            let (data, tables) = try CTSongListing.assembleSong(text)
+            return try SPCStream.ctSong(rom: try Self.playbackROM(path), replacing: song, data: data, tables: tables)
+        } }
+    }
+
+    /// Plays a sample with its (possibly unsaved) sidecar settings.
+    public func playSample(_ meta: SampleMeta, title: String) {
+        guard let url = fileURL(meta.brr) else { return }
+        Task { await audio.play(title) {
+            try SPCStream.sample(file: [UInt8](try Data(contentsOf: url)), meta: meta)
+        } }
+    }
+
+    private func needPlaybackROM() {
+        statusMessage = "choose the CT ROM to play songs from (Sound ROM… in the playback bar)"
+        statusIsError = true
+    }
+
+    nonisolated static func playbackROM(_ path: String) throws -> [UInt8] {
+        var rom = [UInt8](try Data(contentsOf: URL(fileURLWithPath: path)))
+        if rom.count == CTROMBuilder.romSize + 512 { rom.removeFirst(512) }
+        return rom
     }
 }

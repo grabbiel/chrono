@@ -42,21 +42,30 @@ let package = Package(
             name: "ChronoForgeMetal",
             dependencies: ["ChronoForgeCore"]
         ),
+        // MARK: Real-time S-SMP/S-DSP playback (AVAudioEngine)
+        .target(
+            name: "ChronoForgeAudio",
+            dependencies: ["ChronoForgeCore"]
+        ),
         // MARK: CLI
         .executableTarget(
             name: "chronoforge",
-            dependencies: ["ChronoForgeCore", "ChronoForgeMetal"]
+            dependencies: ["ChronoForgeCore", "ChronoForgeMetal", "ChronoForgeAudio"]
         ),
         // MARK: SwiftUI IDE shell
         .executableTarget(
             name: "ChronoForgeStudioApp",
-            dependencies: ["ChronoForgeCore", "ChronoForgeMetal"]
+            dependencies: ["ChronoForgeCore", "ChronoForgeMetal", "ChronoForgeAudio"]
         ),
         // MARK: Tests
         .testTarget(
             name: "ChronoForgeCoreTests",
             dependencies: ["ChronoForgeCore"],
             resources: [.copy("Resources")]
+        ),
+        .testTarget(
+            name: "ChronoForgeAudioTests",
+            dependencies: ["ChronoForgeAudio", "ChronoForgeCore"]
         ),
         .testTarget(
             name: "ChronoForgeMetalTests",

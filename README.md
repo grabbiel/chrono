@@ -14,11 +14,12 @@ Chrono Trigger (USA) ROM; tools that read it check its SHA-256
 Work in progress. Implemented: the original LZSS packer and codecs, asset
 previews, scene authoring, the dialogue codec, event bytecode (read, edit,
 assemble, lower from scenes), SPC700 song sequences (read, edit, assemble), an
-`.sfc` builder for event packs, dialogue and songs, a native SPC700 CPU and
-S-SMP bus, and an S-SMP IPL upload host that boots the game's sound driver
-through a user-supplied IPL image. Not yet implemented: audio synthesis and
-playback, song/sample transfers, a playable runtime, standalone game export and
-most asset editors.
+`.sfc` builder for event packs, dialogue and songs, a native SPC700 CPU,
+S-SMP bus and S-DSP, the game's sound driver booted (directly or through a
+user-supplied IPL image) and sent songs and samples as the game sends them, WAV
+rendering, and live playback of ROM songs, edited songs and samples in the
+Studio and the CLI. Not yet implemented: a playable runtime, standalone game
+export and most asset editors.
 
 ## Build
 

@@ -12,6 +12,7 @@ usage: chronoforge music list <rom.sfc>
        chronoforge music render <rom.sfc> <song> [--seconds N] [--ipl ipl.rom] [--out song.wav] [--spc start.spc]
        chronoforge music spc-render <snapshot.spc> [--seconds N] [--ipl ipl.rom] [--voices MASK] [--counter N]
                                                 [--timers-first] [--out song.wav]
+       chronoforge music play <rom.sfc> <song> [--seconds N] [--ipl ipl.rom] [--volume V]
 
 driver-check --ipl uploads the boot blocks through the supplied 64-byte S-SMP
 IPL image instead of copying them into ARAM. No IPL image is bundled.
@@ -25,23 +26,27 @@ from as an SPC snapshot. spc-render renders a snapshot through the same S-DSP;
 --counter starts the S-DSP rate counter at N (default 0, the reset value),
 which SPC files do not store; --timers-first steps the timers before the CPU's
 access in each clock (default: access first), libgme's order for those ties.
+play does render's load and plays the song live on the default output for N
+seconds (default 10) at volume V (0 to 1, default 1), as the Studio does, then
+reports the seconds played and any buffer underruns as JSON.
 """
 
 func cmdMusic(_ args: [String]) -> Int32 {
-    let operations = ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load", "render", "spc-render"]
+    let operations = ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load", "render", "spc-render", "play"]
     guard let operation = args.first, operations.contains(operation) else {
         print(musicUsage); return 2
     }
-    let rendering = ["render", "spc-render"].contains(operation)
-    var positional: [String] = [], out: String?, ipl: String?, spc: String?, seconds: String?, voices: String?, counter: String?
+    let rendering = ["render", "spc-render", "play"].contains(operation)
+    var positional: [String] = [], out: String?, ipl: String?, spc: String?, seconds: String?, voices: String?, counter: String?, volume: String?
     var timersFirst = false
     var i = 1
     while i < args.count {
         let option = args[i]
         if option == "--timers-first" && operation == "spc-render" { timersFirst = true; i += 1; continue }
-        if option == "--out" || (option == "--ipl" && ["driver-check", "song-load", "render", "spc-render"].contains(operation))
+        if option == "--out" || (option == "--ipl" && ["driver-check", "song-load", "render", "spc-render", "play"].contains(operation))
             || (option == "--seconds" && rendering) || (option == "--spc" && operation == "render")
-            || (["--voices", "--counter"].contains(option) && operation == "spc-render") {
+            || (["--voices", "--counter"].contains(option) && operation == "spc-render")
+            || (option == "--volume" && operation == "play") {
             guard i + 1 < args.count else { print("missing value for \(option)"); return 2 }
             switch option {
             case "--out": out = args[i + 1]
@@ -49,12 +54,13 @@ func cmdMusic(_ args: [String]) -> Int32 {
             case "--spc": spc = args[i + 1]
             case "--voices": voices = args[i + 1]
             case "--counter": counter = args[i + 1]
+            case "--volume": volume = args[i + 1]
             default: seconds = args[i + 1]
             }
             i += 2
         } else { positional.append(args[i]); i += 1 }
     }
-    guard positional.count == (["disasm", "song-load", "render"].contains(operation) ? 2 : 1) else { print(musicUsage); return 2 }
+    guard positional.count == (["disasm", "song-load", "render", "play"].contains(operation) ? 2 : 1) else { print(musicUsage); return 2 }
     func same(_ a: String, _ b: String) -> Bool {
         URL(fileURLWithPath: a).resolvingSymlinksInPath() == URL(fileURLWithPath: b).resolvingSymlinksInPath()
     }
@@ -69,6 +75,11 @@ func cmdMusic(_ args: [String]) -> Int32 {
             print("--seconds must be a number above 0 and at most \(Int(SPCRender.maxSeconds))"); return 2
         }
         renderSeconds = value
+    }
+    var playVolume: Float = 1
+    if let volume {
+        guard let value = Float(volume), (0...1).contains(value) else { print("--volume must be from 0 to 1"); return 2 }
+        playVolume = value
     }
     var options = SPCRender.Options()
     options.timersBeforeAccess = timersFirst
@@ -90,7 +101,7 @@ func cmdMusic(_ args: [String]) -> Int32 {
     }
     do {
         switch operation {
-        case "render", "spc-render":
+        case "render", "spc-render", "play":
             let iplROM = try ipl.map { [UInt8](try Data(contentsOf: URL(fileURLWithPath: $0))) }
             if let iplROM, iplROM.count != 64 {
                 print("IPL image must be exactly 64 bytes (got \(iplROM.count))"); return 2
@@ -105,6 +116,14 @@ func cmdMusic(_ args: [String]) -> Int32 {
                 return 0
             }
             guard let song = songNumber(positional[1]) else { print("song must be a number (decimal or $hex)"); return 2 }
+            if operation == "play" {
+                let rom = try readROM(positional[0])
+                return MainActor.assumeIsolated {
+                    playLive(String(format: "song $%02X", song), seconds: renderSeconds, volume: playVolume) {
+                        try SPCStream.ctSong(rom: rom, song: song, iplROM: iplROM)
+                    }
+                }
+            }
             let render = try CTSPCRender.render(rom: try readROM(positional[0]), song: song, seconds: renderSeconds, iplROM: iplROM)
             if let spc { try render.snapshot.encode().write(to: URL(fileURLWithPath: spc), options: .atomic) }
             try emit(SPCRender.wav(render.pcm))
