@@ -271,6 +271,14 @@ public final class SPCStream {
     /// holding `loopEndSample - 1` (default: the last) repeat; without it every
     /// block plays once. Only the last played block keeps an end flag.
     public static func sample(file: [UInt8], meta: SampleMeta) throws -> SPCStream {
+        let played = try playedBlocks(file: file, meta: meta)
+        return try sample(brr: played.brr, loopBlock: played.loopBlock, voice: Voice(sample: meta))
+    }
+
+    /// The blocks `sample(file:meta:)` plays and its loop block: the sidecar's
+    /// loop decides the flags, and only the last block keeps an end flag.
+    /// `CTSamplePatch` writes these same bytes into the ROM.
+    public static func playedBlocks(file: [UInt8], meta: SampleMeta) throws -> (brr: [UInt8], loopBlock: Int) {
         let blocks = try brrBlocks(file)
         let count = blocks.count / 9
         var end = count, loopBlock = 0
@@ -284,7 +292,7 @@ public final class SPCStream {
         var brr = Array(blocks.prefix(9 * end))
         for header in stride(from: 0, to: brr.count, by: 9) { brr[header] &= 0xFC }
         brr[brr.count - 9] |= meta.loop ? 0x03 : 0x01
-        return try sample(brr: brr, loopBlock: loopBlock, voice: Voice(sample: meta))
+        return (brr, loopBlock)
     }
 
     /// BRR blocks of a sample file, without the ROM's [u16 length] prefix or a

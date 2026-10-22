@@ -16,7 +16,10 @@ public enum CTSongISA {
     public static let samplesPC = 0x070E11                  // AudioRom_SongSamples: 16 words per song, 0-ended
     public static let echoPC = 0x07241D                     // AudioRom_SongEcho: a word per song
     public static let drumsPC = 0x071871                    // AudioRom_SongExtra: 36 bytes per song (the drum kit)
-    public static let sampleMax = 62                        // Audio_SampleTable entries
+    public static let sampleMax = 62                        // Audio_SampleTable entries in the US 1.0 ROM
+    /// The sample numbers a listing may name: a built ROM can append to the
+    /// table (CTSamplePatch), so the builder checks them against its count.
+    public static let sampleNumberMax = 255
     public static let header = 0x24                         // !SpcSong_Data
     public static let songRoom = 0x0F00                     // !Audio_SongRoom: longer songs overwrite the $2F00 block
     public static let songAram = 0x2000, block4700 = 0x4700 // !AudioAram_Song, !AudioAram_Block4700
@@ -84,8 +87,8 @@ public struct CTSongTables: Codable, Equatable, Sendable {
     }
 
     public func validate() throws {
-        if let samples, samples.count > 16 || samples.contains(where: { !(1...CTSongISA.sampleMax).contains($0) }) {
-            throw CTSongError("@samples takes at most 16 sample numbers 1-\(CTSongISA.sampleMax)")
+        if let samples, samples.count > 16 || samples.contains(where: { !(1...CTSongISA.sampleNumberMax).contains($0) }) {
+            throw CTSongError("@samples takes at most 16 sample numbers 1-\(CTSongISA.sampleNumberMax)")
         }
         if let echo, echo.count != 2 { throw CTSongError("@echo takes 2 bytes") }
         if let drums, drums.count != 36 { throw CTSongError("the drum kit is 36 bytes") }
@@ -271,8 +274,8 @@ public enum CTSongListing {
                 if words.count == 2 && words[1] == "none" { tables.samples = []; break }
                 let numbers = words.dropFirst().compactMap { decimal($0) }
                 guard (1...16).contains(numbers.count), numbers.count == words.count - 1,
-                      numbers.allSatisfy({ (1...CTSongISA.sampleMax).contains($0) }) else {
-                    throw fail("expected @samples none or 1-16 sample numbers 1-\(CTSongISA.sampleMax)")
+                      numbers.allSatisfy({ (1...CTSongISA.sampleNumberMax).contains($0) }) else {
+                    throw fail("expected @samples none or 1-16 sample numbers 1-\(CTSongISA.sampleNumberMax)")
                 }
                 tables.samples = numbers
             case "@echo":

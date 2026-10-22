@@ -146,26 +146,21 @@ extension CTSongDocument {
 public struct CTSongInstrument: Equatable, Sendable, Identifiable {
     public var id: Int { slot }
     public let slot: Int                 // 0-15: sample operand $20 + slot
-    public let sample: Int               // Audio_SampleTable number, 1-62
+    public let sample: Int               // Audio_SampleTable number, 1-62 (more when appended)
     /// Audio_SampleParamA (the tuning: Spc_NotePitch) and ParamB (ADSR1, ADSR2).
     public let tuning: UInt16, adsr: UInt16
     /// BRR bytes and the loop's offset in them (Audio_SampleLoop).
     public let length: Int, loopOffset: Int
 
-    static let sampleTablePC = 0x070AEA, sampleLoopPC = 0x070BA4, paramAPC = 0x070C20, paramBPC = 0x070C9C
-
-    /// The instruments of a sample list, with their words from the ROM's tables.
+    /// The instruments of a sample list, with their words from the ROM's
+    /// tables (where its code reads them: `CTSampleTables.locate`).
     public static func rack(rom: [UInt8], samples: [Int]) throws -> [CTSongInstrument] {
         guard rom.count == 4_194_304 else { throw CTSongError("expected a 4 MiB ROM") }
-        func word(_ pc: Int) -> Int { Int(rom[pc]) | Int(rom[pc + 1]) << 8 }
+        let tables = try CTSampleTables.locate(rom)
         return try samples.enumerated().map { slot, n in
-            guard (1...CTSongISA.sampleMax).contains(n) else { throw CTSongError("sample \(n) is not 1-\(CTSongISA.sampleMax)") }
-            let p = sampleTablePC + 3 * (n - 1)
-            let pointer = word(p) | Int(rom[p + 2]) << 16
-            let pc = (pointer >> 16 & 0x3F) << 16 | pointer & 0xFFFF
-            return .init(slot: slot, sample: n, tuning: UInt16(word(paramAPC + 2 * (n - 1))),
-                         adsr: UInt16(word(paramBPC + 2 * (n - 1))), length: word(pc),
-                         loopOffset: word(sampleLoopPC + 2 * (n - 1)))
+            let e = try tables.entry(rom, n)
+            return .init(slot: slot, sample: n, tuning: UInt16(e.tuning), adsr: UInt16(e.adsr), length: e.length,
+                         loopOffset: e.loopOffset)
         }
     }
 

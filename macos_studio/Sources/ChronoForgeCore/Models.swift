@@ -32,6 +32,46 @@ public struct Project: Codable, Equatable, Sendable {
         public var tilesets: [String] = []     // tilesets/<id>.tileset.json with a rom source (absent = none)
         public var enemies: [String] = []      // characters/<id>.json with an enemy record (absent = none)
         public var sprites: [String] = []      // sprites/<id>.sprite.json with a rom source (absent = none)
+        public var samples: [Sample] = []      // audio/samples/<id>.json put in the game (absent = none)
+        /// A project sample in the game (docs/sfx_lab.md, "A project sample in the game").
+        public struct Sample: Codable, Equatable, Sendable {
+            public var id: String
+            public var replace: Int?           // 1-62: take over that ROM sample (absent: append after them)
+            public var songs: [Int]            // songs whose sample list gets it (absent: none)
+            public var rootNote: Int?          // the driver note that plays it at its rate (absent: a default)
+            public var tuning: Int?            // Audio_SampleParamA word, instead of one from the rate
+            public var adsr: Int?              // Audio_SampleParamB word (ADSR1 | ADSR2 << 8), instead of the sidecar's
+            public var asIs: Bool              // write the .brr blocks unchanged (ROM imports; absent: false)
+            public var loopOffset: Int?        // with asIs: Audio_SampleLoop, in bytes
+            public init(id: String, replace: Int? = nil, songs: [Int] = [], rootNote: Int? = nil, tuning: Int? = nil,
+                        adsr: Int? = nil, asIs: Bool = false, loopOffset: Int? = nil) {
+                self.id = id; self.replace = replace; self.songs = songs; self.rootNote = rootNote; self.tuning = tuning
+                self.adsr = adsr; self.asIs = asIs; self.loopOffset = loopOffset
+            }
+            private enum CodingKeys: String, CodingKey { case id, replace, songs, rootNote, tuning, adsr, asIs, loopOffset }
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                id = try c.decode(String.self, forKey: .id)
+                replace = try c.decodeIfPresent(Int.self, forKey: .replace)
+                songs = try c.decodeIfPresent([Int].self, forKey: .songs) ?? []
+                rootNote = try c.decodeIfPresent(Int.self, forKey: .rootNote)
+                tuning = try c.decodeIfPresent(Int.self, forKey: .tuning)
+                adsr = try c.decodeIfPresent(Int.self, forKey: .adsr)
+                asIs = try c.decodeIfPresent(Bool.self, forKey: .asIs) ?? false
+                loopOffset = try c.decodeIfPresent(Int.self, forKey: .loopOffset)
+            }
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(id, forKey: .id)
+                try c.encodeIfPresent(replace, forKey: .replace)
+                if !songs.isEmpty { try c.encode(songs, forKey: .songs) }
+                try c.encodeIfPresent(rootNote, forKey: .rootNote)
+                try c.encodeIfPresent(tuning, forKey: .tuning)
+                try c.encodeIfPresent(adsr, forKey: .adsr)
+                if asIs { try c.encode(asIs, forKey: .asIs) }
+                try c.encodeIfPresent(loopOffset, forKey: .loopOffset)
+            }
+        }
         public struct Song: Codable, Equatable, Sendable {
             public var song: Int
             public var listing: String         // project-relative path
@@ -47,11 +87,12 @@ public struct Project: Codable, Equatable, Sendable {
         }
         public init(eventPacks: [EventPack] = [], songs: [Song] = [], characters: [String] = [], techs: Bool = false,
                     items: Bool = false, maps: [String] = [], tilesets: [String] = [], enemies: [String] = [],
-                    sprites: [String] = []) {
+                    sprites: [String] = [], samples: [Sample] = []) {
             self.eventPacks = eventPacks; self.songs = songs; self.characters = characters; self.techs = techs
             self.items = items; self.maps = maps; self.tilesets = tilesets; self.enemies = enemies; self.sprites = sprites
+            self.samples = samples
         }
-        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items, maps, tilesets, enemies, sprites }
+        private enum CodingKeys: String, CodingKey { case eventPacks, songs, characters, techs, items, maps, tilesets, enemies, sprites, samples }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             eventPacks = try c.decodeIfPresent([EventPack].self, forKey: .eventPacks) ?? []
@@ -63,6 +104,7 @@ public struct Project: Codable, Equatable, Sendable {
             tilesets = try c.decodeIfPresent([String].self, forKey: .tilesets) ?? []
             enemies = try c.decodeIfPresent([String].self, forKey: .enemies) ?? []
             sprites = try c.decodeIfPresent([String].self, forKey: .sprites) ?? []
+            samples = try c.decodeIfPresent([Sample].self, forKey: .samples) ?? []
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -75,6 +117,7 @@ public struct Project: Codable, Equatable, Sendable {
             if !tilesets.isEmpty { try c.encode(tilesets, forKey: .tilesets) }
             if !enemies.isEmpty { try c.encode(enemies, forKey: .enemies) }
             if !sprites.isEmpty { try c.encode(sprites, forKey: .sprites) }
+            if !samples.isEmpty { try c.encode(samples, forKey: .samples) }
         }
     }
 

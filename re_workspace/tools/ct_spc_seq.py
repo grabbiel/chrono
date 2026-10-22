@@ -23,7 +23,7 @@ transcription (refs/ChronoRET/asm/spc700/driver.asm, bankC7.asm; MIT):
   (Spc_SeqSfxTrack1/2), $EB-$EF/$FE/$FF end the track (Spc_SeqEndTrack);
   their addresses are in the origin's space too. $E2/$E3 loop in place.
 - Per-song tables, indexed by song: AudioRom_SongSamples ($C7:0E11, 16
-  words, 0-ended: samples 1-62, loaded to the song's directory entries $20-$2F),
+  words, 0-ended: samples 1-62 (more in a built ROM that appends), loaded to the song's directory entries $20-$2F),
   AudioRom_SongEcho ($C7:241D, a word: byte 0's low nibble the echo delay, byte
   1 the song command's Arg1, Spc_Unk4D) and AudioRom_SongExtra ($C7:1871, 36
   bytes sent to ARAM $F120: the drum kit, 12 x sample/note/pan, Spc_DrumNote).
@@ -47,7 +47,8 @@ MANIFEST = WS / "manifests" / "spc_sequences.json"
 SONG_TABLE_PC, SONG_COUNT_PC = 0x070D18, 0x070AE9        # Audio_SongTable, Audio_SongCount
 OPERAND_COUNTS_PC, DURATIONS_PC = 0x073891, 0x074078     # Spc_SeqOperandCounts, Spc_DurationTable
 SAMPLES_PC, ECHO_PC, EXTRA_PC = 0x070E11, 0x07241D, 0x071871  # AudioRom_SongSamples/Echo/Extra
-SAMPLE_MAX = 62                                          # Audio_SampleTable entries
+SAMPLE_MAX = 62                                          # Audio_SampleTable entries in the US 1.0 ROM
+SAMPLE_NUMBER_MAX = 255                                  # a built ROM may append (ct_samples.py checks the count)
 HEADER, SONG_ROOM = 0x24, 0x0F00                         # !SpcSong_Data, !Audio_SongRoom
 SONG_ARAM, BLOCK_4700 = 0x2000, 0x4700                   # !AudioAram_Song, !AudioAram_Block4700
 FIRST_TIE, FIRST_REST, FIRST_CMD = 0xA8, 0xB6, 0xC4
@@ -283,8 +284,8 @@ def assemble_song(text, counts, durations):
                 fail("@samples given twice")
             if words[1:] == ["none"]:
                 tables["samples"] = []
-            elif not 1 < len(words) <= 17 or not all(w.isdigit() and 1 <= int(w) <= SAMPLE_MAX for w in words[1:]):
-                fail(f"expected @samples none or 1-16 sample numbers 1-{SAMPLE_MAX}")
+            elif not 1 < len(words) <= 17 or not all(w.isdigit() and 1 <= int(w) <= SAMPLE_NUMBER_MAX for w in words[1:]):
+                fail(f"expected @samples none or 1-16 sample numbers 1-{SAMPLE_NUMBER_MAX}")
             else:
                 tables["samples"] = [int(w) for w in words[1:]]
         elif head == "@echo":

@@ -1,5 +1,5 @@
 // Writes event packs, their message tables, songs, playable-character
-// records, techs, items, maps, tilesets, enemies and sprites into a copy of the base ROM.
+// records, techs, items, maps, tilesets, enemies, sprites and samples into a copy of the base ROM.
 // Layout facts and their evidence: CTROMLayout.swift / docs/rom_builder.md.
 import Foundation
 
@@ -146,6 +146,16 @@ public enum CTROMBuilder {
         public var relocations: [Relocation]? = nil               // absent: nothing moved
         public var enemies: [Enemy]? = nil                        // absent: none requested
         public var sprites: [CTSpritePatch.ReportSprite]? = nil   // absent: none requested
+        public var samples: [CTSamplePatch.ReportSample]? = nil   // absent: none requested
+        public var sampleTables: CTSamplePatch.ReportTables? = nil // absent: the tables were not moved
+        /// The ARAM budget of every song whose data or sample list was written.
+        public var budgets: [CTSongBudget]? = nil
+        /// Songs whose sample-list row `rom.samples` wrote (absent: none).
+        public var sampleLists: [SampleList]? = nil
+        public struct SampleList: Codable, Equatable, Sendable {
+            public let song: Int
+            public let samples: [Int]
+        }
     }
 
     // MARK: Project entry point
@@ -163,9 +173,10 @@ public enum CTROMBuilder {
     public static func build(base: [UInt8], project: CTProject) throws -> (rom: [UInt8], report: Report) {
         guard let spec = project.project.rom,
               !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items
-                && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty && spec.sprites.isEmpty) else {
+                && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty && spec.sprites.isEmpty
+                && spec.samples.isEmpty) else {
             throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters, rom.techs, rom.items, " +
-                                  "rom.maps, rom.tilesets, rom.enemies or rom.sprites to build")
+                                  "rom.maps, rom.tilesets, rom.enemies, rom.sprites or rom.samples to build")
         }
         func inside(_ path: String) -> Bool { !path.hasPrefix("/") && !path.split(separator: "/").contains("..") }
         var requests: [Request] = []
@@ -253,9 +264,55 @@ public enum CTROMBuilder {
             }
             return CTSpritePatch.Request(sprite: s, sheet: SpriteSheet.tiles(png))
         }
+        let samples = try spec.samples.map { try sampleRequest($0, project: project, inside: inside) }
         return try build(base: base, requests: requests, songs: songs, characters: characters, techs: techs,
                          items: items, maps: maps, tilesets: tilesets, enemies: enemies, sprites: sprites,
-                         textProfile: project.textProfile)
+                         samples: samples, textProfile: project.textProfile)
+    }
+
+    /// A `rom.samples` entry as the bytes and words to write: the sidecar's
+    /// played blocks (or the file's blocks as they are), its ADSR, and the
+    /// tuning word from its rate and root note (or the entry's own).
+    public static func sampleRequest(_ s: Project.ROMBuild.Sample, project: CTProject) throws -> CTSamplePatch.Request {
+        try sampleRequest(s, project: project) { !$0.hasPrefix("/") && !$0.split(separator: "/").contains("..") }
+    }
+
+    static func sampleRequest(_ s: Project.ROMBuild.Sample, project: CTProject, inside: (String) -> Bool) throws -> CTSamplePatch.Request {
+        func fail(_ m: String) -> CTROMBuildError { CTROMBuildError("sample \(s.id): \(m)") }
+        guard let meta = project.samples[s.id] else { throw fail("no audio/samples/\(s.id).json") }
+        guard inside(meta.brr) else { throw fail("\(meta.brr) must stay inside the project") }
+        let file: [UInt8]
+        do { file = [UInt8](try Data(contentsOf: project.fileURL(relative: meta.brr))) }
+        catch { throw fail("\(meta.brr): \(error)") }
+        let brr: [UInt8], loopOffset: Int
+        if s.asIs {
+            do { brr = Array(try SPCStream.brrBlocks(file)) } catch { throw fail("\(error)") }
+            guard let offset = s.loopOffset else { throw fail("asIs needs loopOffset") }
+            loopOffset = offset
+        } else {
+            do { (brr, loopOffset) = try CTSamplePatch.gameBytes(file: file, meta: meta) } catch { throw fail("\(error)") }
+            guard s.loopOffset == nil || s.loopOffset == loopOffset else {
+                throw fail("loopOffset is taken from the sidecar's loop (\(loopOffset)) unless asIs")
+            }
+        }
+        guard let adsr = s.adsr ?? CTSamplePatch.adsrWord(meta) else {
+            throw fail("the driver plays ADSR envelopes only: give the sidecar an ADSR or the entry an adsr word")
+        }
+        var tune: CTSampleTuning.Solution?
+        let tuning: Int
+        if let word = s.tuning {
+            tuning = word
+        } else {
+            guard let rate = meta.rate else { throw fail("no rate in the sidecar: give the entry a tuning word") }
+            let root = s.rootNote ?? CTSampleTuning.defaultRoot(rate: rate)
+            guard let solution = CTSampleTuning.solve(rate: rate, rootNote: root) else {
+                let range = CTSampleTuning.roots(rate: rate).map { " (\($0.lowerBound)-\($0.upperBound) can)" } ?? ""
+                throw fail("no tuning word plays a \(rate) Hz sample at root note \(root)\(range)")
+            }
+            tune = solution; tuning = solution.tuning
+        }
+        return .init(id: s.id, replace: s.replace, brr: brr, loopOffset: loopOffset, tuning: tuning, adsr: adsr,
+                     songs: s.songs, tune: tune, strict: !s.asIs)
     }
 
     /// `block` in its old span `home` (now unused) when it fits, else in a
@@ -277,6 +334,7 @@ public enum CTROMBuilder {
                              characters characterRequests: [CharacterRequest] = [], techs: TechSystemDef? = nil,
                              items: ItemsRequest? = nil, maps: [GameMap] = [], tilesets: [CTTilesetPatch.Request] = [],
                              enemies enemyRequests: [EnemyRequest] = [], sprites spriteRequests: [CTSpritePatch.Request] = [],
+                             samples sampleRequests: [CTSamplePatch.Request] = [],
                              textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
@@ -490,6 +548,34 @@ public enum CTROMBuilder {
                                echo: s.tables.echo.map { $0.map(Int.init) }, drums: s.tables.drums.map { $0.map(Int.init) }))
         }
 
+        // Samples (docs/sfx_lab.md): BRR bytes, table entries (moved when
+        // appending) and the sample-list rows of the songs they join. A song
+        // built from a listing that sets @samples keeps its own row, which
+        // must then load the sample.
+        var sampleReport: [CTSamplePatch.ReportSample] = [], sampleTables: CTSamplePatch.ReportTables?
+        var sampleLists: [Report.SampleList] = []
+        if !sampleRequests.isEmpty {
+            let listed = Dictionary(songRequests.compactMap { s in s.tables.samples.map { (s.song, $0) } }, uniquingKeysWith: { a, _ in a })
+            let applied = try CTSamplePatch.apply(sampleRequests, rom: base, space: &space,
+                                                  rows: { listed[$0] ?? CTSongTables.rom(base, song: $0).samples ?? [] },
+                                                  write: { write($0, at: $1, $2) })
+            sampleReport = applied.samples; sampleTables = applied.tables
+            for (song, list) in applied.lists.sorted(by: { $0.key < $1.key }) {
+                guard romSongs.indices.contains(song) else { throw CTROMBuildError("rom.samples names song \(song); songs are 0-\(romSongs.count - 1)") }
+                if let own = listed[song] {
+                    guard own == list else {
+                        throw CTROMBuildError(String(format: "song $%02X: its listing's @samples does not load %@", song,
+                                                     sampleReport.filter { $0.songs.contains(song) }.map(\.id).joined(separator: ", ")))
+                    }
+                    continue
+                }
+                for row in CTSongTables(samples: list).rows(song: song) {
+                    write(row.bytes, at: row.pc, String(format: "AudioRom_SongSamples[$%02X]", song))
+                }
+                sampleLists.append(.init(song: song, samples: list))
+            }
+        }
+
         // Characters: each decoded field in place; the record's other bytes stay the base ROM's.
         var characters: [Report.Character] = []
         for c in characterRequests {
@@ -525,6 +611,18 @@ public enum CTROMBuilder {
             return .init(id: e.id, enemyId: e.enemy.enemyId, address: snes(pc), pc: pc, name: named, enemy: e.enemy)
         }
 
+        // Every song whose data or sample list was written must load: its
+        // sequence below $4700, its samples below its echo buffer.
+        var budgets: [CTSongBudget] = []
+        let budgeted = Set(songRequests.map(\.song)).union(sampleLists.map(\.song))
+        if !sampleRequests.isEmpty || !songRequests.isEmpty {
+            for song in budgeted.sorted() {
+                let budget = try CTSongBudget.of(rom: rom, song: song)
+                if let problem = budget.problem { throw CTROMBuildError(problem) }
+                budgets.append(budget)
+            }
+        }
+
         let sum = checksum(rom)
         write([UInt8(~sum & 0xFF), UInt8(~sum >> 8 & 0xFF), UInt8(sum & 0xFF), UInt8(sum >> 8)],
               at: CTROMLayout.complementPC, "checksum")
@@ -538,6 +636,10 @@ public enum CTROMBuilder {
                             relocations: relocations.isEmpty ? nil : relocations)
         report.enemies = enemyReport.isEmpty ? nil : enemyReport
         report.sprites = spriteRequests.isEmpty ? nil : spriteReport
+        report.samples = sampleRequests.isEmpty ? nil : sampleReport
+        report.sampleTables = sampleTables
+        report.budgets = budgets.isEmpty ? nil : budgets
+        report.sampleLists = sampleLists.isEmpty ? nil : sampleLists
         return (rom, report)
     }
 
