@@ -26,8 +26,7 @@ extension ProjectStore {
         guard var candidate = project else { return false }
         var spec = candidate.project.rom ?? Project.ROMBuild()
         spec.enemies = ids
-        let empty = Self.isEmpty(spec) && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty
-        candidate.project.rom = empty ? nil : spec
+        candidate.project.rom = Self.isEmpty(spec) ? nil : spec
         do {
             try candidate.save()
             project = candidate
