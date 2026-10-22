@@ -225,6 +225,11 @@ final class CTTilesetsTests: XCTestCase {
             let tiles = SpriteSheet.tiles(try PNG.readIndexed(url: project.fileURL(relative: try XCTUnwrap(ts.sheet))))
             XCTAssertEqual(tiles.count, 1024)
             checkScene(ts, tiles: tiles)
+            let direct = TilesetScene.cgramIndices(ts, tiles: tiles)
+            XCTAssertEqual(direct.indices, (0..<(direct.width * direct.height)).map { i in
+                let x = i % direct.width, y = i / direct.width
+                return Self.expectedIndex(ts, tiles: tiles, metatile: y / 16 * 16 + x / 16, x: x % 16, y: y % 16)
+            })
         }
         // A tile animation's frame lands on its four characters.
         let ts = try XCTUnwrap(project.tilesets["t12_00"])

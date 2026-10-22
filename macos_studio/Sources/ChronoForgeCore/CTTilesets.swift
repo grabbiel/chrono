@@ -645,6 +645,26 @@ public enum TilesetScene {
         return f
     }
 
+    /// The metatiles, `perRow` per row, as CGRAM indices (0 = backdrop) read
+    /// straight from the tilemap words: what the scene's frame shows.
+    public static func cgramIndices(_ ts: Tileset, tiles: [[UInt8]], metatiles: Range<Int>? = nil) -> (width: Int, height: Int, indices: [Int]) {
+        let range = metatiles ?? 0..<ts.metatiles.count
+        let width = perRow * 16, height = (range.count + perRow - 1) / perRow * 16
+        var out = [Int](repeating: 0, count: width * height)
+        let rowStep = ts.bpp == 2 ? 4 : 16
+        for (k, m) in range.enumerated() where m < ts.metatiles.count {
+            for (q, c) in ts.metatiles[m].chips.prefix(4).enumerated() where c.tile < tiles.count {
+                for i in 0..<64 {
+                    let x = i % 8, y = i / 8
+                    let v = Int(tiles[c.tile][(c.vflip ? 7 - y : y) * 8 + (c.hflip ? 7 - x : x)])
+                    let ox = (k % perRow) * 16 + (q % 2) * 8 + x, oy = (k / perRow) * 16 + (q / 2) * 8 + y
+                    out[oy * width + ox] = v == 0 ? 0 : rowStep * c.pal + v
+                }
+            }
+        }
+        return (width, height, out)
+    }
+
     /// Write each animation's current frame (4 animSheet tiles) over its characters.
     public static func applyTileAnimations(_ f: inout PPUFrame, _ ts: Tileset, animTiles: [[UInt8]], frames: [Int]) {
         for (a, f0) in zip(ts.tileAnimations ?? [], frames) where f0 < a.frames.count {
