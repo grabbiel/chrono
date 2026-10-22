@@ -609,7 +609,13 @@ public enum CTROMBuilder {
         var budgets: [CTSongBudget] = []
         let budgeted = Set(songRequests.map(\.song)).union(sampleLists.map(\.song))
         if !sampleRequests.isEmpty || !songRequests.isEmpty {
+            let count = try CTSampleTables.locate(rom).count
             for song in budgeted.sorted() {
+                let list = CTSongTables.rom(rom, song: song).samples ?? []
+                if let n = list.first(where: { !(1...count).contains($0) }) {
+                    throw CTROMBuildError(String(format: "song $%02X: @samples names sample %d; the ROM has %d (rom.samples appends from %d)",
+                                                 song, n, count, CTSampleTables.rom.count + 1))
+                }
                 let budget = try CTSongBudget.of(rom: rom, song: song)
                 if let problem = budget.problem { throw CTROMBuildError(problem) }
                 budgets.append(budget)

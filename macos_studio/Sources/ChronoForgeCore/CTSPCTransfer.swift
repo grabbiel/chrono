@@ -121,9 +121,11 @@ public enum CTSPCTransfer {
             let arguments = [UInt8(song), rom[echo + 1], rom[echo] & 0x0F]
 
             // The sample tables where the code reads them (a built ROM may have
-            // moved them to append samples: CTSampleTables).
+            // moved them to append samples: CTSampleTables); a data-only image
+            // without that code has them where US 1.0 does.
             let tables: CTSampleTables
-            do { tables = try CTSampleTables.locate(rom) } catch { throw Failure.invalidInput("\(error)") }
+            if CTSampleTables.hasNoReaders(rom) { tables = .rom }
+            else { do { tables = try CTSampleTables.locate(rom) } catch { throw Failure.invalidInput("\(error)") } }
             // Audio_CmdLoadSong .copy_list (bankC7.asm:504-526): up to 16 words, 0-ended.
             var list: [Int] = []
             for k in 0..<16 {

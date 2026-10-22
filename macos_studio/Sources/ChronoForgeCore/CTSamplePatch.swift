@@ -49,6 +49,12 @@ public struct CTSampleTables: Equatable, Sendable {
         }
     }
 
+    /// Whether `rom` has none of the twelve instructions (a synthetic image
+    /// with only data): the sender then reads the US 1.0 layout.
+    public static func hasNoReaders(_ rom: [UInt8]) -> Bool {
+        rom.count == CTROMBuilder.romSize && !sites.contains { opcodes.contains(rom[$0.operand - 1]) }
+    }
+
     /// The tables a ROM's code reads: every site must name the same four
     /// back-to-back tables (as the ROM and this builder lay them out).
     public static func locate(_ rom: [UInt8]) throws -> CTSampleTables {

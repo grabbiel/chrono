@@ -193,7 +193,7 @@ final class CTSongTests: XCTestCase {
             catch { return "\(error)" }
         }
         XCTAssertTrue(refusal([.init(song: 83, source: "", data: good)]).contains("is not 0-82"))
-        XCTAssertTrue(refusal([.init(song: 1, source: "", data: good, tables: .init(samples: [63]))]).contains("@samples takes"))
+        XCTAssertTrue(refusal([.init(song: 1, source: "", data: good, tables: .init(samples: [63]))]).contains("names sample 63; the ROM has 62"))
         XCTAssertTrue(refusal([.init(song: 1, source: "", data: good, tables: .init(echo: [1]))]).contains("@echo takes 2 bytes"))
         XCTAssertTrue(refusal([.init(song: 1, source: "", data: good), .init(song: 1, source: "", data: good)]).contains("built twice"))
         XCTAssertTrue(refusal([.init(song: 1, source: "", data: good + [UInt8](repeating: 0xEB, count: 9983))]).contains("loads below $4700"))
