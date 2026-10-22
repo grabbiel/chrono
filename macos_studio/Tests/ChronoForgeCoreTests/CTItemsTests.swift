@@ -60,6 +60,9 @@ final class CTItemsTests: XCTestCase {
                                          statCaps: Array(repeating: 99, count: 7), char5Attack: Array(repeating: 0, count: 100))
         XCTAssertThrowsError(try CTEquipStats.compute(record: record, tables: tables))
         XCTAssertThrowsError(try CTEquipStats.compute(record: [0], tables: tables))
+        var short = tables
+        short.statCaps.removeLast()
+        XCTAssertThrowsError(try CTEquipStats.compute(record: record, tables: short))
     }
 
     func testNames() throws {
@@ -191,6 +194,8 @@ final class CTItemsTests: XCTestCase {
         refuseTables({ $0.boosts[3].stats = ["power", "power"] }, "distinct stat names")
         refuseTables({ $0.boosts[3].amount = 256 }, "not 0-255")
         refuseTables({ $0.boosts.removeLast() }, "23 entries")
+        refuseTables({ $0.statOrder.removeLast() }, "need 7, 7 and 100")
+        refuseTables({ $0.char5Attack.append(0) }, "need 7, 7 and 100")
 
         var icon = items
         icon[2].rom!.icon += 1

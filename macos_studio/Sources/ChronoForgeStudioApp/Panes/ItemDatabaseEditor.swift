@@ -494,8 +494,7 @@ private struct BoostsEditor: View {
     @Binding var tables: ItemTablesDef?
 
     var body: some View {
-        if tables != nil {
-            let t = tables!
+        if let t = tables, t.boosts.count == CTItemROM.boostCount, t.statOrder.count == t.statCaps.count {
             VStack(alignment: .leading, spacing: 8) {
                 Text("ItemBoosts: the stats each boost raises and by how much. Weapons, armour and helmets name one by "
                      + "their boost byte; accessories with special bit 6 by their special argument. Boost 0 is none.")
@@ -528,7 +527,7 @@ private struct BoostsEditor: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         } else {
-            Text("No item_tables.json; reimport the ROM's items.").foregroundStyle(.secondary)
+            Text("No usable item_tables.json; reimport the ROM's items.").foregroundStyle(.secondary)
         }
     }
 }

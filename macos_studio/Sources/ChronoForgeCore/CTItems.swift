@@ -184,6 +184,8 @@ public enum CTItemROM {
         guard let t = tables else { return }
         try need(t.schema == "ct-item-tables/1", "item_tables.json schema \(t.schema) is not ct-item-tables/1")
         try need(t.boosts.count == boostCount, "ItemBoosts needs 23 entries")
+        try need(Set(t.statOrder) == Set(CharacterDef.StatBlock.names) && t.statOrder.count == 7 && t.statCaps.count == 7
+                 && t.char5Attack.count == char5AttackCount, "statOrder, statCaps and char5Attack need 7, 7 and 100 entries")
         try need(t.boosts.first == .init(stats: [], amount: 0), "boost 0 is no boost (the menu skips it)")
         for (n, b) in t.boosts.enumerated() {
             try need(b.stats.allSatisfy(t.statOrder.contains) && Set(b.stats).count == b.stats.count,
@@ -346,6 +348,9 @@ public enum CTEquipStats {
     /// Menu_CharRecalc on a $50-byte record.
     public static func compute(record rec: [UInt8], tables t: Tables) throws -> Result {
         guard rec.count >= 0x2B else { throw RuleError(description: "a record is $50 bytes") }
+        guard t.sortKeys.count == 0x100, t.statOrder.count == 7, t.statOrder.allSatisfy((0..<7).contains), t.statCaps.count == 7 else {
+            throw RuleError(description: "the tables need 256 sort keys, a 7-stat order and 7 caps")
+        }
         var boost = [Int](repeating: 0, count: 7), armour = 0
         func word(_ at: Int) -> Int { Int(rec[at]) | Int(rec[at + 1]) << 8 }
         func addBoosts(_ item: Int) throws {
