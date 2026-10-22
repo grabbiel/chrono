@@ -157,40 +157,59 @@ chronoforge music verify-model <rom.sfc> --driver-steps 3000   # and against the
 - The echo impulse response is a floating-point model of the echo path
   (integer clamps and the buffer's halving are not modelled). The preview
   plays the real S-DSP.
-- Per-sample tuning and ADSR words are the ROM's global tables. A song can
-  only choose which samples it loads, and override ADSR per track with
-  sequence commands.
+- Per-sample tuning and ADSR words are global tables. A song chooses which
+  samples it loads and can override ADSR per track with sequence commands.
+  Project samples bring their own words through `rom.samples`.
 - The Studio views were checked by launching the app and capturing its window
   for each view. Mouse edits were not driven by automation. The edits they
   call are the tested `CTSongDocument` functions.
 
-## Next slice: composing new songs (design)
+## Composing new songs
 
-New songs must fit the same limits as edited ones:
+```sh
+chronoforge music new --project My.ctproj --song 2 --samples 7,63 --tracks 0:5,1:4 --steps 384
+chronoforge music edit My.ctproj/audio/songs/song02.ctsong insert 0 0 C5 96 --out My.ctproj/audio/songs/song02.ctsong
+chronoforge music budget built.sfc --songs 2
+```
 
-1. **Sequence budget.** Song data goes from `$2000` and must stop before
-   `$4700`: at most 9,983 bytes (`CTSongISA.maxLength`). From `$0F00` bytes
-   on, it overwrites the `$2F00` effects block while it plays. A composer
-   should count bytes as it writes. Loops (`loop_start`/`loop_end`, which take
-   2 bytes) and `jump` into shared phrases are the compression it has. The
-   model can already measure how many steps each statement covers.
-2. **Sample budget.** A song loads up to 16 samples from the 62 in the ROM.
-   They go one after another from `$4700` + boot block 2 and must end below
-   the echo buffer at `$F100 − EDL × $800`. The rack shows that number now. A
-   new-song wizard should pick samples by role (lead, bass, drums kit), show
-   the remaining bytes, and lower the EDL when the samples need the room.
-3. **Drum kits.** The 36-byte `@drum` table maps 12 note indexes to
-   sample/note/pan. A kit editor can audition each pad through
-   `CTSongInstrument.audition`, with drum mode on in the generated listing.
-4. **Template.** Start from a generated listing: a `tempo`, `echo_volume`,
-   `efb_fade` and `fir` header on track 0, then each used track with `sample`,
-   `volume`, `pan`, `octave`, one rest of the song's length, and
-   `jump ->LOOP`. All piano-roll inserts then land in rests. This is the shape
-   `insertNote` already supports.
-5. **Import.** MIDI notes can be quantized to the 14 table lengths (or
-   `wait`), mapped into octaves with `octave`, and turned into ties across
-   rows. Channels beyond 8, and sounds held across loop points, need explicit
-   choices.
-6. **Checks.** Each composed song should be put through `verify-model`'s
-   round trip, a driver trace (key-ons as composed), and `rom build` with
-   `ct_rom_check.py`. That is the same evidence the ROM songs have now.
+**Template** (`CTSongTemplate`). The generated listing has:
+
+- `@samples` from the given numbers (63 on for appended project samples);
+- `@echo` with the chosen EDL, and `@drums none`;
+- on track 0, a `tempo`, `echo_volume`, `efb_fade` and `fir` header;
+- per track: `sample $20 + slot`, `volume`, `pan`, `octave` and
+  `transpose $0A`, then a loop label;
+- each track's length as rests, longest first (lengths from the duration
+  table), and a `jump` back to the loop label.
+
+Every piano-roll or `music edit insert` note therefore lands in a rest that
+plays once. `music new` writes the listing and its `rom.songs` row. In the
+Studio, **Music → CT Songs → New…** does the same for the song number in the
+stepper: sample list, 1–8 tracks, bars of 96 steps, tempo and EDL.
+
+**Budgets.** The instrument rack shows the song as the build will load it,
+with the playback ROM's samples and the project's `rom.samples`:
+
+- sample bytes from `$4700` + boot block 2, and the room left below the echo
+  buffer (`$F100 − EDL × $800`);
+- the sequence's bytes, out of 9,983, and whether it reaches the `$2F00`
+  effects block (from `$0F00` bytes on).
+
+The build refuses a song over either budget (`CTSongBudget`). The rack's
+**Project sample** menu loads a sample that `rom.samples` writes into a slot,
+with its own tuning and ADSR words. Auditions still play the playback ROM's
+samples, so a project sample is heard after a build, through
+`music sample-check` or the SFX Lab's preview.
+
+**Evidence** (`macos_studio/tools/verify_audio_build.py`, ROM tests in
+`CTSamplePatchTests`). A song from the template, with a note inserted on each
+of its two tracks, is built with a replaced and an appended sample. On the
+built ROM, the S-SMP driver keys both samples on at the inserted notes, and
+the voices' pitch registers are the driver's formula for those notes.
+
+**Not yet:**
+
+- **Drum kits.** The 36-byte `@drum` table is written as listed. A kit editor
+  that auditions each pad is the next slice.
+- **MIDI import.** Quantize to the duration table, map into octaves, and tie
+  across rows.

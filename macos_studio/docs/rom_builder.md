@@ -64,7 +64,15 @@ Studio sets it with **Tech & Synergy Matrix → Write techs to ROM**.
 Studio sets them with **Characters → Write to ROM**.
 
 `songs` replaces `Audio_SongTable` entries (0–82) with `ct-song/1` listings. See
-[song sequences](music_sequences.md); Studio sets these rows in **Music → CT Songs**.
+[song sequences](music_sequences.md); Studio sets these rows in **Music → CT Songs**
+(**New…** starts one from the template).
+
+`samples` writes project samples into the sample tables, replacing one of the
+62 or appending a new one, and adds each to the sample lists of the songs it
+names. See [the SFX Lab](sfx_lab.md#a-project-sample-in-the-game-romsamples).
+Studio sets these in **SFX → Use in game**. Every song the build writes or
+lists a sample for must fit its budget: samples below the echo buffer, and
+the sequence below `$4700`.
 
 Each row replaces one `Evt_PackPtrs` entry (0–512) with either:
 
@@ -122,7 +130,14 @@ ranges, the bit rules, the tileset a map names against its location record).
    frame-id and duration rows and colours 1–12, after the checks and the
    re-decode in [sprites](sprites.md#writing-back). Pointer tables and sprite
    records are never written.
-10. Writes the `Evt_PackPtrs` entries and the checksum and complement.
+10. With `rom.samples`, after the songs:
+    - places each sample's bytes in place or in free space;
+    - writes its table row; appending moves the four tables, one entry longer,
+      to free space and patches the twelve operands that read them;
+    - appends the sample to the named songs' `AudioRom_SongSamples` rows (after
+      a listing's own `@samples`);
+    - then refuses any written song over its budget (`CTSongBudget`).
+11. Writes the `Evt_PackPtrs` entries and the checksum and complement.
 
 Maps and tilesets are applied first, right after the free space is set up, so
 the spans they free are known before the event packs are placed:
@@ -237,6 +252,15 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
   checksums and report hashes) are each rejected.
 - **Songs** (`CTSongTests`): all 83 songs rebuilt from their listings leave the
   ROM identical.
+- **Samples** (`CTSamplePatchTests`, `macos_studio/tools/verify_audio_build.py`):
+  - all 62 samples and 83 songs imported then rebuilt give the clean ROM;
+  - for a replaced and an appended sample in a composed song,
+    `ct_rom_check.py` re-reads the tables where the code reads them;
+  - the ROM's `Audio_CmdLoadSong`, run in ChronoRET's interpreter, sends what
+    the S-SMP driver received;
+  - the driver keys the samples on, decodes their bytes and plays them at the
+    sidecar's rate;
+  - damaged copies are rejected and over-budget edits refused.
 - **Characters** (`CTCharactersTests`, `macos_studio/tools/verify_character_build.py`):
   importing the seven records and building gives the clean ROM with no write; an
   edited build is checked by `ct_rom_check.py` (each record decoded independently
@@ -319,8 +343,8 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
 - Only event packs, message tables, song sequences (with their per-song table
   rows), the playable characters' records and growth rows, the tech tables'
   writable fields, the item tables' writable fields, and the maps and tilesets
-  of existing locations, enemies' stats, rewards and names, and the playable characters' sprite sets in place, are written. New locations, overworld maps, other sprites, samples, sound effects, new items or item ids, new
-  techs or tech names, enemy AI scripts, attack and tech records, ExpToLevel and other tables are not.
+  of existing locations, enemies' stats, rewards and names, and the playable characters' sprite sets in place, and song samples, are written. New locations, overworld maps, other sprites, sound effects, new items or item ids, new
+  techs or tech names, sound-effect samples and drum kits, enemy AI scripts, attack and tech records, ExpToLevel and other tables are not.
   Enemies are written as their stat and reward records and names only.
 - Lowered packs cover the Studio statements in `event_bytecode.md`; cross-map calls
   are refused.

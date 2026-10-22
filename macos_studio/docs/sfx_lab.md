@@ -180,41 +180,123 @@ render of a 330 Hz sample bent up 2 semitones measures about 370 Hz.
 See [the schema](ctproj_schema.md#audiosamplesidjson). Every SFX Lab field is
 optional, and older sidecars load unchanged.
 
-## Next slice: a project sample in the game (design only)
+## A project sample in the game (`rom.samples`)
 
-Nothing is written to the ROM yet. This is the path, with evidence.
+```sh
+chronoforge sfx use My.ctproj lead --replace 7 --adsr '$E0FF'      # takes over ROM sample 7
+chronoforge sfx use My.ctproj bass --root 48 --songs 2,'$1A'        # appended: sample 63
+chronoforge sfx import-rom ct.sfc --project My.ctproj               # the ROM's 62, written back as they are
+chronoforge rom build My.ctproj --base ct.sfc --out built.sfc --report report.json
+chronoforge music sample-check ct.sfc built.sfc 2 63                # the driver plays it (JSON)
+```
 
-- **Where samples live.** `Audio_SampleTable` (`$C7:0AEA`) holds 62 long
-  pointers. Each sample is a length word followed by BRR bytes, uploaded by
-  `Audio_UploadSample` (`bankC7.asm:1233-1359`) in three-byte steps, so the
-  length must be a nonzero multiple of 3. Whole 9-byte blocks always are.
-  `Audio_SampleLoop` (`$C7:0BA4`) is a word per sample: the loop offset in
-  bytes from the start. See `CTSPCTransfer.swift`, which models this, and
-  `constants_engine.inc:225-241`.
-- **Per-sample instrument data.** `Audio_SampleParamA` (`$C7:0C20`) is the
-  tuning word and `Audio_SampleParamB` (`$C7:0C9C`) the ADSR pair. The driver
-  reads them in `Spc_SetTrackSample` (`driver.asm`, `$1ACF`, around line
-  4839), which copies ParamA to `Spc_TrackTuning` and ParamB to
-  `Spc_TrackAdsr`. `Audio_SendSampleDir` (`bankC7.asm:757-833, 884-939`)
-  sends the song's 16 of each to ARAM `$1F40` and `$1FC0`. A Studio sample
-  needs its ADSR pair from the sidecar (`DSPEnvelope.Setting.adsrRegisters`)
-  and a tuning word derived from its rate. The tuning word's exact pitch
-  formula is still to be traced in the driver's note-to-pitch code.
-- **A song's sample list.** `AudioRom_SongSamples` (`$C7:0E11`) is 16 words
-  per song, 0-ended (the `@samples` header in [song listings](music_sequences.md)).
-  `sample $20 + k` in a sequence plays list entry `k`. The load places the
-  samples one after another from `$4700` + boot block 2's length. A new
-  sample therefore costs ARAM in every song that lists it, and the budget is
-  the space below the echo buffer.
-- **The write-back.**
-  1. Either replace one of the 62 samples (keeping the table) or append a
-     63rd. `CTSongISA.sampleMax` and the driver's directory range bound this;
-     check the directory size at `$1E00`.
-  2. Write the BRR bytes in free ROM space, the pointer, the loop word and
-     both parameter words.
-  3. Add the sample to the chosen songs' `@samples` lists.
-  4. Prove the result with `CTSPCTransfer.Plan` (the sample upload and
-     directory transfers) and a `ctSong(rom:replacing:...)` render, where the
-     S-DSP plays the new sample in the song.
-  5. `CTROMBuilder` and `Validator` own the ROM side; this slice did not
-     touch them.
+In the Studio, the editor's **Use in game** box does the same. It sets the
+slot (append, or replace ROM sample 1–62), the songs whose lists load the
+sample, the root note and an optional ADSR word. It shows the tuning word
+and each named song's budget, and saves the entry to `rom.samples`. The
+build reads the saved `.brr` and sidecar, so save the sample first. See
+[the schema](ctproj_schema.md#projectjson).
+
+**Tables.** `Audio_SampleTable` (`$C7:0AEA`) has 62 long pointers to
+`[u16 length][BRR]`. `Audio_SampleLoop`, `Audio_SampleParamA` (tuning) and
+`Audio_SampleParamB` (ADSR1 low, ADSR2 high) follow it back to back, then
+`Audio_SongTable`. Twelve `LDA`/`ADC long,X` instructions in bank `$C7` read
+these tables (`CTSampleTables.sites`).
+
+- **Replacing a sample** rewrites its row. The new bytes go in place when
+  they fit and the old span is not shared; otherwise they go in free space.
+- **Appending a sample** (63 on) moves all four tables, one entry longer,
+  into free space as one block of 9 × count bytes, and points the twelve
+  operands at them. The code derives the count as
+  (loops − pointers) / 3, so nothing else changes.
+
+`Audio_UploadSample` sends three bytes per step. Whole 9-byte blocks are
+always a multiple of 3. A sample is refused when:
+
+- its end flag is not only on its last block;
+- the loop offset is not a block start inside the bytes;
+- ADSR1 bit 7 is clear (the driver plays ADSR only, so a GAIN sidecar needs
+  an `adsr` word);
+- or a song's list would exceed 16 samples.
+
+ROM imports are written back `asIs`. Thirty ROM samples have loop flags on
+middle blocks, and sample 59's loop word points past its data.
+
+**Tuning.** `Spc_NotePitch` (driver `$06BD`) computes the pitch:
+
+```
+P = PitchTable[n mod 12]               (4096 × 2^((k − 11)/12), rounded down; $1000 at B)
+t = (tuning low byte + fine tune) mod 256,  h = tuning high byte
+Q = P.hi × t + (P.lo × t) >> 8
+if h ≠ 0:  Q += ((Q >> 8) × h) >> 8
+if t < $80: Q += P
+pitch = Q shifted left by (octave − 4), or right by (4 − octave)
+```
+
+- Pitch `$1000` plays one BRR sample per 32 kHz output sample.
+- With transpose 10, octave *o* and note index *i* sound note number 12*o* + *i*.
+- One tuning word scales the pitch by ×0.5 to ×1.5, so a rate is reachable
+  only from roots in a range of about one octave.
+- `CTSampleTuning.solve(rate:rootNote:)` searches the words for the best
+  pitch. `sfx use` lists the feasible roots when a root is out of range.
+- A 32 kHz sample at root 60 gets `$FFF1` (pitch `$0FFE`, −0.8 cents); so
+  does a 16 kHz sample at root 48.
+
+Evidence: the formula equals the driver's own code in 15,136 S-SMP runs from
+`$06BD` across notes, tuning words and fine tunes (ROM test
+`testPitchFormulaIsTheDriversNotePitch`). On a built ROM, the voice's pitch
+register equals it and plays within 0.2% of the sidecar's rate.
+
+**In the driver.** `music sample-check <clean> <built> <song> <sample>`:
+
+1. Boots the driver from the clean ROM and loads the built ROM's song with
+   its transfer plan.
+2. Checks ARAM's BRR bytes, the directory entry (`$1E80` + 4 × slot), and the
+   tuning and ADSR words (`$1F40`, `$1FC0` + 2 × slot).
+3. Runs the song until a voice keys on with SRCN `$20` + slot.
+4. Checks that the key-on fetch starts at the directory's address, that the
+   voice's decoded samples equal the S-DSP decode of the sample's bytes, and
+   that the pitch register is `Spc_NotePitch`'s value for the track's note.
+
+`re_workspace/tools/ct_samples.py load` runs the ROM's own `Audio_CmdLoadSong`
+(`$C7:01A1`) in ChronoRET's 65816 interpreter. Its transfers equal the plan's
+byte for byte: song 2 on the clean ROM, and the edited song in
+`macos_studio/tools/verify_audio_build.py`.
+
+**Budgets** (`CTSongBudget`, `music budget <rom>`):
+
+- **Samples.** A song's samples load from `$4700` + boot block 2's length
+  (`$4901`) and must end at or below the echo buffer, `$F100 − EDL × $800`.
+  Every US 1.0 song fits, and song `$27` leaves 16 bytes. The build refuses
+  a song whose samples would reach the echo buffer.
+- **Sequence.** The sequence loads at `$2000` and must stay below `$4700`
+  (at most 9,983 bytes); the song builder refuses longer ones. From `$0F00`
+  bytes on, the sequence overwrites the `$2F00` effects block while it plays.
+  The game sends that block again on the next load, so the budget reports
+  this rather than refusing it. One ROM song already does it.
+
+The rack in the Music pane shows the same budget for the listing being
+edited.
+
+`ct_rom_check.py` checks a built ROM as follows:
+
+- it re-reads the tables where the code reads them;
+- every reported sample's bytes, words and BRR are checked;
+- every other sample must be unchanged;
+- sample lists must be exactly as reported;
+- the budgets are recomputed.
+
+`verify_audio_build.py` runs the whole path end to end:
+
+- an identical rebuild of every imported sample and song;
+- a replaced and an appended sample in a song from the template;
+- the interpreter and driver runs;
+- six damaged copies, which must be rejected;
+- six refused edits.
+
+**Not yet:**
+
+- a drum-kit editor (`@drum` rows are written as listed);
+- MIDI import;
+- auditioning a project sample in the rack before a build (the audition
+  plays the playback ROM's samples).
