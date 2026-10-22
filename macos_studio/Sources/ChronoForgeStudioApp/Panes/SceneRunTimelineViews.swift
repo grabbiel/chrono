@@ -271,8 +271,16 @@ struct SceneRunTimelineView: View {
         guard r.lanes.indices.contains(row) else { return }
         let lane = r.lanes[row]
         let f = Int((p.x - Self.labelW) / scale) - 1
-        let covering = lane.bars.last { $0.start <= f && ($0.end ?? r.frames) >= f }
-        guard let b = covering ?? lane.bars.min(by: { abs($0.start - f) < abs($1.start - f) }) else { return }
+        // Typed closures keep this cheap for CI's older type checker (Xcode 26.6).
+        let covering = lane.bars.last { (bar: CTSceneRun.Bar) -> Bool in
+            let end: Int = bar.end ?? r.frames
+            return bar.start <= f && end >= f
+        }
+        let nearest = lane.bars.min { (x: CTSceneRun.Bar, y: CTSceneRun.Bar) -> Bool in
+            let dx: Int = abs(x.start - f), dy: Int = abs(y.start - f)
+            return dx < dy
+        }
+        guard let b = covering ?? nearest else { return }
         selection = SceneLocationEditorSelection.select(offset: b.offset, object: lane.object, in: analysis)
         playhead = max(0, b.start)
     }
