@@ -63,6 +63,22 @@ final class CTSceneRunTests: XCTestCase {
         XCTAssertEqual(branches.first?.frame, 0)
     }
 
+    func testAConditionThatYieldsFirstStillRecordsItsJump() throws {
+        // Steps by hand: the $18 at $21 yields once (X stays), then jumps on its next run.
+        let p = try pack([0x18, 0x00, 0x02, 0xB2, 0xB2, 0xB2])
+        func step(_ frame: Int, _ offset: Int, _ next: Int) -> CTSceneRun.Step {
+            CTSceneRun.Step(frame: frame, object: 0, offset: offset, opcode: Int(p.bytes[offset]), level: 7,
+                            next: next, carry: false, stop: nil)
+        }
+        let target = try XCTUnwrap(p.instructions[0x21]?.jumpTarget)
+        let (lanes, branches) = CTSceneRun.derive([step(0, 0x21, 0x21), step(4, 0x21, target)], pack: p)
+        let bar = try XCTUnwrap(lanes.first?.bars.first)
+        XCTAssertEqual(bar.runs, 2)
+        XCTAssertEqual(bar.end, 4)
+        XCTAssertEqual(bar.jumped, true)
+        XCTAssertEqual(branches.map(\.jumped), [true])
+    }
+
     func testAnUnmodelledOpcodeEndsTheLaneWithTheReason() throws {
         let p = try pack([0xAD, 0x01, 0xD2] + Array(repeating: 0, count: 8))
         let (lanes, _) = CTSceneRun.derive(steps(p, frames: 20), pack: p)

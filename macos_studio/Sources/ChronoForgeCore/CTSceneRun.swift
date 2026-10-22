@@ -271,7 +271,7 @@ public enum CTSceneRun {
             if var last = list.last, last.end == nil {
                 if last.offset == s.offset {
                     last.runs += 1
-                    finish(&last, s)
+                    finish(&last, s, pack)
                     list[list.count - 1] = last
                     bars[s.object] = list
                     noteBranch(s, pack, &branches)
@@ -285,10 +285,7 @@ public enum CTSceneRun {
             var bar = Bar(id: id, object: s.object, offset: s.offset, opcode: s.opcode, level: s.level, start: s.frame,
                           end: nil, runs: 1, category: CTSceneAnalysis.category(UInt8(s.opcode)), text: text(pack, s.offset))
             id += 1
-            finish(&bar, s)
-            if let ins = pack.instructions[s.offset], ins.jumpTarget != nil, ins.flow.contains(.next), let n = s.next, n != s.offset {
-                bar.jumped = n != s.offset + ins.length
-            }
+            finish(&bar, s, pack)
             list.append(bar)
             bars[s.object] = list
             noteBranch(s, pack, &branches)
@@ -300,9 +297,15 @@ public enum CTSceneRun {
         return (lanes, branches)
     }
 
-    static func finish(_ bar: inout Bar, _ s: Step) {
+    /// Ends the bar on the run that stops or moves X on; a condition then
+    /// records whether it jumped (also after runs that yielded first).
+    static func finish(_ bar: inout Bar, _ s: Step, _ pack: CTEventPack) {
         if let why = s.stop { bar.stop = why; bar.end = s.frame; return }
-        if let n = s.next, n != s.offset { bar.end = s.frame }
+        guard let n = s.next, n != s.offset else { return }
+        bar.end = s.frame
+        if let ins = pack.instructions[s.offset], ins.jumpTarget != nil, ins.flow.contains(.next) {
+            bar.jumped = n != s.offset + ins.length
+        }
     }
 
     static func noteBranch(_ s: Step, _ pack: CTEventPack, _ out: inout [Branch]) {
