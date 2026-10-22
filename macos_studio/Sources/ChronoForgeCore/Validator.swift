@@ -360,16 +360,47 @@ public enum Validator {
                 }
                 for problem in CTMapPatch.validate(m) { err(4, "maps/\(id).map.json", problem) }
             }
-            // Sprites: ids exist, one per set, the PC family's format (the build adds the base ROM's checks).
-            var spriteSets: [Int: String] = [:]
+            // Sprites: ids exist, one per set or enemy record, the family's format (the build adds the
+            // base ROM's checks); ct-enemy: the pack budget and the sharers (docs/sprites.md).
+            var spriteSets: [Int: String] = [:], enemyRecords: [Int: String] = [:]
+            let listedSprites = Set(spec.sprites)
             for id in Set(spec.sprites).sorted() {
                 let path = "project.json rom sprite \(id)"
                 if spec.sprites.filter({ $0 == id }).count > 1 { err(4, path, "sprite built twice") }
                 guard let s = p.sprites[id] else { err(4, path, "no sprites/\(id).sprite.json"); continue }
-                if let set = s.rom?.set, s.rom?.family == CTSpritePatch.family, let other = spriteSets.updateValue(id, forKey: set) {
-                    err(4, "sprites/\(id).sprite.json", "set \(set) is also sprites/\(other).sprite.json")
+                let file = "sprites/\(id).sprite.json"
+                if s.rom?.family == CTEnemySpritePatch.family {
+                    if let i = s.rom?.set, let other = enemyRecords.updateValue(id, forKey: i) {
+                        err(4, file, "enemy record \(i) is also sprites/\(other).sprite.json")
+                    }
+                    let problems = CTEnemySpritePatch.validate(s)
+                    for problem in problems { err(4, file, problem) }
+                    guard problems.isEmpty, let src = s.rom else { continue }
+                    let png = try? PNG.readIndexed(url: p.fileURL(relative: s.sheet))
+                    let sheet = png.map(SpriteSheet.tiles) ?? []
+                    if sheet.count < src.tileCount { err(4, file, "the sheet has \(sheet.count) tiles; the record has \(src.tileCount)") }
+                    let past = s.frames.contains { ($0.cells ?? []).contains { $0 & CTSpriteROM.tileMask >= src.tileCount || $0 & 0x3800 != 0 } }
+                    if past { warn(4, file, "cells past the graphics or with bits 11-13: the build keeps only those the base ROM has") }
+                    if let b = CTEnemySpritePatch.packBudget(s, sheet: sheet), b.packed > b.budget {
+                        warn(4, file, "the tiles pack to \(b.packed) bytes, over the \(b.budget)-byte span: the build moves the pack into free space")
+                    }
+                    for sharer in CTEnemySpritePatch.sharers(of: s, in: p.sprites) where !listedSprites.contains(sharer.id) {
+                        warn(4, file, "shares its \(sharer.parts.joined(separator: ", ")) with sprites/\(sharer.id): an edit to a shared " +
+                             "part needs that sprite listed with the same edit")
+                    }
+                    continue
                 }
-                for problem in CTSpritePatch.validate(s) { err(4, "sprites/\(id).sprite.json", problem) }
+                if let set = s.rom?.set, s.rom?.family == CTSpritePatch.family, let other = spriteSets.updateValue(id, forKey: set) {
+                    err(4, file, "set \(set) is also sprites/\(other).sprite.json")
+                }
+                for problem in CTSpritePatch.validate(s) { err(4, file, problem) }
+                if s.rom?.family == CTSpritePatch.family {
+                    for sharer in CTEnemySpritePatch.sharers(of: s, in: p.sprites)
+                        where p.sprites[sharer.id]?.rom?.family == CTEnemySpritePatch.family && !listedSprites.contains(sharer.id) {
+                        warn(4, file, "sprites/\(sharer.id) shows its \(sharer.parts.joined(separator: ", ")): a write-back that changes " +
+                             "them leaves that file stale (list it too, or re-import it)")
+                    }
+                }
             }
             for id in Set(spec.tilesets).sorted() {
                 let path = "project.json rom tileset \(id)"

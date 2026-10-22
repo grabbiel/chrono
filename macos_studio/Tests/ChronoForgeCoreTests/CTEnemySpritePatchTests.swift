@@ -205,6 +205,43 @@ final class CTEnemySpritePatchTests: XCTestCase {
         XCTAssertEqual(back.rom?.packedBytes, base.sprite.rom?.packedBytes)
     }
 
+    func testValidatorChecksEnemyEntries() throws {
+        let image = try image()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ctenemyvalid-\(UUID().uuidString).ctproj")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.copyItem(at: fixtureURL(), to: dir)
+        var project = try CTProject.load(from: dir)
+        for i in [0, 2] {
+            let d = try CTEnemySpriteROM.decode(rom: image, id: i)
+            let s = CTEnemySpriteROM.spriteDef(d, id: CTEnemySpriteROM.id(i))
+            let url = project.fileURL(relative: s.sheet)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try PNG.writeIndexed(CTEnemySpriteROM.sheet(d)).write(to: url)
+            project.sprites[s.id] = s
+        }
+        project.project.rom = Project.ROMBuild(sprites: ["enemy_000"])
+        func issues() -> [ValidationIssue] { Validator.validate(project).filter { $0.path.hasPrefix("sprites/enemy_") } }
+        // Pack 10 is shared with enemy_002, which is not listed: a warning.
+        XCTAssertEqual(issues().map(\.severity), [.warning])
+        XCTAssertTrue(issues()[0].message.contains("shares its tiles"), issues()[0].message)
+        project.project.rom = Project.ROMBuild(sprites: ["enemy_000", "enemy_002"])
+        XCTAssertTrue(issues().isEmpty, "\(issues())")
+        project.sprites["enemy_000"]?.battle?.moveDelay = 16
+        project.sprites["enemy_000"]?.frames[0].tiles[1].tile = 0
+        let errors = issues().filter { $0.severity == .error }.map(\.message)
+        XCTAssertEqual(errors.count, 2, "\(errors)")
+        XCTAssertTrue(errors.contains { $0.contains("moveDelay 16 is not 0-15") })
+        XCTAssertTrue(errors.contains { $0.contains("OBJ 1: must be 16x16 at slot tile 2") })
+        // The pack budget: a sheet that no longer fits its span is a warning.
+        let s = try XCTUnwrap(project.sprites["enemy_002"])
+        var sheet = SpriteSheet.tiles(try PNG.readIndexed(url: project.fileURL(relative: s.sheet)))
+        let budget = try XCTUnwrap(CTEnemySpritePatch.packBudget(s, sheet: sheet))
+        XCTAssertLessThanOrEqual(budget.packed, budget.budget)
+        for t in 1..<sheet.count { for k in 0..<64 { sheet[t][k] = UInt8((t * 7 + k * 13) % 16) } }
+        XCTAssertNotNil(CTEnemySpritePatch.packBudget(s, sheet: sheet))
+        XCTAssertEqual(CTEnemySpritePatch.sharers(of: s, in: project.sprites).map(\.id), ["enemy_000"])
+    }
+
     /// Local ROM: every imported enemy and set listed rebuilds the clean ROM with no write.
     func testImportThenBuildIsIdentical() throws {
         let rom = [UInt8](try Repo.romData())

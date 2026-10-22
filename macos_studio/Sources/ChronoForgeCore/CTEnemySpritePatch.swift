@@ -159,6 +159,36 @@ public enum CTEnemySpritePatch {
         return out
     }
 
+    // MARK: Without the ROM (Validator, Studio)
+
+    /// The pack the sheet's first `tileCount` tiles make and the base ROM's
+    /// pack size (the in-place budget), for a packed import (nil otherwise).
+    public static func packBudget(_ s: SpriteDef, sheet: [[UInt8]]) -> (packed: Int, budget: Int)? {
+        guard let src = s.rom, src.family == family, src.packed == true, let budget = src.packedBytes,
+              sheet.count >= src.tileCount else { return nil }
+        var data: [UInt8] = []
+        for t in 0..<src.tileCount { data += TileDecoder.encodePlanar(sheet[t], depth: .bpp4) }
+        guard let packed = LZSS.compress(data, mode: .lz12) else { return nil }
+        return (packed.count, budget)
+    }
+
+    /// The project's other ROM sprites that show one of this sprite's parts
+    /// (the same graphics, frame, palette or animation addresses), by id.
+    public static func sharers(of s: SpriteDef, in sprites: [String: SpriteDef]) -> [(id: String, parts: [String])] {
+        guard let src = s.rom else { return [] }
+        var out: [(id: String, parts: [String])] = []
+        for (id, other) in sprites.sorted(by: { $0.key < $1.key }) where id != s.id {
+            guard let o = other.rom else { continue }
+            var parts: [String] = []
+            if o.tiles == src.tiles { parts.append("tiles") }
+            if o.frames == src.frames { parts.append("frames") }
+            if o.palette == src.palette { parts.append("palette") }
+            if o.frameIds == src.frameIds { parts.append("animations") }
+            if !parts.isEmpty { out.append((id, parts)) }
+        }
+        return out
+    }
+
     // MARK: Parts and their users
 
     enum Part: Hashable, Comparable {
