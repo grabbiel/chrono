@@ -117,8 +117,9 @@ public struct CTSceneDocument: Equatable, Sendable {
     }
 
     /// Appends a copy of object `k` (every statement its functions reach,
-    /// relabelled) as a new object, optionally placed elsewhere by its first
-    /// `$8B PlaceAtTile`. Returns the new object's index.
+    /// relabelled) as a new object, optionally placed elsewhere: its first
+    /// `$8B`/`$8D` placement moves, or an unplaced copy gets a `$8B` at the
+    /// start of its own startup. Returns the new object's index.
     @discardableResult
     public mutating func duplicateObject(_ k: Int, placeAt tile: (column: Int, row: Int)? = nil) throws -> Int {
         guard program.functions.indices.contains(k) else { throw CTEventError("no object \(k)") }
@@ -155,17 +156,25 @@ public struct CTSceneDocument: Equatable, Sendable {
             if case .label(let name) = target, let y = labels[name], reached.contains(y) { return .label(prefix + name) }
             return target
         }
-        let placement = analysis.objects[k].placementOffset
-        try commit { p in
-            p.objectCount += 1
-            p.functions.append(row)
-            p.items += copy
-        }
-        if let tile, let placement {
+        let saved = program
+        do {
+            try commit { p in
+                p.objectCount += 1
+                p.functions.append(row)
+                p.items += copy
+            }
+            guard let tile else { return new }
             // The copy's placement is the same statement, relabelled: find it by position.
-            let moved = try CTSceneAnalysis(pack()).objects[new].placementOffset
-            guard let moved else { throw CTEventError(String(format: "the copy of $%04X was not placed", placement)) }
-            try setOperands(at: moved, [UInt8(clamping: tile.column), UInt8(clamping: tile.row)])
+            if let moved = try CTSceneAnalysis(pack()).objects[new].placementOffset {
+                try movePoint(at: moved, column: tile.column, row: tile.row)
+            } else if case .label(let name) = row[0], name.hasPrefix(prefix) {
+                try insert(0x8B, [UInt8(clamping: tile.column), UInt8(clamping: tile.row)], atStartOf: new, function: 0)
+            } else {
+                throw CTEventError("object \(k)'s startup is not its own; place the copy from one of its functions")
+            }
+        } catch {
+            program = saved
+            throw error
         }
         return new
     }

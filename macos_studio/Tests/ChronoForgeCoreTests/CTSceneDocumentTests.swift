@@ -130,6 +130,22 @@ final class CTSceneDocumentTests: XCTestCase {
         XCTAssertEqual(try CTSceneDocument.raise(bytes: bytes).lower(), bytes)
     }
 
+    func testDuplicateMovesSetPosAndPlacesUnplacedCopies() throws {
+        var program = try fixture()
+        func op(_ o: UInt8, _ b: UInt8...) -> CTEventProgram.Item { .op(o, b.map { .byte($0) }) }
+        // Object 1 placed by $8D (tile in the high bytes), object 0 not placed at all.
+        program.items[program.items.firstIndex(of: op(0x8B, 0x0A, 0x0B))!] = op(0x8D, 0x80, 0x0A, 0x40, 0x0B)
+        program.items.remove(at: program.items.firstIndex(of: op(0x8B, 0x02, 0x03))!)
+        var doc = try CTSceneDocument.raise(bytes: try program.assemble())
+        XCTAssertEqual(try doc.duplicateObject(1, placeAt: (3, 4)), 2)
+        XCTAssertEqual(try doc.duplicateObject(0, placeAt: (5, 6)), 3)
+        let a = try doc.analyze()
+        XCTAssertEqual(a.objects[2].placement?.column, 3); XCTAssertEqual(a.objects[2].placement?.row, 4)
+        XCTAssertEqual(a.statement(at: a.objects[2].placementOffset!)?.operands, [0x80, 0x03, 0x40, 0x04], "sub-tile bytes stay")
+        XCTAssertEqual(a.objects[3].placement?.column, 5); XCTAssertEqual(a.objects[3].placement?.row, 6)
+        XCTAssertNil(a.objects[0].placement, "the original stays unplaced")
+    }
+
     func testTimelineRunsEveryObjectAndMapsOffsets() throws {
         let pack = try CTEventPack(bytes: try fixture().assemble())
         let a = CTSceneAnalysis(pack)
