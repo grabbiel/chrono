@@ -29,6 +29,8 @@ public struct CTProject: Sendable {
     public var party: PartyDef? = nil
     /// tech_system.json (absent until techs are imported from a ROM).
     public var techSystem: TechSystemDef? = nil
+    /// item_tables.json (absent until items are imported from a ROM).
+    public var itemTables: ItemTablesDef? = nil
 
     public static let jsonDecoder: JSONDecoder = JSONDecoder()
     public static let jsonEncoder: JSONEncoder = {
@@ -117,10 +119,13 @@ public struct CTProject: Sendable {
         let techURL = url.appendingPathComponent("tech_system.json")
         let techSystem: TechSystemDef? = FileManager.default.fileExists(atPath: techURL.path)
             ? try decode(TechSystemDef.self, from: techURL) : nil
+        let itemTablesURL = url.appendingPathComponent("item_tables.json")
+        let itemTables: ItemTablesDef? = FileManager.default.fileExists(atPath: itemTablesURL.path)
+            ? try decode(ItemTablesDef.self, from: itemTablesURL) : nil
         return CTProject(url: url, project: project, characters: characters, sprites: sprites,
                          items: items, techs: techs, dialogue: dialogue, tracks: tracks,
                          samples: samples, tilesets: tilesets, maps: maps, scenes: scenes, textProfile: profile,
-                         party: party, techSystem: techSystem)
+                         party: party, techSystem: techSystem, itemTables: itemTables)
     }
 
     // MARK: Save (keys ordered by the Studio on save; 2-space indent via prettyPrinted)
@@ -151,6 +156,7 @@ public struct CTProject: Sendable {
         }
         if let party { try CTProject.encode(party, to: url.appendingPathComponent("party.json")) }
         if let techSystem { try CTProject.encode(techSystem, to: url.appendingPathComponent("tech_system.json")) }
+        if let itemTables { try CTProject.encode(itemTables, to: url.appendingPathComponent("item_tables.json")) }
         for (id, t) in tracks { try CTProject.encode(t, to: url.appendingPathComponent("audio/tracks/\(id).akao.json")) }
         for (id, s) in samples { try CTProject.encode(s, to: url.appendingPathComponent("audio/samples/\(id).json")) }
         for (id, t) in tilesets { try CTProject.encode(t, to: url.appendingPathComponent("tilesets/\(id).tileset.json")) }

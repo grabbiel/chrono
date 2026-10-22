@@ -110,18 +110,27 @@ public enum CTROMBuilder {
         public let songs: [Song]
         public let characters: [Character]?           // absent: none requested
         public let techs: TechSystemDef?               // absent: not requested
+        public let items: [String]?                    // the ROM item files built (absent: not requested)
+        public let itemTables: ItemTablesDef?          // absent: not requested or no item_tables.json
         public let writes: [Write]
         public let freeBytesLeft: Int
     }
 
     // MARK: Project entry point
 
-    /// Builds the project's `rom.eventPacks`, `rom.songs`, `rom.characters` and `rom.techs`
+    /// The ROM items and shared tables `rom.items` writes (docs/items.md).
+    public struct ItemsRequest: Sendable {
+        public var items: [ItemDef]
+        public var tables: ItemTablesDef?
+        public init(items: [ItemDef], tables: ItemTablesDef?) { self.items = items; self.tables = tables }
+    }
+
+    /// Builds the project's `rom.eventPacks`, `rom.songs`, `rom.characters`, `rom.techs` and `rom.items`
     /// into a copy of `base` (the pinned US 1.0 ROM; a 512-byte copier header is dropped).
     public static func build(base: [UInt8], project: CTProject) throws -> (rom: [UInt8], report: Report) {
         guard let spec = project.project.rom,
-              !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs) else {
-            throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters or rom.techs to build")
+              !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items) else {
+            throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters, rom.techs or rom.items to build")
         }
         func inside(_ path: String) -> Bool { !path.hasPrefix("/") && !path.split(separator: "/").contains("..") }
         var requests: [Request] = []
@@ -171,15 +180,23 @@ public enum CTROMBuilder {
             guard let system = project.techSystem else { throw CTROMBuildError("rom.techs needs tech_system.json; import the ROM's techs") }
             techs = system
         }
+        var items: ItemsRequest?
+        if spec.items {
+            let rom = project.items.values.filter { $0.rom != nil }.sorted { $0.id < $1.id }
+            guard !rom.isEmpty || project.itemTables != nil else {
+                throw CTROMBuildError("rom.items needs ROM items or item_tables.json; import the ROM's items")
+            }
+            items = ItemsRequest(items: rom, tables: project.itemTables)
+        }
         return try build(base: base, requests: requests, songs: songs, characters: characters, techs: techs,
-                         textProfile: project.textProfile)
+                         items: items, textProfile: project.textProfile)
     }
 
     // MARK: Builder
 
     public static func build(base input: [UInt8], requests: [Request], songs songRequests: [SongRequest] = [],
                              characters characterRequests: [CharacterRequest] = [], techs: TechSystemDef? = nil,
-                             textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
+                             items: ItemsRequest? = nil, textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
         guard rom.count == romSize, CTEventPack.sha256(rom) == CTTextProfile.romHash else {
@@ -214,6 +231,13 @@ public enum CTROMBuilder {
         if let techs {
             try CTTechROM.check(techs)
             try CTTechROM.check(techs, against: CTTechROM.decode(rom: rom, codec: nil))
+        }
+        var itemWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
+        if let items {
+            try CTItemROM.check(items.items, tables: items.tables)
+            try CTItemROM.check(items.items, tables: items.tables, against: CTItemROM.decode(rom: rom, codec: nil))
+            let codec = try CTTextCodec(profile: textProfile ?? CTTextProfile.fromROM(Data(rom)))
+            itemWrites = try CTItemROM.writes(items.items, tables: items.tables, rom: rom, codec: codec)
         }
 
         // Spans of the streams still in use, and those the new packs free.
@@ -384,6 +408,8 @@ public enum CTROMBuilder {
         if let techs {
             for w in CTTechROM.writes(techs, rom: base) { write(w.bytes, at: w.pc, w.what) }
         }
+        // Items: records, names and ItemBoosts in place; the descriptions repacked in their own span.
+        for w in itemWrites { write(w.bytes, at: w.pc, w.what) }
 
         let sum = checksum(rom)
         write([UInt8(~sum & 0xFF), UInt8(~sum >> 8 & 0xFF), UInt8(sum & 0xFF), UInt8(sum >> 8)],
@@ -393,7 +419,8 @@ public enum CTROMBuilder {
         return (rom, Report(schema: "ct-rom-build/1", baseSHA256: CTEventPack.sha256(base),
                             outputSHA256: CTEventPack.sha256(rom), checksum: sum, packs: packs,
                             messageTables: tables, songs: songs, characters: characters.isEmpty ? nil : characters,
-                            techs: techs, writes: changed, freeBytesLeft: space.total))
+                            techs: techs, items: items.map { $0.items.map(\.id) }, itemTables: items?.tables,
+                            writes: changed, freeBytesLeft: space.total))
     }
 
     /// Checks LocLoad_CheckEvtData makes after unpacking, and that the pack

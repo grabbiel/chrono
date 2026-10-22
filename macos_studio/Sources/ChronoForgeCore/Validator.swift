@@ -252,6 +252,30 @@ public enum Validator {
                     }
                 } else { err(4, "project.json rom techs", "no tech_system.json; import the ROM's techs") }
             }
+            // Items: each ROM item file in its category's ranges, no item id twice, the shared tables.
+            if spec.items {
+                let romItems = p.items.filter { $0.value.rom != nil }.sorted { $0.key < $1.key }
+                if romItems.isEmpty && p.itemTables == nil {
+                    err(4, "project.json rom items", "no ROM items or item_tables.json; import the ROM's items")
+                }
+                var itemIds: [Int: String] = [:]
+                for (id, item) in romItems {
+                    do { try CTItemROM.check([item], tables: nil) } catch { err(4, "items/\(id).json", "\(error)") }
+                    if let other = itemIds.updateValue(id, forKey: item.rom!.itemId) {
+                        err(4, "items/\(id).json", String(format: "item $%02X is also items/%@.json", item.rom!.itemId, other))
+                    }
+                }
+                if let tables = p.itemTables {
+                    do { try CTItemROM.check([], tables: tables) } catch { err(4, "item_tables.json", "\(error)") }
+                }
+                // Descriptions: with a text profile (the build checks them with the base ROM's own).
+                if let codec = p.textProfile.flatMap({ try? CTTextCodec(profile: $0) }) {
+                    for (id, item) in romItems {
+                        guard let text = item.description else { continue }
+                        do { _ = try codec.compileMessage(text) } catch { err(4, "items/\(id).json", "description: \(error)") }
+                    }
+                }
+            }
         }
 
         // ---------------- Gate 5: explicit ROM-backed text or legacy Studio format ----------------
