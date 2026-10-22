@@ -173,7 +173,12 @@ final class CTSamplePatchTests: XCTestCase {
 
     func testPitchTableIsTheDrivers() throws {
         let ram = try CTSPCDriver.bootImage(rom: try clean()).ram
-        XCTAssertEqual((0..<12).map { Int(ram[0x1D6D + 2 * $0]) | Int(ram[0x1D6E + 2 * $0]) << 8 }, CTSampleTuning.pitchTable)
+        var table: [Int] = []
+        for i in 0..<12 {
+            let low = Int(ram[0x1D6D + 2 * i]), high = Int(ram[0x1D6E + 2 * i])
+            table.append(low | high << 8)
+        }
+        XCTAssertEqual(table, CTSampleTuning.pitchTable)
     }
 
     /// Spc_NotePitch itself, run on the SPC700 from the driver's boot image,
