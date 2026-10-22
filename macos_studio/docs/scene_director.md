@@ -136,16 +136,30 @@ Four views share one selection (object, function, statement offset):
   that share an entry are one node, "+n"), plus each object's continuation.
   Arrows are calls, coloured by mode (wait, retry, start) and labelled with
   the call level and, for `$05`–`$07`, the party member.
-- **Timeline**: the pack run through `EventScheduler` (`CTSceneTimeline`):
-  all objects start their startup functions; an optional trigger starts one
-  function at a chosen level. One lane per object over logical frames; `$AD`
-  and `$B9`/`$BA`/`$BC`/`$BD` waits are bars, other statements ticks coloured
-  by category. Clicking an event selects its statement.
+- **Timeline**: the location run by the game's own handlers (`CTSceneRun`,
+  below): one lane per object, a bar per instruction from the frame its
+  handler first runs to the frame the object moves past it, on a frame ruler
+  (drag it to scrub; Play steps the playhead at 60 frames a second). Branch
+  markers show which conditions jumped (filled) or went on; a red X ends a
+  lane with the VM's stop reason; red diamonds are battles named for their
+  enemies; ✉ marks messages. The **Story flags** panel sets the registry's
+  flags (bits by checkbox, bytes by value) and any `NAME=v` /
+  `7F:0010.3=1` line before the run; the trigger picker starts an object's
+  function 1 (touch) or 2 (activate) at a frame. Clicking a bar selects its
+  statement.
+- **Sketch**: the previous logical timeline through `EventScheduler`
+  (`CTSceneTimeline`): startups all at once, waits as bars, other statements
+  ticks; useful for editing without a ROM run.
 - **Map**: the location's picture through the PPU renderer when the project
   has imported that location (Maps), otherwise a tile grid. Objects are drawn
   at their `$8B`/`$8D` placement, PCs with frame 0 of their sprite set.
   Paths are the `$96` (walk, solid) and `$A0` (move, dashed) targets in
-  order; `$E7` camera keyframes show a 16×14-tile frame. Tools: Select
+  order; `$92`/`$9C` direction moves are orange dashed paths of the length
+  the angle, frame count and the last `$89` speed give; `$E7` camera
+  keyframes show a 16×14-tile frame whose top-left is the keyframe tile.
+  After a Timeline run, **Run at fN** draws every object where the run has it
+  at the playhead, the selected object's track and the camera's 256×224
+  frame. Tools: Select
   (drag a point to move it), Walk/Move/Camera (click to add a point after the
   selected statement), Place (set or insert the object's `$8B`) and Copy
   Object (`duplicateObject`, a placed copy in a free slot). Chests come from
@@ -155,7 +169,8 @@ Four views share one selection (object, function, statement offset):
 The inspector below shows the selected statement. **Set Operands**, **Remove**
 and **Insert after** (any non-jump opcode with its operands) reassemble the
 pack; a failed edit changes nothing. `$D8` battles show their flag bits and
-`$C8` the menu the argument opens. **Save** (⌘S) writes
+`$C8` the menu the argument opens; a `$D8` also names its encounter group
+(the enemy objects that can join) and, after a run, the enemies that did. **Save** (⌘S) writes
 `scenes/rom/packNNN.ctevt` and points `rom.eventPacks` at it, so the ROM
 builder replaces that pack; **Revert** drops the row; **Reraise from ROM**
 discards edits.
@@ -174,15 +189,124 @@ Map objects are named only from handler evidence:
 Other `$C8` arguments: 0 → argument 5 (mode `$07`); bit 0 → argument 0 (mode
 `$0E`); bit 7 → bits 7–6 give argument 2 or 3 (mode `$0C` shop, `$0D`), with
 bits 5–0 as X. An "encounter" is an object that starts a battle; many are
-controllers running a scripted fight. Which formation `a` selects is not
-identified.
+controllers running a scripted fight. `$D8`'s first operand is not a
+formation number: the enemies are the field's own objects (see
+[Formations](#formations)).
 
-Timeline limits: conditions fall through (their jumps are not taken) and a
+Sketch limits: conditions fall through (their jumps are not taken) and a
 revisited offset ends a walk; moves, animations and messages are instants; a
 trigger at frame 0 runs alongside the startups, which the game runs at load
 first; the party is an assumption (the first three PC objects by default).
-Direction moves (`$92`/`$9C`) are not drawn on the map, and the camera frame's
-anchor is not established.
+The VM timeline below has none of these limits.
+
+## VM timeline (CTSceneRun)
+
+`CTSceneRun` (`ChronoForgeCore/CTSceneRun.swift`) runs the location in
+`CTFieldRuntime` (the [embedded runtime](runtime.md)) for N frames and
+records every handler run through `CTEventVM.trace`: frame, object, offset,
+opcode, the X it leaves and the carry. Frame `load` is `Evt_InitObjects` and
+every object's startup in load order (`Evt_RunObj0Func1`); frames then count
+from 0. Each object runs on its script timer (`Obj_Unk1000`, 4 by default)
+and up to `Field_Unk68` = 5 instructions a run, so:
+
+- A **bar** runs from the frame its handler first runs to the frame X moves
+  past it (`$AD 3` at a period of 4 is frames 0–12, 4 runs); a bar whose
+  object is moved elsewhere (a call, a warp) is *interrupted* there; one
+  still running at the end is open.
+- A **branch** is any instruction with a jump target that can also go on; it
+  records whether this run took the jump.
+- An opcode the VM does not model **stops the lane** with the VM's reason
+  ("opcode $D2 … has no model yet"); the other objects keep running.
+- **Story flags** are set before load: by registry name (`NAME=1`), symbol,
+  `7F:0010.3=1` or `$7F0123=$12`, limited to `$7F:0000–$01FF`.
+- A **trigger** (`obj.func@frame`) starts an object's function 1 or 2 at a
+  frame, as touching or activating it does.
+- A **battle** (`$D8` yielding with `SceneFlags` bit 0) is recorded with the
+  formation the field hands over, then taken as won at once (the scene flags
+  clear and the fade ends next frame) so the run goes on; `--keep-battles`
+  leaves the field waiting instead.
+- `$E7` ScrollTo runs as the ROM's `Map_Unk91AC` does (`runsScrollTo`): the
+  camera's top-left moves 1 pixel a frame towards column × 16, row × 16 and
+  mode 2 marks arrival; the camera then stays there (the runtime's default
+  follows the leader).
+
+The run uses the ROM's animation loop count (`romAnimLoops`, see below);
+`--model-anim-loops` keeps the runtime's default.
+
+### Formations
+
+`$D8 a b` stores `a` in `Battle_Unk2989` and `b` in `FieldBtl_EvtFlags`.
+`a` is bits, not a formation index: bit 0 no end pose, bit 1 `Battle_UnkEC`,
+bit 2 no box padding, bit 4 `ActAttrBits`, bit 5 a fixed battle, bit 7 both
+L+R (bits 3 and 6 are not traced). The enemies come from the field:
+`Field_Unk0617` lists, from slot 2·count down to 2, the objects that are
+battle objects (`Obj_Unk1A81` bit 7 or `Obj_Unk0F00` ≠ 0), of kind 5 or 6
+and on screen (1–`$0E` columns and 1–`$0D` rows from the view's origin), at
+most 12. `FieldBtl_SaveObjs` gives each a `FieldBtlObj` record (12 bytes at
+`$7E:29BF`; the record is the object's sprite VRAM tile `v = tile >> 3` as
+`(v >> 1) - 4 + (v & 1)`, tiles ≥ `$C0` skipped) and `FieldBtl_ObjSlots`.
+`CTSceneFormation` computes the same on the run's WRAM and names each enemy
+from its `$83` sprite id through the enemy name table. The `$D8` inspector
+lists the **encounter group** (the enemy objects that can join, from the
+pack's `$83` markers, "Name ×2") and the battles of the last run.
+
+### CLI
+
+```sh
+chronoforge scene vm <rom> <loc> [--frames N] [--input script] [--flag NAME=v]...
+                     [--project p.ctproj] [--trigger obj.func[@frame]] [--party 0,1,2]
+                     [--entry x,y[,facing]] [--keep-battles] [--no-scroll]
+                     [--model-anim-loops] [--json] [--out f]
+chronoforge scene vm-vectors <rom> <cases.json> --out <results.json> [--model-anim-loops]
+```
+
+`scene vm` prints each object's lane, one line per bar
+(`f0-12 L7 $0170 wait: OpAD_WaitRuns $03`; `f0-…` is still running at the
+end, `[jumped]` marks a branch taken), then the battles, stops and messages;
+`--json` is the `Result`. A run that
+stops early exits 0 with its reason. `--project` supplies the story
+registry for flag names. `vm-vectors` is the model's side of the evidence
+tool.
+
+### Evidence
+
+`re_workspace/tools/ct_scene_run.py` (needs the ROM, ChronoRET and a built
+`chronoforge`):
+
+- `trace-check`: for sample locations the timeline's steps equal
+  `runtime run --trace-frames` line for line (same frames, objects,
+  offsets, opcodes and outcomes). Last run: 10 of 10 locations (29, 7, 1, 6, 19, 49, 71,
+  100, 200, 300; 600 frames each), 12,234 bars.
+- `durations`: random states start one movement (`$92 $9C $96 $A0 $94 $95
+  $8F`), animation (`$AB $B7`) or wait (`$AD $B9 $BA $BC $BD`) instruction;
+  each frame runs the script timer, the handler in ChronoRET's interpreter
+  when it runs out, then `Obj_MoveStep` and `Obj_AnimTickAndQueue`, and
+  compares X, carry, position, `Obj_MoveFrames` and the animation bytes with
+  `scene vm-vectors` frame by frame until X moves on. Last run (`--per-op 4 --states 2 --frames 160`): 14 of 14
+  opcodes, 76 of 76 cases agree, 50 of them run to their end (movement 44,
+  animation 16, wait 16).
+- `formations`: random object tables run through `Field_Unk0617` and
+  `FieldBtl_SaveObjs` in the interpreter against `CTSceneFormation`: the
+  list, the slots and the 8 records (the attribute byte of a joining record
+  is set later by `Obj_Unk72B4`'s palette claim, not modelled, and not
+  compared). Last run: 400 of 400 cases, 469 enemy records.
+
+The animation evidence found that the ROM's `Obj_AnimTickAndQueue` takes 2
+off a loop count of 3 or more (`DEC`, `DEC`, `STA`) where `CTFieldRuntime`
+takes 1; `romAnimLoops` (on in `CTSceneRun`, off in the runtime) follows the
+ROM. With `--model-anim-loops` half of the animation cases disagree.
+
+### Limits
+
+- Battles are taken as won at once; what the battle changes is not run.
+- After a scroll-to the camera stays put (the ROM hands it back to the leader
+  through code not modelled).
+- Direction paths on the Map are straight: a blocked tile turns the object at
+  random (`Obj_SetVelocityChecked`), which only a run shows.
+- The formation is taken at the end of the `$D8` frame; `Obj_Unk72B4`'s
+  palette claim is not modelled.
+- A polling loop is one bar per pass, so waiting objects can make many bars.
+- Everything the [runtime](runtime.md#limitations) does not model applies.
 
 ## CLI
 
@@ -258,7 +382,12 @@ part of the master gate. The bundled release CLI can be tested by passing its
 path as the script's first argument. `CTSceneDocumentTests` uses a synthetic
 two-object pack; its three ROM tests (every pack raised and lowered, every
 pack run on the timeline, locations to packs and map objects) skip without a
-local ROM.
+local ROM. `CTSceneRunTests` derives bars, branches, stops, flags and the
+battle hand-off from synthetic packs and WRAM; its five ROM tests (timeline
+equals the field's trace, a flag turns a branch, named battles, scroll-to,
+direction paths) skip without one. `re_workspace/tests/test_scene_run.py`
+runs the evidence tool's parsing and states, and with the ROM a short
+trace-check, durations and formations.
 
 ## Message preview
 

@@ -60,8 +60,15 @@ ANIMTIMER, ANIMCOL, ANIMMODE, LOOPS, EVTWAIT, CROSS = 0x7E1601, 0x7E1681, 0x7E17
 ANIMTIMETBL, ANIMROW = 0x7E1580, 0x7E1680
 
 # The last runs (2026-10-22): see the hand-over; test_scene_run.py checks the structure.
+# Last full runs (2026-10-22): trace-check (defaults), durations --per-op 4 --states 2
+# --frames 160, formations --cases 400; animation alone with --per-op 6 --states 2
+# --frames 200 --ops AB,B7 is 24 of 24 with the ROM's loop rule, 12 of 24 with
+# --model-anim-loops.
 EVIDENCE = {
-    "trace": {"locations": 10, "agree": 10},
+    "trace": {"locations": 10, "agree": 10, "bars": 12234, "frames": 600},
+    "durations": {"opcodes": 14, "cases": 76, "agree": 76, "ran_to_end": 50},
+    "formations": {"cases": 400, "agree": 400, "enemy_records": 469},
+    "anim_loops": {"rom_rule": "24 of 24", "model_rule": "12 of 24"},
 }
 
 

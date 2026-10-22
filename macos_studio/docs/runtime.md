@@ -116,7 +116,7 @@ opcodes yet (they are recorded and listed by the CLI).
 ## CLI
 
 ```sh
-chronoforge runtime run <rom.sfc> <location> [--frames N] [--input script] [--trace]
+chronoforge runtime run <rom.sfc> <location> [--frames N] [--input script] [--trace] [--trace-frames]
                         [--json out.json] [--party 0,1,2] [--entry x,y[,facing]]
                         [--flag addr=value ...] [--png out.png [--project p.ctproj]]
 chronoforge runtime vectors <rom.sfc> <cases.json> --out <results.json>
@@ -128,8 +128,22 @@ re_workspace/.venv/bin/python re_workspace/tools/ct_event_vm.py unmodelled
 `FROM[-TO] BUTTON[+BUTTON]` entries separated by `;` or newlines (`#` starts a
 comment), for example `0-19 up; 20 a`. `run` prints each object's state (and
 `STOPPED: reason`), the messages and the warps; `--trace` prints every
-instruction; `--json` writes the summary; `--png` draws the last frame (map
+instruction (`--trace-frames` prefixes each line with its frame, `load` for
+`Evt_InitObjects`, as the [Scene Director's VM timeline](scene_director.md#vm-timeline-ctscenerun)
+checks it); `--json` writes the summary; `--png` draws the last frame (map
 layers from the project's tilesets when `--project` is given).
+
+## Hooks for the Scene Director
+
+`CTFieldRuntime` has opt-in switches that leave the default run unchanged:
+`packOverrides` (a location's pack replaced, e.g. an edited scene),
+`runsScrollTo` (`$E7` scrolls the camera as `Map_Unk91AC` does, 1 px a
+frame to the tile at the top-left, then holds it) and `romAnimLoops`. The
+last one exists because the duration evidence (`ct_scene_run.py durations`)
+found that the ROM's `Obj_AnimTickAndQueue` takes **2** off a loop count of
+3 or more (`DEC`, `DEC`, `STA`) where `animTick` takes 1: with it 24 of 24
+animation cases agree, without it 12 of 24. Making it the default is left
+for review.
 
 ## Limitations
 
