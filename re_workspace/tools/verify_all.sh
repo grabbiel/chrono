@@ -242,6 +242,11 @@ if [ -f macos_studio/Package.swift ]; then
     && grep -q "^ok   enemies: frames, cells" /tmp/verify_sprite_import.log
   RC=$?
   note "Enemy sprites ($(grep -oE '[0-9]+ frames of [0-9]+ distinct' /tmp/verify_sprite_claims.log | tail -1) enemy sprites through the ROM's frame decoder; import checked)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Audio: project samples and a composed song written back (identical rebuild, replaced and
+  # appended samples, the ROM's song load and the S-SMP driver on the built ROM, damage, budgets).
+  $PY macos_studio/tools/verify_audio_build.py >/tmp/verify_audio_build.log 2>&1
+  RC=$?
+  note "Audio write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_audio_build.log | tail -1) samples through the driver on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

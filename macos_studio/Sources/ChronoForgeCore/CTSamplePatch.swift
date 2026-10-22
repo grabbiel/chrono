@@ -110,9 +110,12 @@ public struct CTSampleTables: Equatable, Sendable {
 /// Spc_NotePitch (driver.asm $06BD): the pitch register value the driver
 /// writes for a note, from the sample's ParamA word.
 public enum CTSampleTuning {
-    /// Spc_PitchTable ($1D6D): octave 4's twelve semitones (ChronoRET driver.asm).
-    public static let pitchTable: [Int] = [0x0879, 0x08FA, 0x0983, 0x0A14, 0x0AAD, 0x0B50, 0x0BFC,
-                                           0x0CB2, 0x0D74, 0x0E41, 0x0F1A, 0x1000]
+    /// Spc_PitchTable ($1D6D): octave 4's twelve semitones, 4096 x 2^((k - 11) / 12) rounded
+    /// down (the ROM test compares it with the driver's table).
+    public static let pitchTable: [Int] = (0..<12).map { k in
+        let ratio = pow(2.0, Double(k - 11) / 12)
+        return Int((4096.0 * ratio).rounded(.down))
+    }
     /// Pitch $1000 plays one BRR sample per 32 kHz output sample.
     public static let unityPitch = 0x1000, outputRate = 32_000
     /// A note number with transpose 10 (as `octave o` and note index i sound 12 o + i).
@@ -500,12 +503,14 @@ public enum CTSampleProbe {
                 let x = 2 * v
                 note = Int(bus.ram[trackF3A0 + x + 1]); fine = Int(bus.ram[trackF3A0 + x])
                 tuning = word(trackTuning + x)
-                record("the voice starts at the directory entry", after.nextAddress == start)
                 continue
             }
-            // The KON fetch (delay 5 to 4) restarts the buffer at 0; a decode
-            // then writes 4 samples there and moves it on by 4.
-            let from = before.konDelay == 5 && after.konDelay < 5 ? 0 : before.bufferPosition
+            // The KON fetch (delay 5 to 4) takes the directory entry's start
+            // and restarts the buffer at 0; a decode then writes 4 samples
+            // there and moves it on by 4.
+            let fetch = before.konDelay == 5 && after.konDelay < 5
+            if fetch { record("the voice starts at the directory entry", after.brrAddress == start) }
+            let from = fetch ? 0 : before.bufferPosition
             guard (after.bufferPosition - from + 12) % 12 == 4 else { continue }
             if history == nil { history = (ring[(from + 11) % 12], ring[(from + 10) % 12]) }
             for i in 0..<4 { got.append(dsp.decoded[base + (from + i) % 12]) }
