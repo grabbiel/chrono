@@ -123,6 +123,17 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_characters.py check --run >/tmp/verify_character_claims.log 2>&1
   RC=$?
   note "Character evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_character_claims.log) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # PC sprites: source, code and data claims, the ROM's own frame decoder run on
+  # every frame; then a CLI import into a fixture copy checked by ct_sprites.py.
+  $PY re_workspace/tools/ct_sprites.py check --run >/tmp/verify_sprite_claims.log 2>&1
+  RC=$?
+  note "Sprite evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_sprite_claims.log) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  SPRITE_DIR=$(mktemp -d)
+  cp -R macos_studio/Tests/ChronoForgeCoreTests/Resources/MyGame.ctproj "$SPRITE_DIR/p.ctproj" \
+    && macos_studio/.build/debug/chronoforge sprites import re_workspace/ct_clean.sfc --project "$SPRITE_DIR/p.ctproj" >/tmp/verify_sprite_import.log 2>&1 \
+    && $PY re_workspace/tools/ct_sprites.py verify-import "$SPRITE_DIR/p.ctproj" >>/tmp/verify_sprite_import.log 2>&1
+  note "Sprite import (CLI = ct_sprites.py decode)" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
+  rm -rf "$SPRITE_DIR"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

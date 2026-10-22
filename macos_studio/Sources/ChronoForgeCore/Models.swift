@@ -217,16 +217,43 @@ public struct PartyDef: Codable, Equatable, Sendable {
 
 // MARK: - sprites/<id>.sprite.json  (OAM assemblies)
 
+/// Sheet tile k is OBJ tile k (OBSEL 0: 8x8 and 16x16, name base 0), so a
+/// 16x16 OBJ shows tiles N, N+1, N+16 and N+17. With `stream`, each frame's
+/// `cells` are copied into a VRAM slot first and `tile` counts from the
+/// slot (the game's PC sprites; see docs/sprites.md). Every field after
+/// `animations` is optional: older files load and save unchanged.
 public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var sheet: String           // sprites/<id>.png (mode P)
     public var bpp: Int                // 4 (16-col) or 2 (4-col)
     public var frames: [Frame]
     public var animations: [Animation]
+    /// OBJ palettes: entry k (16 hex BGR555 words) is palette k of `pal`
+    /// (CGRAM 128 + 16k). Absent: palette 0 is the sheet's PLTE.
+    public var palettes: [[String]]?
+    public var stream: Stream?
+    /// Where an import read the sprite (for write-back).
+    public var rom: ROMSource?
+
+    public init(id: String, sheet: String, bpp: Int = 4, frames: [Frame] = [], animations: [Animation] = [],
+                palettes: [[String]]? = nil, stream: Stream? = nil, rom: ROMSource? = nil) {
+        self.id = id; self.sheet = sheet; self.bpp = bpp; self.frames = frames; self.animations = animations
+        self.palettes = palettes; self.stream = stream; self.rom = rom
+    }
 
     public struct Frame: Codable, Equatable, Sendable {
         public var tiles: [OAMTile]
         public var large: Bool?        // large-sprite mode: 1024-entry budget
+        /// With `stream`: columns x rows tile words, row-major. Bits 0-10 a
+        /// sheet tile (0 = blank), bit 14 mirrors it; other bits are kept.
+        public var cells: [Int]?
+        public var hitbox: Box?        // Studio metadata, frame pixels about the origin
+        public var weapon: Point?      // Studio metadata, weapon anchor about the origin
+
+        public init(tiles: [OAMTile] = [], large: Bool? = nil, cells: [Int]? = nil,
+                    hitbox: Box? = nil, weapon: Point? = nil) {
+            self.tiles = tiles; self.large = large; self.cells = cells; self.hitbox = hitbox; self.weapon = weapon
+        }
     }
     /// One OAM entry.
     public struct OAMTile: Codable, Equatable, Sendable {
@@ -238,12 +265,57 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         public var pal: Int            // 0-7
         public var size16: Bool        // size8|16
         public var anchor: Bool
+        public var priority: Int?      // OAM priority 0-3 (absent: 2)
+
+        public init(x: Int, y: Int, tile: Int, hflip: Bool = false, vflip: Bool = false, pal: Int = 0,
+                    size16: Bool = false, anchor: Bool = false, priority: Int? = nil) {
+            self.x = x; self.y = y; self.tile = tile; self.hflip = hflip; self.vflip = vflip
+            self.pal = pal; self.size16 = size16; self.anchor = anchor; self.priority = priority
+        }
     }
     public struct Animation: Codable, Equatable, Sendable {
         public var id: String
         public var frames: [Int]
         public var durations: [Int]    // frames per step, 60 Hz ticks
         public var loop: Bool
+        public var row: Int?           // the game's animation row
+        public var facing: Int?        // 0 up, 1 down, 2 left, 3 right
+
+        public init(id: String, frames: [Int] = [], durations: [Int] = [], loop: Bool = true,
+                    row: Int? = nil, facing: Int? = nil) {
+            self.id = id; self.frames = frames; self.durations = durations; self.loop = loop
+            self.row = row; self.facing = facing
+        }
+    }
+    /// A VRAM slot the frame's cells are copied into: cell (r, c) becomes
+    /// OBJ tile baseTile + 16r + c.
+    public struct Stream: Codable, Equatable, Sendable {
+        public var columns: Int
+        public var rows: Int
+        public var baseTile: Int
+        public init(columns: Int, rows: Int, baseTile: Int) {
+            self.columns = columns; self.rows = rows; self.baseTile = baseTile
+        }
+    }
+    public struct ROMSource: Codable, Equatable, Sendable {
+        public var family: String      // "ct-pc": a playable character's set
+        public var set: Int
+        public var tiles: String       // "$D2:72C0"
+        public var tileCount: Int
+        public var frames: String
+        public var frameCount: Int
+        public var palette: String
+        public var frameIds: String
+        public var durations: String
+        public var rows: Int
+    }
+    public struct Box: Codable, Equatable, Sendable {
+        public var x: Int, y: Int, w: Int, h: Int
+        public init(x: Int, y: Int, w: Int, h: Int) { self.x = x; self.y = y; self.w = w; self.h = h }
+    }
+    public struct Point: Codable, Equatable, Sendable {
+        public var x: Int, y: Int
+        public init(x: Int, y: Int) { self.x = x; self.y = y }
     }
 }
 
