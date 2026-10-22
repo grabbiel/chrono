@@ -2,7 +2,7 @@ import Foundation
 import ChronoForgeCore
 
 private let runtimeUsage = """
-usage: chronoforge runtime run <rom.sfc> <location> [--frames N] [--input script] [--trace] [--json out.json]
+usage: chronoforge runtime run <rom.sfc> <location> [--frames N] [--input script] [--trace] [--trace-frames] [--json out.json]
                               [--party 0,1,2] [--entry x,y[,facing]] [--flag addr=value ...]
                               [--png out.png [--project p.ctproj]]
        chronoforge runtime vectors <rom.sfc> <cases.json> --out <results.json>
@@ -20,7 +20,7 @@ func cmdRuntime(_ args: [String]) -> Int32 {
     var positional: [String] = [], options: [String: String] = [:], flags: Set<String> = []
     var i = 1
     while i < args.count {
-        if args[i] == "--trace" {
+        if args[i] == "--trace" || args[i] == "--trace-frames" {
             flags.insert(args[i]); i += 1
         } else if args[i].hasPrefix("--") {
             guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
@@ -40,7 +40,9 @@ func cmdRuntime(_ args: [String]) -> Int32 {
             try results.write(to: URL(fileURLWithPath: out), options: .atomic)
             return 0
         default:
-            return try runtimeRun(rom: rom, location: positional[1], options: options, trace: flags.contains("--trace"))
+            return try runtimeRun(rom: rom, location: positional[1], options: options,
+                                  trace: flags.contains("--trace") || flags.contains("--trace-frames"),
+                                  frameNumbers: flags.contains("--trace-frames"))
         }
     } catch {
         print("error: \(error)")
@@ -61,7 +63,8 @@ private func runtimeInts(_ s: String) -> [Int]? {
     return v.contains(where: { $0 == nil }) ? nil : v.map { $0! }
 }
 
-private func runtimeRun(rom: [UInt8], location: String, options: [String: String], trace: Bool) throws -> Int32 {
+private func runtimeRun(rom: [UInt8], location: String, options: [String: String], trace: Bool,
+                        frameNumbers: Bool = false) throws -> Int32 {
     guard let loc = runtimeLocation(location) else { print("bad location \(location)"); return 2 }
     let frames = Int(options["--frames"] ?? "120") ?? -1
     guard frames >= 0 else { print("bad --frames"); return 2 }
@@ -88,9 +91,11 @@ private func runtimeRun(rom: [UInt8], location: String, options: [String: String
             field.vm.wram[a] = UInt8(v & 0xFF)
         }
     }
+    var traceFrame: Int?                                        // nil: at load (--trace-frames prints "load")
     if trace {
         field.vm.trace = { e in
             var line = String(format: "obj %2d $%04X %02X ", e.slot / 2, e.offset, e.opcode)
+            if frameNumbers { line = (traceFrame.map { String(format: "f%-5d ", $0) } ?? "load   ") + line }
             switch e.outcome {
             case .go(let x, let c): line += String(format: "-> $%04X%@", x, c ? "" : " (yield)")
             case .halted(let why): line += "halted: \(why)"
@@ -102,6 +107,7 @@ private func runtimeRun(rom: [UInt8], location: String, options: [String: String
     }
     try field.start()
     for f in 0..<frames {
+        traceFrame = f
         try field.step(input: script.held(at: f))
     }
     let s = field.summary()

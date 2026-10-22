@@ -13,12 +13,13 @@ private let sceneROMUsage = """
 
 func cmdScene(_ args: [String]) -> Int32 {
     if let op = args.first, ["raise", "graph", "timeline", "verify-rom"].contains(op) { return cmdSceneROM(args) }
+    if let op = args.first, ["vm", "vm-vectors"].contains(op) { return cmdSceneVM(args) }
     guard args.count >= 2, ["compile", "decompile", "preview", "run"].contains(args[0]) else {
         print("""
         usage: chronoforge scene <compile|decompile|preview> <input.dsl|input.event.json|input.cfscene> [--out file] [--project path] [--entry 0] [--flag symbol] [--steps 1000]
                chronoforge scene run <input> --project path [--entry 0] [--flag symbol] [--steps 1000] [--frames 10000] [--party 1,2,3]
                  (every project scene as an object, with CT call levels; the input replaces the scene of its file name)
-        """ + "\n" + sceneROMUsage)
+        """ + "\n" + sceneROMUsage + "\n" + sceneVMUsage)
         return 2
     }
     let operation = args[0]
