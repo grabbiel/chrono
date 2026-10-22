@@ -197,6 +197,29 @@ def tiles(rom, c):
     return [bytes(rom[start + TILE_BYTES * t:start + TILE_BYTES * (t + 1)]) for t in range(tile_count(rom, c))]
 
 
+def encode_tile(indices):
+    """64 row-major palette indices as one SNES planar 4bpp tile (the inverse of tile_indices)."""
+    out = bytearray(TILE_BYTES)
+    for r in range(8):
+        for x in range(8):
+            v = indices[8 * r + x]
+            for p in range(4):
+                if v >> p & 1:
+                    out[(16 if p >= 2 else 0) + 2 * r + (p & 1)] |= 0x80 >> x
+    return bytes(out)
+
+
+def set_spans(rom, c):
+    """The PC ranges set c's write-back may change: its tiles, frame records,
+    frame-id rows, duration rows and colours 1-12 (docs/sprites.md)."""
+    t, f = pc(u24(rom, TILES_PTR + 3 * c)), pc(u24(rom, FRAMES_PTR + 3 * c))
+    ids, durs = pc(ANIM_BANK + u16(rom, ANIM_FRAMES + 2 * c)), pc(ANIM_BANK + u16(rom, ANIM_DURS + 2 * c))
+    pal, rows = pc(ANIM_BANK + palette_offset(rom, c)), anim_rows(rom, c)
+    return {"tiles": range(t, t + TILE_BYTES * tile_count(rom, c)), "frames": range(f, f + FRAME_BYTES * frame_count(rom, c)),
+            "frameIds": range(ids, ids + 16 * rows), "durations": range(durs, durs + 4 * rows),
+            "palette": range(pal, pal + 2 * PAL_COLOURS)}
+
+
 def cell_pixels(word, tile_bytes):
     """64 indices of a cell: tile word & $7FF of the set (0 blank), mirrored with bit 14."""
     t = word & TILE_MASK

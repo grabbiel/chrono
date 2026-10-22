@@ -189,11 +189,11 @@ public final class ProjectStore {
 
     static func isEmpty(_ spec: Project.ROMBuild) -> Bool {
         spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs && !spec.items
-            && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty
+            && spec.maps.isEmpty && spec.tilesets.isEmpty && spec.enemies.isEmpty && spec.sprites.isEmpty
     }
 
     /// Saves the project's `rom` section (nil: no packs or songs). Its
-    /// `characters`, `techs`, `items`, `maps`, `tilesets` and `enemies` are
+    /// `characters`, `techs`, `items`, `maps`, `tilesets`, `enemies` and `sprites` are
     /// kept: their panes or project.json set them (updateROMCharacters,
     /// updateROMTechs, updateROMItems, updateROMEnemies).
     public func updateROMBuild(_ spec: Project.ROMBuild?) -> Bool {
@@ -205,6 +205,7 @@ public final class ProjectStore {
         merged.maps = candidate.project.rom?.maps ?? []
         merged.tilesets = candidate.project.rom?.tilesets ?? []
         merged.enemies = candidate.project.rom?.enemies ?? []
+        merged.sprites = candidate.project.rom?.sprites ?? []
         candidate.project.rom = Self.isEmpty(merged) ? nil : merged
         do {
             try candidate.save()

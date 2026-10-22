@@ -7,7 +7,8 @@ every claim's check is `re_workspace/tools/ct_sprites.py`; the Swift twin is
 `CTSprites.swift` (`CTSpriteROM`, `SpriteSheet`, `SpriteScene`).
 
 No ROM data is stored in the repository: the import reads it from your ROM
-into your project. Writing sprites back to a ROM is the next slice (see the end).
+into your project. `rom build` writes the sets back in place (see
+[Writing back](#writing-back)).
 
 ## The data
 
@@ -200,39 +201,80 @@ Impact:
   where the battle uses 5–7.
 - `hitbox` and `weapon` are Studio metadata. They are not decoded from the game
   and not written to it.
+- The write-back keeps each set's size and shape: no new tiles, frames or
+  animation rows, and no shorter or longer lists.
 - OBJ priority is per object, not per frame. The field gives an OBJ whose y
   offset is −24 or less (`Spr_UpperOfsY`) the object's "high" priority, and the
   others its "low" one. Both start at 2 (`EvtSpr_PrioInit`), which the import
   uses for every OBJ.
 - The game's frames use no OAM flips: a facing's mirror is in its cells. The
-  assembler allows flips, which the write-back will refuse for a streamed sprite.
+  assembler allows flips, which the write-back refuses.
 - No emulator run. The evidence is the ROM's code, data and its own decoder
   executed, not a booted game.
 - The Studio pane is compiled; its logic is in Core and tested there.
 
-## Next slice: write-back (design)
+## Writing back
 
-`CTROMBuilder` gains a sprites step for the sprites listed in a new
-`rom.sprites`. For each sprite with `rom.family == "ct-pc"`:
-1. **Checks.** Refuse:
-   - a set outside 0–6, or a frame count above the base block's;
-   - a cell tile at or above the base tile count;
-   - cell bits 11–13;
-   - an OBJ that is not one of 4 16×16 OBJs at slot tiles 0, 2, 4, 6;
-   - OAM flips or a palette other than 0;
-   - offsets outside −128…127;
-   - durations above 255, or a frame id at or above the frame count or equal to
-     `$FF`;
-   - more colours than 12 + 0.
-2. **Frames.** Rewrite the 40-byte records in place at `rom.frames` (same
-   count; no relocation in this slice).
-3. **Tiles.** Re-encode the sheet's first `tileCount` tiles with
-   `TileDecoder.encodePlanar` over the base block. Only changed tiles are
-   written, each as its own write.
-4. **Animations.** Write the frame-id and duration rows back in place. A list
-   must keep its row's length and terminator, so the shape of the rows cannot
-   change yet.
-5. **Palette.** Write colours 1–12 at `rom.palette`.
+`rom.sprites` in `project.json` lists the sprites `chronoforge rom build`
+writes (`CTSpritePatch`). Each must be a playable character's set
+(`rom.family` `ct-pc`). It keeps its place and its shape:
+
+1. **Checks.** The build refuses, before writing anything:
+   - a set outside 0–6, a set listed twice, or a `rom` source that is not
+     where the base ROM has the set (re-import);
+   - a frame count other than the block's (no relocation in this slice);
+   - a cell that is not a 16-bit word, uses bits 11–13, or names a tile at or
+     above the set's tile count;
+   - a frame that is not 4 16×16 OBJs at slot tiles 0, 2, 4, 6, an OAM flip
+     (mirror the cells instead), a palette other than 0, a priority other
+     than 2 (the game sets it), or an offset outside −128…127;
+   - an animation without a row and facing, a row or facing outside the set's,
+     one listed twice, `loop: false`, a duration outside 1–255, or a frame id
+     at or above the frame count (or `$FF`, the field's end marker);
+   - a palette that is not one of 16 BGR555 colours with 0 and 13–15 zero
+     (colour 0 is transparent; 13–15 are the weapon's);
+   - a sheet that is not 4bpp, has fewer tiles than the set, or paints tile 0
+     (the blank cell: the battle draws zeros for it whatever it holds).
+2. **Frames.** The 40-byte records are rewritten in place at `rom.frames`.
+3. **Tiles.** The sheet's first `tileCount` tiles are re-encoded with
+   `TileDecoder.encodePlanar`. Only the tiles that differ from the base ROM's
+   are written, one write each.
+4. **Animations.** Each animation sets its row's entries in its facing's
+   frame-id row and in the shared duration row, over the base bytes. The rows
+   are written back in place, one write per facing row and per duration row.
+5. **Palette.** Colours 1–12 are written at `rom.palette`.
+
+Then the set is decoded from the result (`CTSpriteROM.decode`) and must give
+the sprite back: the same block ends, frames and animations. That is what
+keeps an animation's shape: a list keeps its row's length and terminator (a
+shorter list would need a zero duration the other facings would read too),
+and the 4 facings of a row share its durations, so they must agree.
+
+Only what changes is written, so an unedited import rebuilds the base ROM
+byte for byte. The report's `sprites` entry gives the parts written, the
+frames, animations and colours the set holds, its tile block's hash and the
+changed tiles. Its `sharedWith` names the other sprite records (`$E4:F000`,
+and the 10-byte `$E4:F600` records, whose first five bytes are laid out the
+same way) that name a changed part, so they show the edit too: NPC records
+use the PCs' palettes, and `$E4:F600` records 248–251 use Robo's and Magus's
+tiles and frames. All-zero records are left out. `validate` checks
+`rom.sprites` without the ROM: the ids exist, one per set, family `ct-pc`, and
+the checks above that need no ROM.
+
+Evidence (`macos_studio/tools/verify_sprite_build.py`, with the ROM):
+- an import of all seven sets with every set listed rebuilds the clean ROM
+  with no write;
+- an edited build writes exactly the edited tile, frame records, frame-id
+  row, duration row and palettes, and `ct_rom_check.py` accepts it: only the
+  reported sets' blocks change, the pointer tables and sprite records do not,
+  and each set decodes to the report;
+- `ct_sprites.py verify-import --rom <built>` decodes the built ROM back to
+  the edited project;
+- the ROM's own frame decoder, `Battle_DrawBattlerFrameAnyLayout`, run on the
+  built ROM, gives each edited frame from tiles encoded independently from
+  the edited sheet (`ct_sprites.encode_tile`);
+- seven damaged copies are rejected and twelve edits the format cannot carry
+  are refused, with nothing written.
 
 Growing a set (more tiles or frames) needs free-space relocation and pointer
-updates in `$E4:2000/2300`. That is a later step, as are enemy sprites.
+updates in `$E4:2000/2300`; that is a later step.

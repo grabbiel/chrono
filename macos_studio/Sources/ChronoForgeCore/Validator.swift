@@ -300,6 +300,17 @@ public enum Validator {
                 }
                 for problem in CTMapPatch.validate(m) { err(4, "maps/\(id).map.json", problem) }
             }
+            // Sprites: ids exist, one per set, the PC family's format (the build adds the base ROM's checks).
+            var spriteSets: [Int: String] = [:]
+            for id in Set(spec.sprites).sorted() {
+                let path = "project.json rom sprite \(id)"
+                if spec.sprites.filter({ $0 == id }).count > 1 { err(4, path, "sprite built twice") }
+                guard let s = p.sprites[id] else { err(4, path, "no sprites/\(id).sprite.json"); continue }
+                if let set = s.rom?.set, s.rom?.family == CTSpritePatch.family, let other = spriteSets.updateValue(id, forKey: set) {
+                    err(4, "sprites/\(id).sprite.json", "set \(set) is also sprites/\(other).sprite.json")
+                }
+                for problem in CTSpritePatch.validate(s) { err(4, "sprites/\(id).sprite.json", problem) }
+            }
             for id in Set(spec.tilesets).sorted() {
                 let path = "project.json rom tileset \(id)"
                 if spec.tilesets.filter({ $0 == id }).count > 1 { err(4, path, "tileset built twice") }

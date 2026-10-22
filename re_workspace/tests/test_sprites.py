@@ -140,6 +140,27 @@ def test_synthetic_sets_decode_with_the_end_rules():
         assert got["frameList"] == want["frameList"] and got["animationList"] == want["animationList"]
 
 
+def test_encode_tile_inverts_tile_indices():
+    rng = cs.Lcg(0xE1C0)
+    for _ in range(20):
+        raw = bytes(rng.next(256) for _ in range(cs.TILE_BYTES))
+        assert cs.encode_tile(cs.tile_indices(raw)) == raw
+    assert cs.encode_tile([0] * 64) == bytes(32)
+    assert cs.encode_tile([15] + [0] * 63) == bytes([0x80, 0x80] + [0] * 14 + [0x80, 0x80] + [0] * 14)
+
+
+def test_set_spans_cover_the_write_back_blocks():
+    image, _, _ = synthetic_image()
+    spans = cs.set_spans(image, 1)
+    d = cs.decode_set(image, 1)
+    assert len(spans["tiles"]) == 32 * d["tiles"]["count"] and len(spans["frames"]) == 40 * d["frames"]["count"]
+    assert len(spans["frameIds"]) == 16 * 3 and len(spans["durations"]) == 4 * 3 and len(spans["palette"]) == 24
+    assert spans["palette"].start == cs.pc(0xE40030)
+    assert spans["tiles"].stop == cs.set_spans(image, 0)["tiles"].start + 32 * 64   # set 1 follows set 0's 40 tiles
+    for key in ("tiles", "frames", "frameIds", "durations", "palette"):
+        assert spans[key].start >> 16 == (spans[key].stop - 1) >> 16
+
+
 def test_swift_vectors_file_is_current():
     path = cs.VECTORS
     assert path.exists(), "regenerate with ct_sprites.py vectors --out"
