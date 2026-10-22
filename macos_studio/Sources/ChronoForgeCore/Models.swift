@@ -423,6 +423,10 @@ public struct SampleMeta: Codable, Equatable, Sendable {
     public var loopEndSample: Int?
     public var adsr: [Int]?
     public var gain: Int?
+    // SFX Lab (docs/sfx_lab.md); absent in older sidecars.
+    public var synth: SynthSpec?        // regenerates the PCM this sample was encoded from
+    public var source: SampleSource?    // WAV import settings and measured SNR
+    public var fx: SampleFX?            // pitch bend, vibrato, noise and preview key-off
 }
 
 // MARK: - tilesets/<id>.tileset.json
