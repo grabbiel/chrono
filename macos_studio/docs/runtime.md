@@ -45,9 +45,13 @@ as external calls (their code byte zeroed): `Audio_DriverCommand` (`$C7:0004`),
 the field's party routines `$C0:9E29`, `$C0:A26B`, `$C0:A2CE`, and
 `Evt_StartTargetFunc2` (`$C0:3154`); the model records the same requests.
 
-The per-family counts of the last full run are in `EVIDENCE` at the top of
-`ct_event_vm.py` and in the hand-over note; `test_event_vm.py` checks them
-against the Swift family table. `ct_event_vm.py unmodelled` lists the opcodes
+The last full run: 13 families, 175 opcodes modelled, 172 verified on 2,267
+operand sets, 8,450 of 8,451 cases agree and none disagree. `$3B`, `$3C` and
+`$5D` are modelled but no pack uses them; one `$83` case is unverifiable (the
+handler runs past the interpreter's step limit). The per-family counts are in
+`EVIDENCE` at the top of `ct_event_vm.py`; `test_event_vm.py` checks them
+against the Swift family table. The modelled opcodes cover 135,018 of the
+packs' 142,702 instructions. `ct_event_vm.py unmodelled` lists the opcodes
 the packs use that are not modelled, with their use counts.
 
 ## Field frame

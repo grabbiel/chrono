@@ -56,6 +56,28 @@ OBJ_TABLES = (0x0C00, 0x0F00, 0x0F80, 0x1000, 0x1080, 0x1100, 0x1180, 0x1300, 0x
               0x1800, 0x1880, 0x1900, 0x1980, 0x1A00, 0x1A80, 0x1B00, 0x1B80, 0x1C00, 0x1C80)
 TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E, 0x92, 0x96, 0x9C, 0xA0)
 
+# The last full `check` (2026-10-22, default --per-op 24 --states 2): per family the opcodes
+# modelled and verified, the operand sets the packs use, and the cases (agree, disagree).
+# $3B, $3C and $5D are modelled but no pack uses them. One $83 case (EvtPack_284 $08B6) is
+# unverifiable: the ROM handler runs past the interpreter's step limit. test_event_vm.py checks
+# these against CTEventVM.families.
+EVIDENCE = {
+    "animation": {"opcodes": 7, "verified": 7, "operandSets": 99, "cases": 336, "agree": 336, "disagree": 0},
+    "calls": {"opcodes": 6, "verified": 6, "operandSets": 144, "cases": 288, "agree": 288, "disagree": 0},
+    "characters": {"opcodes": 11, "verified": 11, "operandSets": 69, "cases": 530, "agree": 529, "disagree": 0},
+    "conditions": {"opcodes": 26, "verified": 24, "operandSets": 233, "cases": 1161, "agree": 1161, "disagree": 0},
+    "field": {"opcodes": 9, "verified": 9, "operandSets": 126, "cases": 432, "agree": 432, "disagree": 0},
+    "flow": {"opcodes": 18, "verified": 18, "operandSets": 177, "cases": 864, "agree": 864, "disagree": 0},
+    "memory": {"opcodes": 47, "verified": 46, "operandSets": 730, "cases": 2331, "agree": 2331, "disagree": 0},
+    "messages": {"opcodes": 7, "verified": 7, "operandSets": 151, "cases": 337, "agree": 337, "disagree": 0},
+    "movement": {"opcodes": 11, "verified": 11, "operandSets": 161, "cases": 555, "agree": 555, "disagree": 0},
+    "objects": {"opcodes": 22, "verified": 22, "operandSets": 218, "cases": 1083, "agree": 1083, "disagree": 0},
+    "party": {"opcodes": 2, "verified": 2, "operandSets": 2, "cases": 96, "agree": 96, "disagree": 0},
+    "sound": {"opcodes": 4, "verified": 4, "operandSets": 96, "cases": 192, "agree": 192, "disagree": 0},
+    "warps": {"opcodes": 5, "verified": 5, "operandSets": 61, "cases": 246, "agree": 246, "disagree": 0},
+}
+EVIDENCE_UNMODELLED = {"opcodes": 48, "instructions": 7684, "instructionsInPacks": 142702}
+
 
 def scratch(a):
     return any(a in r for r in SCRATCH)

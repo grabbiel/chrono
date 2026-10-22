@@ -12,6 +12,7 @@ Run: re_workspace/.venv/bin/python -m pytest re_workspace/tests/test_event_vm.py
 
 import json
 import random
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +65,24 @@ def test_compare_names_the_first_difference():
     assert "unmodelled" in vm.compare(rom, {"kind": "unmodelled", "reason": "r"}, known)
     assert vm.compare(("halted",), {"kind": "halted"}, {}) is None
     assert "never returns" in vm.compare(("halted",), same, {})
+
+
+def test_recorded_evidence_matches_the_swift_families():
+    src = (WS.parent / "macos_studio" / "Sources" / "ChronoForgeCore" / "CTEventVM.swift").read_text()
+    table = src[src.index("public static let families"):src.index("public static let modelled")]
+    families = {name: re.findall(r"0x[0-9A-F]{2}", body) for name, body in re.findall(r'"(\w+)": \[([^\]]*)\]', table)}
+    assert set(families) == set(vm.EVIDENCE)
+    for name, f in vm.EVIDENCE.items():
+        assert f["opcodes"] == len(families[name]), name
+        assert f["verified"] <= f["opcodes"]
+        assert f["disagree"] == 0
+        assert f["agree"] <= f["cases"]
+    modelled = sum(f["opcodes"] for f in vm.EVIDENCE.values())
+    assert modelled == len({op for ops in families.values() for op in ops}) == 175
+    assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 172
+    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 8450
+    assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 8451
+    assert vm.EVIDENCE_UNMODELLED["instructions"] < vm.EVIDENCE_UNMODELLED["instructionsInPacks"] // 10
 
 
 def test_party_control_agrees_with_the_rom(rom_path, chronoret, require, tmp_path):
