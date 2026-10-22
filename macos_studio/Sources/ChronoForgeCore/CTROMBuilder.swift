@@ -1,4 +1,5 @@
-// Writes event packs, their message tables and songs into a copy of the base ROM.
+// Writes event packs, their message tables, songs and playable-character
+// records into a copy of the base ROM.
 // Layout facts and their evidence: CTROMLayout.swift / docs/rom_builder.md.
 import Foundation
 
@@ -39,7 +40,26 @@ public enum CTROMBuilder {
         }
     }
 
+    /// One playable character to write: its record's decoded fields over the
+    /// base ROM's record `record.charId`, and its growth rows when given.
+    public struct CharacterRequest: Sendable {
+        public let id: String
+        public let record: CharacterDef.Record
+        public let growth: CharacterDef.Growth?
+        public init(id: String, record: CharacterDef.Record, growth: CharacterDef.Growth? = nil) {
+            self.id = id; self.record = record; self.growth = growth
+        }
+    }
+
     public struct Report: Codable, Equatable, Sendable {
+        public struct Character: Codable, Equatable, Sendable {
+            public let id: String
+            public let charId: Int
+            public let address: String
+            public let pc: Int
+            public let record: CharacterDef.Record
+            public let growth: CharacterDef.Growth?    // absent: rows left as they were
+        }
         public struct Pack: Codable, Equatable, Sendable {
             public let entry: Int
             public let source: String
@@ -88,17 +108,19 @@ public enum CTROMBuilder {
         public let packs: [Pack]
         public let messageTables: [MessageTable]
         public let songs: [Song]
+        public let characters: [Character]?           // absent: none requested
         public let writes: [Write]
         public let freeBytesLeft: Int
     }
 
     // MARK: Project entry point
 
-    /// Builds the project's `rom.eventPacks` and `rom.songs` into a copy of
-    /// `base` (the pinned US 1.0 ROM; a 512-byte copier header is dropped).
+    /// Builds the project's `rom.eventPacks`, `rom.songs` and `rom.characters`
+    /// into a copy of `base` (the pinned US 1.0 ROM; a 512-byte copier header is dropped).
     public static func build(base: [UInt8], project: CTProject) throws -> (rom: [UInt8], report: Report) {
-        guard let spec = project.project.rom, !(spec.eventPacks.isEmpty && spec.songs.isEmpty) else {
-            throw CTROMBuildError("project.json has no rom.eventPacks or rom.songs to build")
+        guard let spec = project.project.rom,
+              !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty) else {
+            throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs or rom.characters to build")
         }
         func inside(_ path: String) -> Bool { !path.hasPrefix("/") && !path.split(separator: "/").contains("..") }
         var requests: [Request] = []
@@ -138,12 +160,19 @@ public enum CTROMBuilder {
                 return SongRequest(song: s.song, source: "listing " + s.listing, data: data, tables: tables)
             } catch { throw CTROMBuildError("song \(s.song): \(s.listing): \(error)") }
         }
-        return try build(base: base, requests: requests, songs: songs, textProfile: project.textProfile)
+        let characters = try spec.characters.map { id -> CharacterRequest in
+            guard let c = project.characters[id] else { throw CTROMBuildError("character \(id): no characters/\(id).json") }
+            guard let record = c.pc else { throw CTROMBuildError("character \(id) has no pc record; import the ROM's characters") }
+            return CharacterRequest(id: id, record: record, growth: c.growth)
+        }
+        return try build(base: base, requests: requests, songs: songs, characters: characters,
+                         textProfile: project.textProfile)
     }
 
     // MARK: Builder
 
     public static func build(base input: [UInt8], requests: [Request], songs songRequests: [SongRequest] = [],
+                             characters characterRequests: [CharacterRequest] = [],
                              textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
@@ -167,6 +196,14 @@ public enum CTROMBuilder {
             guard romSongs.indices.contains(s.song) else { throw CTROMBuildError("song \(s.song) is not 0-\(romSongs.count - 1)") }
             guard seenSongs.insert(s.song).inserted else { throw CTROMBuildError("song \(s.song) is built twice") }
             try checkSong(s)
+        }
+        var seenCharacters = Set<Int>(), seenIDs = Set<String>()
+        for c in characterRequests {
+            guard seenIDs.insert(c.id).inserted else { throw CTROMBuildError("character \(c.id) is built twice") }
+            try CTCharacterROM.check(c.record, growth: c.growth, rom: rom)
+            guard seenCharacters.insert(c.record.charId).inserted else {
+                throw CTROMBuildError("character \(c.id): record \(c.record.charId) is built twice")
+            }
         }
 
         // Spans of the streams still in use, and those the new packs free.
@@ -315,6 +352,24 @@ public enum CTROMBuilder {
                                echo: s.tables.echo.map { $0.map(Int.init) }, drums: s.tables.drums.map { $0.map(Int.init) }))
         }
 
+        // Characters: each decoded field in place; the record's other bytes stay the base ROM's.
+        var characters: [Report.Character] = []
+        for c in characterRequests {
+            let pc = CTCharacterROM.recordPC(c.record.charId)
+            for (field, bytes) in zip(CTCharacterROM.writableFields, CTCharacterROM.fieldBytes(c.record)) {
+                write(bytes, at: pc + field.offset, "character \(c.id) \(field.name)")
+            }
+            if let growth = c.growth {
+                let rows = CTCharacterROM.encodeGrowth(growth), id = c.record.charId
+                write(rows.hp, at: CTCharacterROM.hpGrowthPC + CTCharacterROM.growthRow * id, "character \(c.id) HP growth")
+                write(rows.mp, at: CTCharacterROM.mpGrowthPC + CTCharacterROM.growthRow * id, "character \(c.id) MP growth")
+                write(rows.stats, at: CTCharacterROM.statGrowthPC + CTCharacterROM.statGrowthRow * id,
+                      "character \(c.id) stat growth")
+            }
+            characters.append(.init(id: c.id, charId: c.record.charId, address: snes(pc), pc: pc, record: c.record,
+                                    growth: c.growth))
+        }
+
         let sum = checksum(rom)
         write([UInt8(~sum & 0xFF), UInt8(~sum >> 8 & 0xFF), UInt8(sum & 0xFF), UInt8(sum >> 8)],
               at: CTROMLayout.complementPC, "checksum")
@@ -322,7 +377,8 @@ public enum CTROMBuilder {
         let changed = writes.filter { w in (w.pc..<(w.pc + w.length)).contains { rom[$0] != base[$0] } }
         return (rom, Report(schema: "ct-rom-build/1", baseSHA256: CTEventPack.sha256(base),
                             outputSHA256: CTEventPack.sha256(rom), checksum: sum, packs: packs,
-                            messageTables: tables, songs: songs, writes: changed, freeBytesLeft: space.total))
+                            messageTables: tables, songs: songs, characters: characters.isEmpty ? nil : characters,
+                            writes: changed, freeBytesLeft: space.total))
     }
 
     /// Checks LocLoad_CheckEvtData makes after unpacking, and that the pack

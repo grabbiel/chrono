@@ -5,6 +5,9 @@
 # Every other test must run and pass. Run these locally with the ROM workspace
 # (re_workspace/tools/verify_all.sh) for full verification.
 ChronoForgeCoreTests.BRRTests/testAudioSample01ParityAgainstPythonWAV                           skip      # local ROM-extracted audio sample
+ChronoForgeCoreTests.CTCharactersTests/testBuilderCharacterRefusals                             skip      # local ROM
+ChronoForgeCoreTests.CTCharactersTests/testEditedCharacterWritesOnlyItsFields                   skip      # local ROM
+ChronoForgeCoreTests.CTCharactersTests/testImportThenBuildIsIdentical                           skip      # local ROM
 ChronoForgeCoreTests.CTEventTests/testEveryROMPackMatchesTheHandlerTracedManifest               skip      # local ROM
 ChronoForgeCoreTests.CTROMBuilderTests/testCleanChecksumIsReproduced                            skip      # local ROM
 ChronoForgeCoreTests.CTROMBuilderTests/testLoweredSceneWithMessagesIsWrittenAndPointedTo        skip      # local ROM

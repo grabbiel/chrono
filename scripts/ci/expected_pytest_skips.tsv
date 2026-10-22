@@ -1,6 +1,15 @@
 # Research tests allowed to skip in public CI, with their exact pytest skip reason.
 # Format: <node id><TAB><reason>. Every other collected test must run and pass.
 # Run them all locally with the ROM workspace (re_workspace/tools/verify_all.sh).
+re_workspace/tests/test_characters.py::test_characters_manifest_update_verifies	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_chronoret_source_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_code_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_data_claims	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_records_decode_as_documented	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_rom_routine_detects_a_changed_rule	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_rom_routine_has_the_exp_cap_quirk	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_rom_routine_runs_as_the_rule_to_level_99	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_characters.py::test_rom_routine_with_synthetic_rows_matches_the_vectors	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_event_packs.py::test_every_pack_decodes_from_the_table_to_its_record	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_event_packs.py::test_fixed_lengths_agree_with_the_documented_isa	local manifest event_decode_table.json not present (re_workspace/manifests/event_decode_table.json)
 re_workspace/tests/test_event_packs.py::test_jump_encodings	local manifest event_decode_table.json not present (re_workspace/manifests/event_decode_table.json)

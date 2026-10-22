@@ -234,7 +234,7 @@ def test_field_evidence_coverage(load_manifest):
             for f in rt.get("fields", []):
                 assert f.get("evidence") is not None, \
                     f"{n}:{rt['name']} field {f['name']} lacks evidence"
-                assert f["status"] in ("decoded", "partial", "undecoded")
+                assert f["status"] in cs.STATUSES
                 if f["status"] == "undecoded":
                     # undecoded fields must state their byte range
                     assert str(f["offset"]).startswith("+$") or \
@@ -246,9 +246,9 @@ def test_field_stats_report(capsys, load_manifest):
     for n in MANIFESTS:
         st = cs.field_stats(load_manifest(n))
         tot = sum(st.values())
-        frac = (st["decoded"] + st["partial"]) / tot
+        frac = (st["verified"] + st["decoded"] + st["partial"]) / tot
         lines.append(f"{n}: {st} -> evidence-backed {frac:.0%}")
     print("\n".join(lines))
     for n in MANIFESTS:
         st = cs.field_stats(load_manifest(n))
-        assert st["decoded"] > 0
+        assert st["verified"] + st["decoded"] > 0

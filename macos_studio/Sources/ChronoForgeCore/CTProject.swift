@@ -25,6 +25,8 @@ public struct CTProject: Sendable {
     public var maps: [String: GameMap]
     public var scenes: [String: SceneDoc]
     public var textProfile: CTTextProfile? = nil
+    /// party.json (absent until characters are imported from a ROM).
+    public var party: PartyDef? = nil
 
     public static let jsonDecoder: JSONDecoder = JSONDecoder()
     public static let jsonEncoder: JSONEncoder = {
@@ -107,9 +109,13 @@ public struct CTProject: Sendable {
         let profile: CTTextProfile? = FileManager.default.fileExists(atPath: profileURL.path)
             ? try decode(CTTextProfile.self, from: profileURL) : nil
         try profile?.validate()
+        let partyURL = url.appendingPathComponent("party.json")
+        let party: PartyDef? = FileManager.default.fileExists(atPath: partyURL.path)
+            ? try decode(PartyDef.self, from: partyURL) : nil
         return CTProject(url: url, project: project, characters: characters, sprites: sprites,
                          items: items, techs: techs, dialogue: dialogue, tracks: tracks,
-                         samples: samples, tilesets: tilesets, maps: maps, scenes: scenes, textProfile: profile)
+                         samples: samples, tilesets: tilesets, maps: maps, scenes: scenes, textProfile: profile,
+                         party: party)
     }
 
     // MARK: Save (keys ordered by the Studio on save; 2-space indent via prettyPrinted)
@@ -138,6 +144,7 @@ public struct CTProject: Sendable {
         if let textProfile {
             try CTProject.encode(textProfile, to: url.appendingPathComponent("strings/ct-text-profile.json"))
         }
+        if let party { try CTProject.encode(party, to: url.appendingPathComponent("party.json")) }
         for (id, t) in tracks { try CTProject.encode(t, to: url.appendingPathComponent("audio/tracks/\(id).akao.json")) }
         for (id, s) in samples { try CTProject.encode(s, to: url.appendingPathComponent("audio/samples/\(id).json")) }
         for (id, t) in tilesets { try CTProject.encode(t, to: url.appendingPathComponent("tilesets/\(id).tileset.json")) }

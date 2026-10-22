@@ -22,7 +22,12 @@ Audio_SongTable entries change; their old spans are writable when no other
 song uses them; each new song is the reported data, walks cleanly and loads
 below $4700; untouched songs are as before; the per-song table rows a song
 sets (sample list, echo word, drum kit) hold the reported values, which are in
-range, and no other row changes.
+range, and no other row changes. Characters (tools/ct_characters.py): only
+the decoded fields of reported records and their growth rows may change; each
+record decodes to the reported values, which are in the ranges the game's
+code keeps, with equipment of the slot's category that the character can
+equip in the clean ROM; the undecoded bytes of every record, the other
+characters' records and rows, and ExpToLevel are unchanged.
 """
 
 import argparse
@@ -34,6 +39,7 @@ WS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WS / "tools"))
 sys.path.insert(0, str(WS / "refs" / "ChronoRET" / "tools"))
 import c3pack  # noqa: E402
+import ct_characters as cc  # noqa: E402
 import ct_event_packs as packs  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
 import ct_spc_seq as spc  # noqa: E402
@@ -85,6 +91,78 @@ def song_tables_of(report_song):
         if report_song.get(key) is not None:
             tables[key] = bytes(report_song[key])
     return tables
+
+
+def character_zones(report):
+    """The spans the builder may write for each reported character."""
+    spans = []
+    for c in report.get("characters") or []:
+        base = cc.RECORDS_PC + cc.RECORD_SIZE * c["charId"]
+        for name in cc.WRITABLE:
+            offset, size = cc.field(name)
+            spans.append(range(base + offset, base + offset + size))
+        if c.get("growth") is not None:
+            for at, row in ((cc.HP_GROWTH_PC, cc.GROWTH_ROW), (cc.MP_GROWTH_PC, cc.GROWTH_ROW),
+                            (cc.STAT_GROWTH_PC, cc.STAT_GROWTH_ROW)):
+                spans.append(range(at + row * c["charId"], at + row * (c["charId"] + 1)))
+    return spans
+
+
+STAT_KEYS = ("power", "stamina", "speed", "magic", "hit", "evade", "magicDefense")   # the report's names
+
+
+def report_value(c):
+    """A report character's record in ct_characters.decode_record form."""
+    r = c["record"]
+    return {"char_id": r["charId"], "hp": r["hp"], "max_hp": r["maxHp"], "mp": r["mp"], "max_mp": r["maxMp"],
+            "level": r["level"], "exp": r["exp"], "exp_to_next": r["expToNext"], "tech_points": r["techPoints"],
+            "tech_points_to_next": r["techPointsToNext"],
+            "stats": {s: r["stats"][k] for s, k in zip(cc.STATS, STAT_KEYS)},
+            "growth_base": {s: r["growthBase"][k] for s, k in zip(cc.STATS, STAT_KEYS)},
+            "equipment": {slot: r["equipment"][slot] for slot in ("helmet", "armor", "weapon", "accessory")}}
+
+
+def report_growth(g):
+    return {"hp": [[s["toLevel"], s["gain"]] for s in g["hp"]], "mp": [[s["toLevel"], s["gain"]] for s in g["mp"]],
+            "stats": {s: g["stats"][k] for s, k in zip(cc.STATS, STAT_KEYS)}}
+
+
+def check_characters(clean, built, report):
+    reported = report.get("characters") or []
+    ids = [c["charId"] for c in reported]
+    check(all(0 <= i < cc.CHARACTERS for i in ids) and len(set(ids)) == len(ids), f"character records {ids}")
+    writable = {b for name in cc.WRITABLE for o, n in [cc.field(name)] for b in range(o, o + n)}
+    bounds = clean[cc.ITEM_BOUNDS_PC:cc.ITEM_BOUNDS_PC + 6]
+    by_id = {c["charId"]: c for c in reported}
+    for i in range(cc.INIT_RECORDS):
+        before, after = cc.record(clean, i), cc.record(built, i)
+        if i not in by_id:
+            check(before == after, f"record {i} changed but is not reported")
+            continue
+        c = by_id[i]
+        check(all(before[b] == after[b] for b in range(cc.RECORD_SIZE) if b not in writable),
+              f"character {c['id']}: an undecoded byte changed")
+        v = cc.decode_record(after)
+        check(v == report_value(c), f"character {c['id']}: the record is not the reported values")
+        check(1 <= v["level"] <= cc.LEVEL_MAX and v["exp"] <= cc.EXP_CAP_HI << 16 | cc.EXP_CAP_LO,
+              f"character {c['id']}: level or exp")
+        check(v["hp"] <= v["max_hp"] <= cc.MAX_HP_CAP and v["mp"] <= v["max_mp"] <= cc.MAX_MP_CAP,
+              f"character {c['id']}: HP or MP")
+        check(all(x <= cc.STAT_CAP for x in list(v["stats"].values()) + list(v["growth_base"].values())),
+              f"character {c['id']}: a stat or growth base above 99")
+        for slot, item in v["equipment"].items():
+            check(cc.item_category(item, bounds) == cc.SLOTS.index(slot) and cc.equip_mask(clean, item) & 0x80 >> i,
+                  f"character {c['id']}: {slot} ${item:02X}")
+    for i in range(cc.CHARACTERS):
+        c = by_id.get(i)
+        g = cc.decode_growth(built, i)
+        if c is None or c.get("growth") is None:
+            check(g == cc.decode_growth(clean, i), f"growth rows of record {i} changed but are not reported")
+        else:
+            check(g == report_growth(c["growth"]), f"character {c['id']}: growth rows are not the reported ones")
+            check(all(any(t >= cc.LEVEL_MAX for t, _ in g[k]) for k in ("hp", "mp")),
+                  f"character {c['id']}: a growth row does not reach level 99")
+    check(cc.exp_to_level(built) == cc.exp_to_level(clean), "ExpToLevel changed")
 
 
 def main():
@@ -143,6 +221,7 @@ def main():
     for s in report.get("songs", []):
         for pc, row, _ in spc.table_rows(song_tables_of(s)):
             zones.append(range(pc + row * s["song"], pc + row * (s["song"] + 1)))
+    zones += character_zones(report)
 
     def inside(r):
         return any(r.start >= z.start and r.stop <= z.stop for z in zones)
@@ -185,6 +264,8 @@ def main():
             got = built[at + row * s["song"]:at + row * (s["song"] + 1)]
             check(got == want, f"song {s['song']}: table row at ${at + row * s['song']:06X}")
         new_spans[pc] = range(pc, pc + 2 + len(data))
+
+    check_characters(clean, built, report)
 
     # New packs and tables.
     table_doc = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -236,7 +317,7 @@ def main():
     for a, b in zip(ordered, ordered[1:]):
         check(a.stop <= b.start, f"${a.start:06X} and ${b.start:06X} overlap")
     print(f"ROM build: {checks} checks passed ({len(report['packs'])} packs, {len(report['messageTables'])} message tables, "
-          f"{len(report.get('songs', []))} songs)")
+          f"{len(report.get('songs', []))} songs, {len(report.get('characters') or [])} characters)")
 
 
 if __name__ == "__main__":

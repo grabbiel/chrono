@@ -115,10 +115,48 @@ public final class ProjectStore {
     }
     public func updateTech(_ t: TechDef) { project?.techs[t.id] = t; save() }
 
-    /// Saves the project's `rom` section (nil removes it).
+    /// The ROM's seven character records, growth rows, experience table and
+    /// equipment into the project (CTCharacterROM.importCharacters).
+    public func importCharacters(_ url: URL) {
+        guard var candidate = project else { return }
+        do {
+            let ids = try CTCharacterROM.importCharacters(rom: [UInt8](Data(contentsOf: url)), into: &candidate)
+            try candidate.save()
+            project = candidate
+            statusMessage = "imported \(ids.count) characters from the ROM"
+            statusIsError = false
+        } catch {
+            statusMessage = "character import failed: \(error)"
+            statusIsError = true
+        }
+    }
+
+    /// Saves which characters `rom build` writes (`rom.characters`).
+    public func updateROMCharacters(_ ids: [String]) -> Bool {
+        guard var candidate = project else { return false }
+        var spec = candidate.project.rom ?? Project.ROMBuild()
+        spec.characters = ids
+        candidate.project.rom = spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty ? nil : spec
+        do {
+            try candidate.save()
+            project = candidate
+            statusMessage = "saved ROM build settings"
+            statusIsError = false
+            return true
+        } catch {
+            statusMessage = "save failed: \(error)"
+            statusIsError = true
+            return false
+        }
+    }
+
+    /// Saves the project's `rom` section (nil: no packs or songs). Its
+    /// `characters` are kept: the Characters pane sets them (updateROMCharacters).
     public func updateROMBuild(_ spec: Project.ROMBuild?) -> Bool {
         guard var candidate = project else { return false }
-        candidate.project.rom = spec
+        var merged = spec ?? Project.ROMBuild()
+        merged.characters = candidate.project.rom?.characters ?? []
+        candidate.project.rom = merged.eventPacks.isEmpty && merged.songs.isEmpty && merged.characters.isEmpty ? nil : merged
         do {
             try candidate.save()
             project = candidate
@@ -148,6 +186,10 @@ public final class ProjectStore {
                     + (p.messageTable.map { ", messages at \($0)" } ?? "")
             }
             lines += report.songs.map { s in String(format: "song $%02X: %d B at %@ (%@)", s.song, s.bytes, s.address, s.placement) }
+            lines += (report.characters ?? []).map { c in
+                let fields = report.writes.filter { $0.what.hasPrefix("character \(c.id) ") }.count
+                return "character \(c.id): record \(c.charId) at \(c.address), \(fields) field(s) changed"
+            }
             lines.append(String(format: "checksum $%04X; %d bytes of free space left", report.checksum, report.freeBytesLeft))
             lines.append("report: \(reportURL.lastPathComponent)")
             return lines.joined(separator: "\n")

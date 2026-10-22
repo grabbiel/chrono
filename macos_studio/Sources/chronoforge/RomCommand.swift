@@ -48,6 +48,11 @@ func cmdRom(_ args: [String]) -> Int32 {
             for song in report.songs {
                 print(String(format: "song $%02X: %d bytes at %@ (%@)", song.song, song.bytes, song.address, song.placement))
             }
+            for c in report.characters ?? [] {
+                let fields = report.writes.filter { $0.what.hasPrefix("character \(c.id) ") }.count
+                print("character \(c.id): record \(c.charId) at \(c.address), \(fields) field(s) changed" +
+                      (c.growth == nil ? "" : " (growth rows included)"))
+            }
             print(String(format: "wrote %@: checksum $%04X, %d bytes of free space left", out, report.checksum, report.freeBytesLeft))
         case "info":
             let rom = try readROM(positional[0])
