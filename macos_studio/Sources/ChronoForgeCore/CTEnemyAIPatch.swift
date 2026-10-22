@@ -68,7 +68,8 @@ public enum CTEnemyAIPatch {
     /// accepts, ended by an `end` line, with no test byte $FF
     /// (BattleAi_FindReactPart takes the first $FF as the main part's end)
     /// and every target-code byte a BattleAi_TargetTable entry.
-    public static func assemble(text: String, lengths: [Int]) throws -> [UInt8] {
+    public static func assemble(text raw: String, lengths: [Int]) throws -> [UInt8] {
+        let text = raw.replacingOccurrences(of: "\r\n", with: "\n")
         let ended = text.split(separator: "\n").contains { line in
             let content = line.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
             return content.trimmingCharacters(in: .whitespaces) == "end"
@@ -118,14 +119,18 @@ public enum CTEnemyAIPatch {
             let bytes: [UInt8]
             do { bytes = try assemble(text: r.text, lengths: lengths) }
             catch { throw CTROMBuildError("enemy \(r.id) AI: \(error)") }
-            if let span = spans[r.enemyId], Array(base[span]) == bytes { continue }
+            guard let span = spans[r.enemyId] else {
+                throw CTROMBuildError("enemy \(r.id) AI: its pointer in the base ROM does not lead to a script " +
+                                      "(enemy 127's); it is kept as it is, so drop ai.text")
+            }
+            if Array(base[span]) == bytes { continue }
             planned.append((r, bytes))
         }
         var out: [ReportScript] = []
         for (r, bytes) in planned {
-            let old = spans[r.enemyId]
+            let old = spans[r.enemyId]!
             let pc: Int, placement: String
-            if let old, bytes.count <= old.count, shared[r.enemyId] == nil {
+            if bytes.count <= old.count, shared[r.enemyId] == nil {
                 pc = old.lowerBound; placement = "original"
             } else {
                 guard let at = space.allocate(bytes.count, reclaimed: false, bank: bankPC >> 16) else {

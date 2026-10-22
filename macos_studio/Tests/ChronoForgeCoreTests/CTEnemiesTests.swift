@@ -164,6 +164,7 @@ final class CTEnemiesTests: XCTestCase {
         refuse(plain.replacingOccurrences(of: "act $01 Attack id=$01 target=$03 arg=$00", with: "act $05 ChooseRepeat"), "no act $05")
         refuse(plain.replacingOccurrences(of: "act $01 Attack id=$01 target=$03 arg=$00", with: "act $09 Leave action=$FE"), "$FE or $FF")
         refuse(plain.replacingOccurrences(of: "test $00 Always", with: "test $29 Always"), "no test $29")
+        XCTAssertEqual(try CTEnemyAIPatch.assemble(text: plain.replacingOccurrences(of: "\n", with: "\r\n"), lengths: lengths), bytes)
         // a comment after end, and end with a comment, still end the script
         XCTAssertEqual(try CTEnemyAIPatch.assemble(text: plain.replacingOccurrences(of: "end\n", with: "end ; done\n"),
                                                    lengths: lengths), bytes)
@@ -375,5 +376,12 @@ final class CTEnemiesTests: XCTestCase {
         let huge = "main\n" + String(repeating: "  block\n    test $00 Always $00 $00 $00\n    act $01 Attack id=$01 target=$03 arg=$00\n",
                                          count: 100) + "reaction\nend\n"
         refuse(huge, "no room")
+        var p = project
+        let unparsed = CTEnemyROM.fileID(127)
+        XCTAssertNil(p.characters[unparsed]!.enemy!.ai!.text)
+        p.characters[unparsed]!.enemy!.ai!.text = plain
+        XCTAssertThrowsError(try CTROMBuilder.build(base: rom, project: p)) { error in
+            XCTAssertTrue("\(error)".contains("does not lead to a script"), "\(error)")
+        }
     }
 }

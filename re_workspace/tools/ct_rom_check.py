@@ -355,6 +355,7 @@ def check_enemy_scripts(clean, built, report, inside):
     placed = []
     for s in scripts:
         i = s["enemyId"]
+        check(i in spans, f"enemy {i}: a script written over a pointer that is not a script in the clean ROM")
         at = ce.script_pointer(built, i)
         check(ce.pc(ce.AI_BANK, at) == s["pc"], f"enemy {i}'s AI pointer is ${at:04X}, the report says {s['address']}")
         try:

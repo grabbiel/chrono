@@ -149,6 +149,10 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-enemy-ai-') as directory:
     if written != expect:
         fail(f'writes {written}')
     print(run(python, workspace / 'tools/ct_rom_check.py', out, report), end='')
+    print(run(cli, 'enemies', 'verify', project, out), end='')
+    stale = subprocess.run([str(cli), 'enemies', 'verify', str(project), str(rom)], capture_output=True, text=True, timeout=600)
+    if stale.returncode == 0 or stale.stdout.count("AI script") != len(EDITS):
+        fail(f'enemies verify accepts the clean ROM for the edited scripts: {stale.stdout}')
     for e in sorted(EDITS):
         s = got[e]
         print(f'enemy AI: {ids[e]} {s["placement"]:8} {s["from"]} -> {s["address"]} ({s["bytes"]} bytes)')
@@ -246,12 +250,15 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-enemy-ai-') as directory:
                 (script([block('$17 Chance percent=$FF b2=$00 b3=$00', act)]), 'holds $FF'),
                 (script([block(ALWAYS, act)])[:-len('end\n')], 'no end line'),
                 (script([block(FAILS, act)] * 100), 'no room'),
-                (None, 'the enemy id must be 0-254'))
-    path = project / f'characters/{ids[12]}.json'
-    original = path.read_text()
+                (None, 'the enemy id must be 0-254'),
+                ('127', 'does not lead to a script'))
     for text, message in refusals:
+        path = project / f'characters/{ids[127 if text == "127" else 12]}.json'
+        original = path.read_text()
         d = json.loads(original)
-        if text is None:
+        if text == '127':
+            d['enemy']['ai']['text'] = script([block(ALWAYS, act)])
+        elif text is None:
             d['enemy']['enemyId'] = 255
         else:
             d['enemy']['ai']['text'] = text

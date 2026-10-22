@@ -86,3 +86,6 @@ ChronoForgeCoreTests.CTSamplePatchTests/testUnchangedImportRebuildsIdentical    
 ChronoForgeCoreTests.CTSamplePatchTests/testReplacedAndAppendedSamplesPlayInAComposedSong       skip      # local ROM
 ChronoForgeCoreTests.CTSamplePatchTests/testStudioBudgetAndRackAreTheBuilds                     skip      # local ROM
 ChronoForgeCoreTests.CTSamplePatchTests/testOverBudgetEditsAreRefused                           skip      # local ROM
+ChronoForgeCoreTests.CTEnemiesTests/testImportRecordsScriptFactsAndSharedScripts                skip      # local ROM
+ChronoForgeCoreTests.CTEnemiesTests/testEditedScriptsGoInPlaceOrIntoBankCCPadding               skip      # local ROM
+ChronoForgeCoreTests.CTEnemiesTests/testBuilderScriptRefusals                                   skip      # local ROM

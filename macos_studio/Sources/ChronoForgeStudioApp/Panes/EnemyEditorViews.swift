@@ -1,6 +1,7 @@
 // EnemyEditorViews.swift — the Characters pane's Enemies tab: the enemy list,
-// a stat editor with affinities and rewards, the attack record and the AI
-// script as text (docs/enemies.md), and the import and ROM-build settings.
+// a stat editor with affinities and rewards, the attack record, the AI script
+// as editable text with its parse errors and bank $CC budget
+// (docs/enemies.md), and the import and ROM-build settings.
 import SwiftUI
 import ChronoForgeCore
 
@@ -45,7 +46,7 @@ extension ProjectStore {
 struct EnemiesPane: View {
     let store: ProjectStore
     let project: CTProject
-    @State private var selection: String?
+    @State private var selection: String? = LaunchArguments.value("--select")   // e.g. --select enemy_098
     @State private var importROM = false
     @State private var filter = ""
     @State private var revision = 0          // re-seeds the editor after an import
@@ -109,7 +110,7 @@ struct EnemiesPane: View {
 }
 
 /// One enemy's game data: the fields `rom build` writes (stats, affinities,
-/// status bytes, rewards, the name) and, read-only, its attack record and AI script.
+/// status bytes, rewards, the name, the AI script) and, read-only, its attack record.
 private struct EnemyRecordEditor: View {
     @Binding var character: CharacterDef
     let store: ProjectStore
@@ -336,25 +337,82 @@ private struct EnemyRecordEditor: View {
         return out
     }
 
+    private var scriptText: Binding<String> {
+        Binding(get: { character.enemy?.ai?.text ?? "" },
+                set: { character.enemy?.ai?.text = $0; character.enemy?.ai?.error = nil })
+    }
+
+    /// The script as `rom build` would write it: its bytes, or the parse error.
+    private func assembled(_ text: String) -> Result<[UInt8], Error> {
+        Result { try CTEnemyAIPatch.assemble(text: text, lengths: CTEnemyAIPatch.listedLengths) }
+    }
+
+    /// Bank $CC's padding the listed scripts take with this enemy's edit.
+    private var budget: (used: Int, unknown: [String], broken: [String]) {
+        var p = project
+        p.characters[character.id] = character
+        return CTEnemyAIPatch.budget(p)
+    }
+
+    private func planText(_ s: CharacterDef.Enemy.Script, _ bytes: [UInt8]) -> String {
+        switch CTEnemyAIPatch.plan(s, bytes: bytes) {
+        case .unchanged: return "unchanged: nothing is written"
+        case .inPlace: return "written in place (\(bytes.count) of its \(s.size ?? 0) bytes)"
+        case .relocated:
+            let why = (s.shared ?? []).isEmpty ? "it grows past its \(s.size ?? 0) bytes"
+                : "enemy " + (s.shared ?? []).map(String.init).joined(separator: ", ") + " shares its bytes"
+            return "moved to bank $CC's padding (\(why)); its pointer is rewritten"
+        case .unknown: return "reimport the ROM's enemies to see where it goes"
+        }
+    }
+
     private func scriptBox(_ e: CharacterDef.Enemy) -> some View {
-        GroupBox("AI script (read-only)") {
-            if let s = e.ai, let text = s.text {
+        GroupBox("AI script") {
+            if let s = e.ai, s.text != nil {
                 VStack(alignment: .leading, spacing: 6) {
+                    let text = s.text ?? ""
                     let techs = techIDs(text)
                     Text("At \(s.address)" + (techs.isEmpty ? "" : "; enemy techs " + techs.joined(separator: ", ")))
                         .font(.caption).foregroundStyle(.secondary)
-                    ScrollView([.horizontal, .vertical]) {
-                        Text(text).font(.caption.monospaced()).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    TextEditor(text: scriptText)
+                        .font(.caption.monospaced())
+                        .autocorrectionDisabled()
+                        .frame(minHeight: 200, maxHeight: 360)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(.separator))
+                    switch assembled(text) {
+                    case .success(let bytes):
+                        HStack {
+                            Label("\(bytes.count) bytes; " + planText(s, bytes), systemImage: "checkmark.circle")
+                                .foregroundStyle(.secondary).font(.caption)
+                            Spacer()
+                            Button("Tidy") {
+                                if let parts = try? CTEnemyAI.parse(bytes, at: 0, lengths: CTEnemyAIPatch.listedLengths).parts {
+                                    scriptText.wrappedValue = CTEnemyAI.format(parts)
+                                }
+                            }
+                            .help("Rewrite the text with every record's names and labels")
+                        }
+                    case .failure(let error):
+                        Label("\(error)", systemImage: "exclamationmark.triangle").foregroundStyle(.orange).font(.caption)
                     }
-                    .frame(minHeight: 160, maxHeight: 320)
+                    let b = budget
+                    let over = b.used > CTEnemyAIPatch.freeBytes
+                    Label("Bank $CC padding: \(b.used) of \(CTEnemyAIPatch.freeBytes) bytes used by moved scripts" +
+                          (b.unknown.isEmpty ? "" : "; \(b.unknown.count) scripts imported without sizes (reimport)"),
+                          systemImage: over ? "exclamationmark.triangle" : "internaldrive")
+                        .foregroundStyle(over ? .orange : .secondary).font(.caption)
+                    ProgressView(value: Double(min(b.used, CTEnemyAIPatch.freeBytes)), total: Double(CTEnemyAIPatch.freeBytes))
+                        .tint(over ? .orange : .accentColor)
                 }
             } else if let s = e.ai {
-                Text("At \(s.address): \(s.error ?? "not decoded")").font(.caption).foregroundStyle(.orange)
+                Text("At \(s.address): \(s.error ?? "not decoded"). Its pointer is kept as it is.")
+                    .font(.caption).foregroundStyle(.orange)
             } else {
                 Text("No AI script (reimport the ROM's enemies).").font(.caption).foregroundStyle(.secondary)
             }
-            Text("Tests and actions are named only where the battle code proves them; other bytes show as b1=$hh.")
+            Text("Write to ROM writes an edited script back: in place when it fits and no other enemy shares it, " +
+                 "else into bank $CC's padding. Tests and actions are named only where the battle code proves them; " +
+                 "other bytes show as b1=$hh.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

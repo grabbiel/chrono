@@ -37,7 +37,8 @@ sheet tiles that changed, its animation rows and colours 1–12. See
 
 `enemies` names `characters/<id>.json` files with an `enemy` record. For each
 one, the builder writes the stat record, the reward record and (when changed)
-the name over the base ROM's enemy `enemy.enemyId`. See [enemies](enemies.md).
+the name over the base ROM's enemy `enemy.enemyId`, and its AI script when
+`enemy.ai.text` differs from the base ROM's script. See [enemies](enemies.md).
 `chronoforge enemies import` lists all 255. Studio sets the list with
 **Characters → Enemies → Write to ROM**.
 
@@ -123,8 +124,15 @@ ranges, the bit rules, the tileset a map names against its location record).
 8. With `rom.enemies`, writes each enemy's stat and reward records field by
    field in place (`$CC:4700` + id × 23, `$CC:5E00` + id × 7). It writes the
    name (`$CC:6500` + id × 11) only when it differs from the base ROM's. All of
-   this happens after the checks in [enemies](enemies.md). AI scripts, attack
-   and tech records are never written.
+   this happens after the checks in [enemies](enemies.md). Attack and tech
+   records are never written.
+   Right after the maps and tilesets (before anything else takes free space),
+   it writes each listed enemy's edited AI script: in place when it fits the
+   base script's span and no other script overlaps that span; else into bank
+   `$CC`'s padding (`$CC:FC4F`–`$CC:FFFF`, 945 bytes), with the pointer
+   (`$CC:8B08` + id × 2) rewritten. An unchanged script writes nothing; enemy
+   127's unparsed pointer is kept. See
+   [enemies](enemies.md#writing-scripts-back).
 9. With `rom.sprites`, writes each playable character's set in place: the
    40-byte frame records, each changed tile (re-encoded from the sheet), the
    frame-id and duration rows and colours 1–12, after the checks and the
@@ -212,7 +220,11 @@ With enemies, the report adds `enemies`. It gives each listed enemy's file id,
 enemy id, stat-record address, the record written and the name written (absent
 when the name was left as it was). Each changed field is one write, such as
 `enemy enemy_005 magic` or `enemy enemy_005 name`. The CLI prints how many
-enemies are listed and which ones changed.
+enemies are listed and which ones changed. A written AI script adds an
+`enemyScripts` entry (file id, enemy id, address, size, `placement` `original`
+or `free`, the base address `from`, the bytes' hash and the text as the parser
+reads it back) and the writes `enemy enemy_098 AI script` and
+`BattleRom_AiScriptPtrs[98]`; a moved script is also in `relocations`.
 
 With sprites, the report adds `sprites`: per listed sprite its set, the parts
 written (`tiles`, `frames`, `animations`, `palette`), the block addresses and
@@ -321,6 +333,23 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
     built ROM in ChronoRET's interpreter, give the edited values.
 
   Five damaged copies are rejected and four bad edits are refused.
+
+- **Enemy AI scripts** (`CTEnemiesTests`, `macos_studio/tools/verify_enemy_ai_build.py`):
+  importing all 255 enemies with every script as text and building gives the
+  clean ROM with no write. Three invented scripts (one in place, enemy 98's
+  moved off the bytes it shares with enemy 97, one that grows) write exactly
+  their spans and two pointers. Its checks:
+  - `ct_rom_check.py` checks it: only reported pointers and spans change, each
+    script re-decodes to the reported text and hash, a script in place stays
+    in its own unshared span, a moved one in bank `$CC`'s padding, and every
+    other script is unchanged;
+  - `chronoforge enemies verify` accepts it (and rejects the clean ROM);
+  - the ROM's own `BattleAi_RunMainPart` and `BattleAi_FindReactPart`, run on
+    the built ROM in ChronoRET's interpreter, read the edited enemies' tests
+    and choose the project script's block, action and target; enemy 97 and
+    the other neighbours behave as on the clean ROM (27 runs).
+
+  Six damaged copies are rejected and eleven bad scripts are refused.
 
 - **Sprites** (`CTSpritePatchTests`, `macos_studio/tools/verify_sprite_build.py`):
   importing the seven playable characters' sets and building gives the clean

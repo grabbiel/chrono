@@ -222,6 +222,11 @@ if [ -f macos_studio/Package.swift ]; then
   $PY macos_studio/tools/verify_enemy_build.py >/tmp/verify_enemy_build.log 2>&1
   RC=$?
   note "Enemy write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_enemy_build.log | tail -1) loader runs on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Enemy AI scripts: in place, moved off a shared script and grown; ct_rom_check's script zone and the
+  # ROM's BattleAi_RunMainPart / FindReactPart on the built ROM (ChronoRET's interpreter).
+  $PY macos_studio/tools/verify_enemy_ai_build.py >/tmp/verify_enemy_ai_build.log 2>&1
+  RC=$?
+  note "Enemy AI write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_enemy_ai_build.log | tail -1) script-reader runs on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   # Dialogue box: font, window, layout and pacing claims (TextWin_DrawGlyph on 608 glyphs, the window
   # routines and Field_Unk1F87 on real and synthetic messages in ChronoRET's interpreter); the CLI agrees.
   $PY re_workspace/tools/ct_dialogue.py check --run >/tmp/verify_dialogue.log 2>&1
