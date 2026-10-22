@@ -413,7 +413,7 @@ func cmdMusicModel(_ args: [String]) -> Int32 {
                 print(line + "}")
             }
             let total = only.map { o in songs.filter { o.contains($0.index) }.count } ?? songs.count
-            print("\(exact)/\(total) songs byte-exact through the model" + (driverSteps != nil ? "; \(passed)/\(checked) match the driver" : ""))
+            print("\(exact) of \(total) songs byte-exact through the model" + (driverSteps != nil ? "; \(passed) of \(checked) match the driver" : ""))
             return exact == total && failures == 0 ? 0 : 1
         }
     } catch {

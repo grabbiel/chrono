@@ -9,14 +9,14 @@ public enum CTSongDriverTrace {
     /// Spc_StepTracks itself: entered once per main-loop pass.
     static let passPC: UInt16 = 0x0377
 
-    public struct KeyOn: Codable, Equatable, Sendable {
+    public struct KeyOn: Encodable, Equatable, Sendable {
         /// The song step whose notes these are (the KON shadow is written at
         /// the top of the next pass, before that pass can step again).
         public let step: Int
         public let voices: UInt8
     }
 
-    public struct Trace: Codable, Sendable {
+    public struct Trace: Encodable, Sendable {
         public let format = "ct-song-driver-trace/1"
         public let song: Int
         /// The pass (0-based, from the stream's start) each step happened in.
@@ -75,7 +75,7 @@ public enum CTSongDriverTrace {
                      keyOns: keyOns.filter { $0.step < steps }, firstStepCycles: firstStep)
     }
 
-    public struct Comparison: Codable, Sendable {
+    public struct Comparison: Encodable, Sendable {
         public let format = "ct-song-model-check/1"
         public let song: Int
         public let steps: Int

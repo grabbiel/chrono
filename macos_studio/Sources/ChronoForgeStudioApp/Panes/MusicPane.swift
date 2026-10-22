@@ -1,5 +1,7 @@
-// MusicPane.swift — CT song sequences (audio/songs/*.ctsong, ct-song/1) and
-// .akao.json tracker scores.
+// MusicPane.swift — CT song sequences (audio/songs/*.ctsong, ct-song/1) as a
+// listing, tracker, piano roll, instrument rack and echo designer, and
+// .akao.json tracker scores. `--song <name>` and `--music-view <view>` at
+// launch open a listing on a view (Listing, Tracker, Piano Roll, Instruments, Echo).
 import SwiftUI
 import ChronoForgeCore
 import UniformTypeIdentifiers
@@ -61,7 +63,10 @@ private struct SongListingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .onAppear { listings = store.songListings() }
+        .onAppear {
+            listings = store.songListings()
+            if selection == nil, let song = LaunchArguments.value("--song") { selection = listings.first { $0.hasSuffix("/" + song) } }
+        }
         .fileImporter(isPresented: $pickROM, allowedContentTypes: [.data], allowsMultipleSelection: false) { picked in
             guard case .success(let urls) = picked, let url = urls.first else { return }
             if let rel = store.importSong(rom: url, song: importIndex) {
@@ -72,6 +77,11 @@ private struct SongListingsView: View {
     }
 }
 
+enum SongView: String, CaseIterable, Identifiable {
+    case listing = "Listing", tracker = "Tracker", pianoRoll = "Piano Roll", instruments = "Instruments", echo = "Echo"
+    var id: String { rawValue }
+}
+
 private struct SongEditor: View {
     let store: ProjectStore
     let project: CTProject
@@ -80,6 +90,28 @@ private struct SongEditor: View {
     @State private var saved = ""
     @State private var target = 0
     @State private var builds = false
+    @State private var view = LaunchArguments.value("--music-view").flatMap { v in
+        SongView.allCases.first { $0.rawValue.lowercased() == v.lowercased() }
+    } ?? .listing
+    @State private var model = SongModel()
+    @State private var selectedNote: String?
+    @State private var track = 0
+    @Environment(\.undoManager) private var undoManager
+
+    private var playingTitle: String { String(format: "%@ as song $%02X", (rel as NSString).lastPathComponent, target) }
+
+    /// The step playing now, while this listing plays.
+    private var cursor: Int? {
+        guard store.audio.nowPlaying == playingTitle else { return nil }
+        return model.step(atSeconds: store.audio.status.seconds)
+    }
+
+    private var editing: SongEditing {
+        SongEditing(store: store, rel: rel, model: model, undoManager: undoManager) { [self] new in
+            text = new
+            saved = new
+        }
+    }
 
     private var assembled: Result<(song: CTSong, tables: CTSongTables), Error> {
         Result {
@@ -95,9 +127,7 @@ private struct SongEditor: View {
                 Spacer()
                 Toggle("Build into song", isOn: $builds).toggleStyle(.checkbox)
                 Stepper(String(format: "$%02X", target), value: $target, in: 0...(CTSongISA.romSongCount - 1)).disabled(!builds)
-                Button("Play", systemImage: "play.fill") {
-                    store.playListing(text, replacing: target, title: (rel as NSString).lastPathComponent)
-                }
+                Button("Play", systemImage: "play.fill", action: play)
                 .help(String(format: "Play this listing (as edited) in place of song $%02X", target))
                 .keyboardShortcut("p", modifiers: .command)
                 .disabled((try? assembled.get()) == nil)
@@ -109,16 +139,43 @@ private struct SongEditor: View {
                 .disabled(text == saved && builds == (current != nil) && (current ?? target) == target)
             }
             summary
-            TextEditor(text: $text)
-                .font(.system(.body, design: .monospaced))
-                .autocorrectionDisabled()
+            Picker("", selection: $view) {
+                ForEach(SongView.allCases) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 520)
+            switch view {
+            case .listing:
+                TextEditor(text: $text)
+                    .font(.system(.body, design: .monospaced))
+                    .autocorrectionDisabled()
+            case .tracker:
+                TrackerGridView(model: model, edit: editing, selected: $selectedNote, cursor: cursor)
+                Divider()
+                NoteInspector(model: model, edit: editing, selected: $selectedNote, track: model.note(selectedNote)?.track ?? track)
+            case .pianoRoll:
+                PianoRollView(model: model, edit: editing, selected: $selectedNote, track: $track, cursor: cursor)
+                Divider()
+                NoteInspector(model: model, edit: editing, selected: $selectedNote, track: track)
+            case .instruments:
+                InstrumentRackView(store: store, model: model, edit: editing, target: target)
+            case .echo:
+                EchoDesignerView(store: store, model: model, edit: editing, play: play)
+            }
         }
         .padding()
         .onAppear {
             text = store.readText(rel) ?? ""
             saved = text
             if let current { builds = true; target = current }
+            model.update(text)
+            if let first = model.timeline?.tracks.first(where: { $0.stop != "none" }) { track = first.index }
         }
+        .onChange(of: text) { _, new in model.update(new) }
+        .onChange(of: selectedNote) { _, id in if let n = model.note(id) { track = n.track } }
+    }
+
+    /// Play the listing as edited (saved or not) in place of the target song.
+    private func play() {
+        store.playListing(text, replacing: target, title: (rel as NSString).lastPathComponent)
     }
 
     private func tableSummary(_ t: CTSongTables) -> String {

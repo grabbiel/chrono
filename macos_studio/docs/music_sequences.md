@@ -193,7 +193,10 @@ across the bank boundary.
 - The listing is the driver's data, not audio. Playback runs that data on the
   emulated driver, which is not bit-exact with other players
   ([spc700.md](spc700.md)).
-- Loop counts and `branch` conditions are not modelled.
+- The disassembler does not follow loop counts or `branch` conditions. The
+  event model in [music_tracker.md](music_tracker.md) does: it plays each track
+  step by step as the driver does, and the Studio's tracker and piano roll edit
+  listings through it.
 - Samples themselves (BRR data, loop points, tuning and ADSR words) are not
   written; a song can only list the ROM's 62 samples.
 - The effects block at `$2F00` (sound-effect tracks, reached by `sfx_track1/2`)

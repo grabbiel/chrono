@@ -169,6 +169,12 @@ public struct CTSongInstrument: Equatable, Sendable, Identifiable {
         }
     }
 
+    /// Where a song load puts its first sample: after boot block 2 at $4700
+    /// (Audio_Boot); samples follow one another up to the echo buffer.
+    public static func sampleAreaStart(rom: [UInt8]) -> Int {
+        (0x4700 + (Int(rom[0x0740B4]) | Int(rom[0x0740B5]) << 8)) & 0xFFFF
+    }
+
     /// The pitch factor the tuning gives (Spc_NotePitch, fine tune 0):
     /// 1 + t / 256 for a low byte t below $80, t / 256 from $80 up, and
     /// the high byte h adds about h / 65536 of it.
