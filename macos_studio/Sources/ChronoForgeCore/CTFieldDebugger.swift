@@ -57,13 +57,14 @@ public final class CTFieldDebugger {
         }
     }
 
-    /// One frame; the breakpoint it hit, if any.
+    /// One frame; the breakpoint it (or the load before it) hit, if any.
     @discardableResult
     public func step(input: CTFieldInput) throws -> Hit? {
-        pendingHit = nil
         try field.step(input: input)
-        if let h = pendingHit { lastHit = h }
-        return pendingHit
+        let hit = pendingHit
+        pendingHit = nil
+        if let hit { lastHit = hit }
+        return hit
     }
 
     /// Up to `frames` frames of `script` (frame numbers from the field's
