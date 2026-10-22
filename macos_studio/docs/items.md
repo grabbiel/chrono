@@ -219,7 +219,8 @@ With a text profile, it also compiles each description.
   - the flags, with the evidenced bits named;
   - equip by character, the boost, and the element bonus (four element bits and the resistance added);
   - the category's record B fields; the accessory's status bits and battle flags are shown by bit number;
-  - target mode, name and description;
+  - target mode, name and description, with the description's live dictionary analysis
+    (bytes, raw bytes, entries used; [text codec](text_codec.md)) when the project has a text profile;
 - **Preview**: the selected item in an imported character's slot, through `CTEquipStats`;
 - **Stat boosts**: ItemBoosts, a toggle per stat in the stat order and the amount.
 

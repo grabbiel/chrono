@@ -62,6 +62,34 @@ size, bytes saved by the dictionary and the canonical decoded form.
 Those offsets are local to that file; pointer tables and ROM placement belong to
 the not-yet-implemented `.sfc` builder.
 
+## Compression analyzer
+
+`CTTextAnalyzer` (`chronoforge text analyze`) reports what the dictionary
+saves. It compiles each message the way a build does (`compileMessage`) and
+then reads those bytes back, so it never changes the codec's output. For each
+message it reports:
+- its size compiled without the dictionary (raw) and with it;
+- the bytes saved;
+- every dictionary entry the packer chose, with its uses and savings
+  (uses × (length − 1));
+- the entries that no message uses, including the three the packer skips.
+
+For a single message it also lists the runs: glyphs, `[$XX entry]` and control
+bytes. The raw size counts explicit `[…]` and `{dict XX}` references as one
+byte each, so for plain text the savings add up exactly to raw − compressed.
+
+```
+chronoforge text analyze <message.txt | dialogue.json> --profile profile.json [--json]
+```
+
+A `.json` input is a `strings/dialogue.json` (every string); any other file is
+one message. `--json` prints `ct-text-analysis/1`. In Studio, the item
+description field shows the same analysis as you type, when the project has a
+text profile. Tests:
+- `CTTextAnalyzerTests` on a synthetic dictionary (runs, sums, ordering, the
+  codec's bytes unchanged);
+- with the ROM: all 242 item descriptions recompile to their ROM sizes.
+
 ## Verification
 
 ```sh

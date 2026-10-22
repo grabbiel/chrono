@@ -100,6 +100,11 @@ public struct CTTextCodec: Sendable {
         self.candidates = candidates
     }
 
+    /// The dictionary entries the packer may use ($21 + index), glyph bytes each (CTTextAnalyzer).
+    public var dictionaryEntries: [[UInt8]] { Array(dictionary.prefix(127)) }
+    /// Whether the packer skips entry `index` (CTTextAnalyzer reports it as never chosen).
+    public static func isSkippedEntry(_ index: Int) -> Bool { skippedEntries.contains(index) }
+
     public struct Analysis: Equatable, Sendable {
         public let bytes: [UInt8]
         public let uncompressedBytes: Int

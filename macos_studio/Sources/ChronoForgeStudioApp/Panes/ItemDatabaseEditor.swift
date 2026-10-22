@@ -225,6 +225,12 @@ private struct ItemForm: View {
                     .lineLimit(2...4).frame(maxWidth: 420)
                     .help("Dialogue codec text; the builder repacks the description table only when a text changes")
             }
+            if let profile = project.textProfile, let text = item.description {
+                GridRow {
+                    Text("")
+                    DescriptionAnalysis(text: text, profile: profile)
+                }
+            }
             if category < 4 { EquipPreview(item: item, tables: tables, project: project) }
         }
     }
@@ -392,6 +398,26 @@ private struct ElementBonus: View {
             }
             .help("BattleSys_UnkCF69 adds the low nibble to the resistance of each element bit set")
         }
+    }
+}
+
+/// The description's dictionary compression as the builder compiles it (CTTextAnalyzer), live.
+private struct DescriptionAnalysis: View {
+    let text: String
+    let profile: CTTextProfile
+
+    var body: some View {
+        Group {
+            do {
+                let r = try CTTextAnalyzer.analyze([text], codec: CTTextCodec(profile: profile))
+                let runs = (r.segments ?? []).filter { $0.kind == "dictionary" }.map { "[\($0.text)]" }.joined(separator: " ")
+                return Text("\(r.compressedBytes) bytes (\(r.rawBytes) raw, \(r.savedBytes) saved)" + (runs.isEmpty ? "" : ": " + runs))
+                    .foregroundStyle(.secondary)
+            } catch {
+                return Text(String(describing: error)).foregroundStyle(.orange)
+            }
+        }
+        .font(.caption).lineLimit(2)
     }
 }
 

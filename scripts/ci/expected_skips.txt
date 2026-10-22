@@ -57,3 +57,4 @@ ChronoForgeCoreTests.CTItemsTests/testBuilderItemRefusals                       
 ChronoForgeCoreTests.CTItemsTests/testEditedItemsWriteOnlyTheirBytesAndReadBack                 skip      # local ROM
 ChronoForgeCoreTests.CTItemsTests/testEquipStatsOnTheImportedTables                             skip      # local ROM
 ChronoForgeCoreTests.CTItemsTests/testImportThenBuildIsIdentical                                skip      # local ROM
+ChronoForgeCoreTests.CTTextAnalyzerTests/testItemDescriptionsAnalyzeToTheirROMSize              skip      # local ROM
