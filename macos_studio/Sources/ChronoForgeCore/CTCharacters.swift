@@ -28,7 +28,8 @@ public enum CTCharacterROM {
     public static let slotOffset = ["helmet": 0x27, "armor": 0x28, "weapon": 0x29, "accessory": 0x2A]
 
     /// Every field the builder writes: (offset, size, name). Other bytes of a
-    /// record (+$01-$02, +$19-$26, +$36-$4F) are never written.
+    /// record (+$01-$02, +$19-$26, +$36-$4F) are never written by a character
+    /// build; a tech build sets bit 4 of +$02 (all singles learned, CTTechROM).
     public static let writableFields: [(offset: Int, size: Int, name: String)] = [
         (0x03, 2, "hp"), (0x05, 2, "max HP"), (0x07, 2, "mp"), (0x09, 2, "max MP"),
         (0x0B, 1, "power"), (0x0C, 1, "stamina"), (0x0D, 1, "speed"), (0x0E, 1, "magic"), (0x0F, 1, "hit"),

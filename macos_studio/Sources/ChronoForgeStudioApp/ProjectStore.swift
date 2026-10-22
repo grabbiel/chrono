@@ -115,6 +115,24 @@ public final class ProjectStore {
     }
     public func updateTech(_ t: TechDef) { project?.techs[t.id] = t; save() }
 
+    /// Saves tech_system.json (the Tech & Synergy Matrix's Apply).
+    public func updateTechSystem(_ s: TechSystemDef) { project?.techSystem = s; save() }
+
+    /// The ROM's tech tables into tech_system.json (CTTechROM.importTechs); sets `rom.techs`.
+    public func importTechs(_ url: URL) {
+        guard var candidate = project else { return }
+        do {
+            try CTTechROM.importTechs(rom: [UInt8](Data(contentsOf: url)), into: &candidate)
+            try candidate.save()
+            project = candidate
+            statusMessage = "imported the tech tables from the ROM"
+            statusIsError = false
+        } catch {
+            statusMessage = "tech import failed: \(error)"
+            statusIsError = true
+        }
+    }
+
     /// The ROM's seven character records, growth rows, experience table and
     /// equipment into the project (CTCharacterROM.importCharacters).
     public func importCharacters(_ url: URL) {
@@ -136,7 +154,7 @@ public final class ProjectStore {
         guard var candidate = project else { return false }
         var spec = candidate.project.rom ?? Project.ROMBuild()
         spec.characters = ids
-        candidate.project.rom = spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty ? nil : spec
+        candidate.project.rom = Self.isEmpty(spec) ? nil : spec
         do {
             try candidate.save()
             project = candidate
@@ -150,13 +168,38 @@ public final class ProjectStore {
         }
     }
 
+    /// Saves whether `rom build` writes tech_system.json's tables (`rom.techs`).
+    public func updateROMTechs(_ on: Bool) -> Bool {
+        guard var candidate = project else { return false }
+        var spec = candidate.project.rom ?? Project.ROMBuild()
+        spec.techs = on
+        candidate.project.rom = Self.isEmpty(spec) ? nil : spec
+        do {
+            try candidate.save()
+            project = candidate
+            statusMessage = "saved ROM build settings"
+            statusIsError = false
+            return true
+        } catch {
+            statusMessage = "save failed: \(error)"
+            statusIsError = true
+            return false
+        }
+    }
+
+    static func isEmpty(_ spec: Project.ROMBuild) -> Bool {
+        spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs
+    }
+
     /// Saves the project's `rom` section (nil: no packs or songs). Its
-    /// `characters` are kept: the Characters pane sets them (updateROMCharacters).
+    /// `characters` and `techs` are kept: the Characters pane sets them
+    /// (updateROMCharacters, updateROMTechs).
     public func updateROMBuild(_ spec: Project.ROMBuild?) -> Bool {
         guard var candidate = project else { return false }
         var merged = spec ?? Project.ROMBuild()
         merged.characters = candidate.project.rom?.characters ?? []
-        candidate.project.rom = merged.eventPacks.isEmpty && merged.songs.isEmpty && merged.characters.isEmpty ? nil : merged
+        merged.techs = candidate.project.rom?.techs ?? false
+        candidate.project.rom = Self.isEmpty(merged) ? nil : merged
         do {
             try candidate.save()
             project = candidate
@@ -189,6 +232,10 @@ public final class ProjectStore {
             lines += (report.characters ?? []).map { c in
                 let fields = report.writes.filter { $0.what.hasPrefix("character \(c.id) ") }.count
                 return "character \(c.id): record \(c.charId) at \(c.address), \(fields) field(s) changed"
+            }
+            if report.techs != nil {
+                let changed = report.writes.filter { CTTechROM.isTechWrite($0.what) }
+                lines.append("techs: \(changed.count) table write(s) changed")
             }
             lines.append(String(format: "checksum $%04X; %d bytes of free space left", report.checksum, report.freeBytesLeft))
             lines.append("report: \(reportURL.lastPathComponent)")

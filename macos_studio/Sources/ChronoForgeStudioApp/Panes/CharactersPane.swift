@@ -12,8 +12,42 @@ struct CharactersPane: View {
     @State private var pickBase = false
     @State private var buildResult = ""
     @State private var revision = 0          // re-seeds the editor after an import
+    @State private var techMatrix = false    // the Tech & Synergy Matrix tab
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $techMatrix) {
+                Text("Records").tag(false)
+                Text("Tech & Synergy Matrix").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 360)
+            .padding(6)
+            if techMatrix {
+                TechMatrixPane(store: store, project: project)
+            } else {
+                records
+            }
+        }
+        .toolbar {
+            Button("Build ROM…") { pickBase = true }
+                .disabled((project.project.rom?.characters ?? []).isEmpty && !(project.project.rom?.techs ?? false))
+        }
+        .fileImporter(isPresented: $pickBase, allowedContentTypes: [.data], allowsMultipleSelection: false) { picked in
+            guard case .success(let urls) = picked, let base = urls.first else { return }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "\(project.project.name).sfc"
+            panel.allowedContentTypes = [UTType(filenameExtension: "sfc") ?? .data]
+            guard panel.runModal() == .OK, let output = panel.url else { return }
+            buildResult = store.buildROM(base: base, output: output) ?? store.statusMessage
+        }
+        .alert("ROM build", isPresented: Binding(get: { !buildResult.isEmpty }, set: { if !$0 { buildResult = "" } })) {
+            Button("OK") { buildResult = "" }
+        } message: { Text(buildResult) }
+    }
+
+    private var records: some View {
         EntityListView(title: "Characters", ids: project.characters.keys.sorted(),
                        selection: $selection) { id in
             if let c = project.characters[id] {
@@ -43,8 +77,6 @@ struct CharactersPane: View {
         }
         .toolbar {
             Button(project.party == nil ? "Import Characters from ROM…" : "Reimport Characters from ROM…") { importROM = true }
-            Button("Build ROM…") { pickBase = true }
-                .disabled((project.project.rom?.characters ?? []).isEmpty)
         }
         .fileImporter(isPresented: $importROM, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             switch result {
@@ -54,17 +86,6 @@ struct CharactersPane: View {
                 store.statusMessage = "ROM selection failed: \(error)"; store.statusIsError = true
             }
         }
-        .fileImporter(isPresented: $pickBase, allowedContentTypes: [.data], allowsMultipleSelection: false) { picked in
-            guard case .success(let urls) = picked, let base = urls.first else { return }
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = "\(project.project.name).sfc"
-            panel.allowedContentTypes = [UTType(filenameExtension: "sfc") ?? .data]
-            guard panel.runModal() == .OK, let output = panel.url else { return }
-            buildResult = store.buildROM(base: base, output: output) ?? store.statusMessage
-        }
-        .alert("ROM build", isPresented: Binding(get: { !buildResult.isEmpty }, set: { if !$0 { buildResult = "" } })) {
-            Button("OK") { buildResult = "" }
-        } message: { Text(buildResult) }
     }
 }
 
@@ -149,13 +170,15 @@ private struct PCRecordEditor: View {
         statsBox(r)
         if let growth { rowsBox(growth) }
         equipmentBox(r)
-        GroupBox("Tech points (partially decoded)") {
+        GroupBox("Tech points") {
             Grid {
                 GridRow {
                     StatField("Total", record.techPoints)
                     StatField("To next tech", record.techPointsToNext)
                 }
             }
+            Text("A battle's award adds to the total and counts down to the next single (Tech & Synergy Matrix → Tech points).")
+                .font(.caption).foregroundStyle(.secondary)
         }
         if let g = character.growth, let table = project.party?.expToLevel {
             CurveView(record: r, growth: g, expToLevel: table)

@@ -109,18 +109,19 @@ public enum CTROMBuilder {
         public let messageTables: [MessageTable]
         public let songs: [Song]
         public let characters: [Character]?           // absent: none requested
+        public let techs: TechSystemDef?               // absent: not requested
         public let writes: [Write]
         public let freeBytesLeft: Int
     }
 
     // MARK: Project entry point
 
-    /// Builds the project's `rom.eventPacks`, `rom.songs` and `rom.characters`
+    /// Builds the project's `rom.eventPacks`, `rom.songs`, `rom.characters` and `rom.techs`
     /// into a copy of `base` (the pinned US 1.0 ROM; a 512-byte copier header is dropped).
     public static func build(base: [UInt8], project: CTProject) throws -> (rom: [UInt8], report: Report) {
         guard let spec = project.project.rom,
-              !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty) else {
-            throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs or rom.characters to build")
+              !(spec.eventPacks.isEmpty && spec.songs.isEmpty && spec.characters.isEmpty && !spec.techs) else {
+            throw CTROMBuildError("project.json has no rom.eventPacks, rom.songs, rom.characters or rom.techs to build")
         }
         func inside(_ path: String) -> Bool { !path.hasPrefix("/") && !path.split(separator: "/").contains("..") }
         var requests: [Request] = []
@@ -165,14 +166,19 @@ public enum CTROMBuilder {
             guard let record = c.pc else { throw CTROMBuildError("character \(id) has no pc record; import the ROM's characters") }
             return CharacterRequest(id: id, record: record, growth: c.growth)
         }
-        return try build(base: base, requests: requests, songs: songs, characters: characters,
+        var techs: TechSystemDef?
+        if spec.techs {
+            guard let system = project.techSystem else { throw CTROMBuildError("rom.techs needs tech_system.json; import the ROM's techs") }
+            techs = system
+        }
+        return try build(base: base, requests: requests, songs: songs, characters: characters, techs: techs,
                          textProfile: project.textProfile)
     }
 
     // MARK: Builder
 
     public static func build(base input: [UInt8], requests: [Request], songs songRequests: [SongRequest] = [],
-                             characters characterRequests: [CharacterRequest] = [],
+                             characters characterRequests: [CharacterRequest] = [], techs: TechSystemDef? = nil,
                              textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
@@ -204,6 +210,10 @@ public enum CTROMBuilder {
             guard seenCharacters.insert(c.record.charId).inserted else {
                 throw CTROMBuildError("character \(c.id): record \(c.record.charId) is built twice")
             }
+        }
+        if let techs {
+            try CTTechROM.check(techs)
+            try CTTechROM.check(techs, against: CTTechROM.decode(rom: rom, codec: nil))
         }
 
         // Spans of the streams still in use, and those the new packs free.
@@ -370,6 +380,11 @@ public enum CTROMBuilder {
                                     growth: c.growth))
         }
 
+        // Techs: each writable field in place over the base ROM's tables (docs/techs.md).
+        if let techs {
+            for w in CTTechROM.writes(techs, rom: base) { write(w.bytes, at: w.pc, w.what) }
+        }
+
         let sum = checksum(rom)
         write([UInt8(~sum & 0xFF), UInt8(~sum >> 8 & 0xFF), UInt8(sum & 0xFF), UInt8(sum >> 8)],
               at: CTROMLayout.complementPC, "checksum")
@@ -378,7 +393,7 @@ public enum CTROMBuilder {
         return (rom, Report(schema: "ct-rom-build/1", baseSHA256: CTEventPack.sha256(base),
                             outputSHA256: CTEventPack.sha256(rom), checksum: sum, packs: packs,
                             messageTables: tables, songs: songs, characters: characters.isEmpty ? nil : characters,
-                            writes: changed, freeBytesLeft: space.total))
+                            techs: techs, writes: changed, freeBytesLeft: space.total))
     }
 
     /// Checks LocLoad_CheckEvtData makes after unpacking, and that the pack

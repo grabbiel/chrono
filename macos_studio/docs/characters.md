@@ -39,7 +39,8 @@ The level-up fields also pass a fourth check: the ROM's own routine is executed.
 | Offset | Size | Field | Status | Main evidence |
 |---|---|---|---|---|
 | +$00 | 1 | char id | verified | Indexes the growth rows (`BattleSys_GrowHpMp`, `BattleSys_LevelUpStep`), `BankFF_CharBits` (`Menu_CanEquip`) and the attack formula. Record n holds n. Never written. |
-| +$01 | 2 | — | undecoded | Never written. |
+| +$01 | 1 | — | undecoded | Never written. |
+| +$02 | 1 | flags | partial | Bit 4 = all singles learned (`Battle_Unk2FAllTechs`; [techs](techs.md)). A character build never writes it; a tech build sets bit 4 only. |
 | +$03 | 2 | HP | verified | Current HP (`BattlerStats.CurHp`). Equals max HP in the ROM. |
 | +$05 | 2 | max HP | verified | `GrowHpMp` adds the gain, cap 999. |
 | +$07 | 2 | MP | verified | Current MP. |
@@ -53,14 +54,14 @@ The level-up fields also pass a fourth check: the ROM's own routine is executed.
 | +$11 | 1 | magic defense | verified | Stat 6. `BattleSys_AdjustDefence` effect byte 6 = `$3C`. |
 | +$12 | 1 | level | verified | `ApplyExpStep` increments it, cap 99. |
 | +$13 | 3 | exp | verified | `AddExp`, 24-bit. Equals the sum of ExpToLevel[1 … level − 1]. |
-| +$16 | 3 | tech points | partial | `BattlerStats.TechPtTotal` ("probably"). |
+| +$16 | 3 | tech points | verified | The 24-bit total `SpendTechPoints` adds the award to and caps; executed by `ct_techs.py check --run` ([techs](techs.md)). |
 | +$19 | 14 | — | undecoded | Status and target bytes; zero in the ROM. Never written. |
 | +$27 | 1 | helmet | verified | Item category 2. |
 | +$28 | 1 | armor | verified | Item category 1. |
 | +$29 | 1 | weapon | verified | Item category 0. |
 | +$2A | 1 | accessory | verified | Item category 3. |
 | +$2B | 2 | exp to next | verified | `ApplyExpStep` counts it down and reloads ExpToLevel[level] (0 at 99). |
-| +$2D | 2 | tech points to next | partial | `BattlerStats.TechPtNeed` ("probably"). |
+| +$2D | 2 | tech points to next | verified | The next single's remaining need (`TryNextTech`); equals that single's TechTpCost in every record; executed ([techs](techs.md)). |
 | +$2F | 7 | growth base | verified | Growth order. `LevelUpStep` and `Menu_ApplyStatItem` (the stat items) pair it with the same stats. ChronoRET's menu name `.StatCounts` is this block. |
 | +$36 | 26 | derived | partial | The menu's copy of the stats with equipment, attack, defence and max HP. `$FF` in the ROM. Never written. |
 
@@ -148,7 +149,7 @@ character with a record, the editor shows:
   marked;
 - the HP and MP growth steps;
 - equipment pickers limited to the slot and to items the character can equip;
-- tech points.
+- tech points (the **Tech & Synergy Matrix** tab simulates the rule that changes them).
 
 The editor also shows a range check, the level curve to 99 (chart and table),
 and a **Write to ROM** toggle (`rom.characters`). **Build ROM…** writes the build.
@@ -160,7 +161,7 @@ For each character in `rom.characters`, the builder writes:
 - the character's three growth rows.
 
 The other bytes of the record (+$00–$02, +$19–$26, +$36–$4F) stay the base
-ROM's, so importing and building an unmodified ROM gives the clean ROM byte for
+ROM's (a tech build, [techs](techs.md), sets +$02 bit 4), so importing and building an unmodified ROM gives the clean ROM byte for
 byte, with no write. ExpToLevel is not written.
 
 The builder refuses:
@@ -204,8 +205,10 @@ is its own write, for example `character robo power`.
 
 - No emulator run. The evidence is the ROM's code, data and its own routine
   executed, not a booted game.
-- +$01–02, +$19–26 and +$41–4F are not decoded. Tech points and the derived
-  block are partial.
+- +$01, +$02 (but bit 4), +$19–26 and +$41–4F are not decoded. The derived
+  block is partial. The techs themselves are slice 2: [techs](techs.md).
 - ExpToLevel is shown and used, but not written. Item stats and names are not edited.
 - The Studio pane is compiled; its logic is in Core and tested there.
-- `chronoforge validate` does not yet check `rom.characters`.
+- `chronoforge validate` (gate 4) checks `rom.characters`: each has a file with
+  a `pc` record, no record is built twice, and with `party.json` the builder's
+  range and equipment checks pass.
