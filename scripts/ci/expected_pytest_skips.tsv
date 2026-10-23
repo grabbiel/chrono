@@ -171,3 +171,4 @@ re_workspace/tests/test_chests.py::test_flag_claims_hold	local ROM not present (
 re_workspace/tests/test_chests.py::test_the_locations_the_game_never_loads	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_chests.py::test_opening_a_chest_sets_its_flag	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_chests.py::test_checker_fails_an_unreported_treasure_list	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_chests.py::test_checker_reads_the_lists_the_words_split	local ChronoRET checkout not present (re_workspace/refs/ChronoRET)

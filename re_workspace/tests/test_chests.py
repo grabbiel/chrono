@@ -1,8 +1,8 @@
 """Chests and new locations (tools/ct_chests.py, tools/ct_rom_check.py).
 
 ROM-free: the flag numbers are the records' places counted from word 0 on a
-synthetic TreasureRom; ct_rom_check.py reads the lists the offset words split
-and the renumbered count the report states; expect_open's rules.
+synthetic TreasureRom; expect_open's rules. With ChronoRET (ct_rom_check.py
+imports its c3pack): the checker reads the lists the offset words split.
 
 Local (ROM, ChronoRET, the layout manifest): every claim of `ct_chests.py
 check` holds (the readers and writers of Treasure_Flags, the 512 flags, no
@@ -55,8 +55,8 @@ def test_flag_numbers_are_record_places_from_word_0():
     assert cch.treasure_numbers(moved) == n
 
 
-def test_checker_reads_the_lists_the_words_split():
-    import ct_rom_check as rc
+def test_checker_reads_the_lists_the_words_split(chronoret):
+    import ct_rom_check as rc                                     # imports ChronoRET's c3pack
     lists = {0: [(0x2F2F, 0)], 3: [(0x0201, 5), (0x0302, 0x8010)]}
     got = rc.treasure_lists(synthetic_treasure(lists))
     assert got[0] == [(0x2F2F, 0)] and got[3] == [(0x0201, 5), (0x0302, 0x8010)]
