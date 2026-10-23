@@ -362,34 +362,7 @@ public enum Validator {
                 for problem in CTMapPatch.validate(m) { err(4, "maps/\(id).map.json", problem) }
             }
             // Chests and new locations (docs/maps.md, "Chests" and "New locations").
-            let listedMaps = Set(spec.maps)
-            for id in listedMaps.sorted() {
-                guard let m = p.maps[id], let r = m.rom else { continue }
-                let file = "maps/\(id).map.json"
-                if r.treasureList != r.location {
-                    let target = p.maps.values.first { $0.rom?.location == r.treasureList }
-                    if !(0..<CTMapROM.locCount).contains(r.treasureList) || target?.rom?.treasureList != r.treasureList {
-                        err(4, file, "its chests are location \(r.treasureList)'s, which has no list of its own")
-                    } else if let target, (target.treasure ?? []) != (m.treasure ?? []) {
-                        err(4, file, "its chests are \(target.id)'s and must match them (edit \(target.id))")
-                    }
-                }
-                if let from = r.createdFrom, p.maps[CTMaps.id(from)]?.rom == nil {
-                    err(4, file, "created from location \(from), which the project has no imported map for")
-                }
-                for e in m.exits {
-                    guard let to = p.maps[e.map]?.rom else { continue }
-                    let created = to.createdFrom != nil
-                    if CTNewLocation.unused.contains(to.location) && !(created && listedMaps.contains(e.map)) {
-                        err(4, file, "an exit leads to \(e.map), a location the game never loads that this build leaves out " +
-                                     "(create it and list it in rom.maps)")
-                    }
-                }
-            }
-            if !listedMaps.isEmpty, let total = CTTreasure.projectTotal(p), total > CTTreasure.flagCount {
-                err(4, "project.json rom maps", "the project's maps hold \(total) chests, one flag each; Treasure_Flags has \(CTTreasure.flagCount) " +
-                                                "(flags 0-\(CTTreasure.flagCount - 1))")
-            }
+            for (path, msg) in mapChestProblems(p, listed: Set(spec.maps)) { err(4, path, msg) }
             // Sprites: ids exist, one per set or enemy record, the family's format (the build adds the
             // base ROM's checks); ct-enemy: the pack budget and the sharers (docs/sprites.md).
             var spriteSets: [Int: String] = [:], enemyRecords: [Int: String] = [:]
@@ -504,6 +477,39 @@ public enum Validator {
         }
 
         return issues
+    }
+
+    /// Gate 4's chest and new-location checks on the maps a build lists (docs/maps.md, "Chests").
+    static func mapChestProblems(_ p: CTProject, listed: Set<String>) -> [(String, String)] {
+        var out: [(String, String)] = []
+        for id in listed.sorted() {
+            guard let m = p.maps[id], let r = m.rom else { continue }
+            let file = "maps/\(id).map.json"
+            if r.treasureList != r.location {
+                let target = p.maps.values.first { $0.rom?.location == r.treasureList }
+                if !(0..<CTMapROM.locCount).contains(r.treasureList) || target?.rom?.treasureList != r.treasureList {
+                    out.append((file, "its chests are location \(r.treasureList)'s, which has no list of its own"))
+                } else if let target, (target.treasure ?? []) != (m.treasure ?? []) {
+                    out.append((file, "its chests are \(target.id)'s and must match them (edit \(target.id))"))
+                }
+            }
+            if let from = r.createdFrom, p.maps[CTMaps.id(from)]?.rom == nil {
+                out.append((file, "created from location \(from), which the project has no imported map for"))
+            }
+            for e in m.exits {
+                guard let to = p.maps[e.map]?.rom else { continue }
+                let created = to.createdFrom != nil
+                if CTNewLocation.unused.contains(to.location) && !(created && listed.contains(e.map)) {
+                    out.append((file, "an exit leads to \(e.map), a location the game never loads that this build leaves out " +
+                                 "(create it and list it in rom.maps)"))
+                }
+            }
+        }
+        if !listed.isEmpty, let total = CTTreasure.projectTotal(p), total > CTTreasure.flagCount {
+            out.append(("project.json rom maps", "the project's maps hold \(total) chests, one flag each; " +
+                        "Treasure_Flags has \(CTTreasure.flagCount) (flags 0-\(CTTreasure.flagCount - 1))"))
+        }
+        return out
     }
 
     public static func isValid(_ issues: [ValidationIssue]) -> Bool {
