@@ -434,3 +434,46 @@ public enum CTMIDIImport {
         return (text, report)
     }
 }
+
+extension CTMIDIImport {
+    /// `P:S,...`: MIDI program P (0-127) plays sample number S. Numbers are decimal or `$` hex.
+    public static func programTable(_ text: String) throws -> [Int: Int] {
+        var out: [Int: Int] = [:]
+        for part in text.split(separator: ",") {
+            let f = part.split(separator: ":").map { number(String($0)) }
+            guard f.count == 2, let p = f[0], let s = f[1], (0...127).contains(p), (1...CTSongISA.sampleNumberMax).contains(s) else {
+                throw CTSongError("programs are P:S pairs (program 0-127, sample 1-\(CTSongISA.sampleNumberMax)), not \(part)")
+            }
+            guard out[p] == nil else { throw CTSongError("program \(p) is mapped twice") }
+            out[p] = s
+        }
+        return out
+    }
+
+    /// `KEY:SAMPLE[:NOTE[:PAN]],...`: channel-10 key to a pad, in pad order.
+    public static func drumTable(_ text: String) throws -> [DrumPad] {
+        try text.split(separator: ",").map { part in
+            let f = part.split(separator: ":").map { number(String($0)) }
+            guard (2...4).contains(f.count), !f.contains(nil), (0...127).contains(f[0]!),
+                  (1...CTSongISA.sampleNumberMax).contains(f[1]!), f.dropFirst(2).allSatisfy({ (0...0xFF).contains($0!) }) else {
+                throw CTSongError("drum pads are KEY:SAMPLE[:NOTE[:PAN]] (key 0-127, sample 1-\(CTSongISA.sampleNumberMax), bytes), not \(part)")
+            }
+            return DrumPad(key: f[0]!, sample: f[1]!, note: f.count > 2 ? f[2]! : CTSampleTuning.defaultRoot, pan: f.count > 3 ? f[3]! : 0x80)
+        }
+    }
+
+    static func number(_ s: String) -> Int? { s.hasPrefix("$") ? Int(s.dropFirst(), radix: 16) : Int(s) }
+
+    /// `convert`, then song `song`'s budget as `rom build` would load it with
+    /// the project's rom.samples (`CTProjectSamples.budget`): a song over its
+    /// sequence or sample budget, or naming a sample neither the ROM nor
+    /// rom.samples has, is refused.
+    public static func importSong(_ file: CTMIDIFile, options: Options, rom: [UInt8], project: CTProject, song: Int,
+                                  title: String) throws -> (listing: String, report: Report, budget: CTSongBudget) {
+        let (text, report) = try convert(file, options: options, title: title)
+        let (data, tables) = try CTSongListing.assembleSong(text)
+        let budget = try CTProjectSamples.budget(rom: rom, project: project, song: song, data: data, tables: tables)
+        if let problem = budget.problem { throw CTSongError(problem) }
+        return (text, report, budget)
+    }
+}

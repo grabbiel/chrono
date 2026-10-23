@@ -293,6 +293,11 @@ if [ -f macos_studio/Package.swift ]; then
   $PY macos_studio/tools/verify_enemy_sprite_build.py >/tmp/verify_enemy_sprite_build.log 2>&1
   RC=$?
   note "Enemy sprite write-back ($(grep -oE '[0-9]+ of [0-9]+ runs' /tmp/verify_enemy_sprite_build.log | tail -1) of the frame decoder on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Drum kits and MIDI import (a MIDI file written in Python, import-midi, rom build, ct_rom_check, the
+  # S-SMP driver's key-ons against the file, an edited pad, refusals that write nothing).
+  $PY macos_studio/tools/verify_drums_midi.py >/tmp/verify_drums_midi.log 2>&1
+  RC=$?
+  note "Drum kits and MIDI import ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_drums_midi.log | tail -1) MIDI notes keyed on by the driver)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
 else
   note "swift package present" "FAIL"
 fi
