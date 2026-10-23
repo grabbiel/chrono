@@ -230,8 +230,9 @@ and up to `Field_Unk68` = 5 instructions a run, so:
   mode 2 marks arrival; the camera then stays there (the runtime's default
   follows the leader).
 
-The run uses the ROM's animation loop count (`romAnimLoops`, see below);
-`--model-anim-loops` keeps the runtime's default.
+The run uses the ROM's animation loop count (`romAnimLoops`, see below), as
+the runtime does by default since 2026-10-23; `--model-anim-loops` replays
+the old one-a-row rule.
 
 ### Formations
 
@@ -293,8 +294,9 @@ tool.
 
 The animation evidence found that the ROM's `Obj_AnimTickAndQueue` takes 2
 off a loop count of 3 or more (`DEC`, `DEC`, `STA`) where `CTFieldRuntime`
-takes 1; `romAnimLoops` (on in `CTSceneRun`, off in the runtime) follows the
-ROM. With `--model-anim-loops` half of the animation cases disagree.
+took 1; `romAnimLoops` follows the ROM and is the runtime's default since
+2026-10-23. With `--model-anim-loops` (the old rule) half of the animation
+cases disagree.
 
 ### Limits
 

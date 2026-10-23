@@ -133,8 +133,7 @@ def trace_check(args):
         with tempfile.TemporaryDirectory(prefix="ct-scene-run-") as tmp:
             out = Path(tmp) / "vm.json"
             run_cli(cli, "scene", "vm", ROM, loc, "--frames", args.frames, "--no-scroll", "--keep-battles",
-                    "--model-anim-loops", "--json",
-                    "--out", out, *extra)
+                    "--json", "--out", out, *extra)
             vm = json.loads(out.read_text())
         mine = {lane["object"]: [(b["offset"], b["start"], b.get("end"), b["runs"]) for b in lane["bars"]]
                 for lane in vm["lanes"]}
@@ -446,7 +445,7 @@ def main():
     d.add_argument("--ops")
     d.add_argument("--json")
     d.add_argument("--model-anim-loops", action="store_true",
-                   help="CTFieldRuntime's default loop count (one a row) instead of the ROM's")
+                   help="the old one-a-row loop count (before 2026-10-23) instead of the ROM's")
     f = sub.add_parser("formations")
     f.add_argument("--cli", default=str(CLI))
     f.add_argument("--cases", type=int, default=200)

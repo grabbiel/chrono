@@ -138,12 +138,12 @@ layers from the project's tilesets when `--project` is given).
 `CTFieldRuntime` has opt-in switches that leave the default run unchanged:
 `packOverrides` (a location's pack replaced, e.g. an edited scene),
 `runsScrollTo` (`$E7` scrolls the camera as `Map_Unk91AC` does, 1 px a
-frame to the tile at the top-left, then holds it) and `romAnimLoops`. The
-last one exists because the duration evidence (`ct_scene_run.py durations`)
-found that the ROM's `Obj_AnimTickAndQueue` takes **2** off a loop count of
-3 or more (`DEC`, `DEC`, `STA`) where `animTick` takes 1: with it 24 of 24
-animation cases agree, without it 12 of 24. Making it the default is left
-for review.
+frame to the tile at the top-left, then holds it). `romAnimLoops` is on by
+default: the duration evidence (`ct_scene_run.py durations`) found that the
+ROM's `Obj_AnimTickAndQueue` takes **2** off a loop count of 3 or more
+(`DEC`, `DEC`, `STA`) where `animTick` took 1 (24 of 24 animation cases
+agree with the ROM's rule, 12 of 24 with the old one). Turning it off only
+replays traces taken before 2026-10-23.
 
 ## Limitations
 

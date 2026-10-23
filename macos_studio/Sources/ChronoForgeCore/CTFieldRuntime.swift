@@ -130,10 +130,11 @@ public final class CTFieldRuntime {
     /// the leader while Map_ScrollToMode is set; after one the camera stays.
     public var runsScrollTo = false
     private var cameraHeld = false
-    /// Opt-in: a loop count of 3 or more drops by two at a row's end, as
-    /// Obj_AnimTickAndQueue does (DEC, DEC, STA); off, by one (the model so
-    /// far). ct_scene_run.py durations shows the ROM's way.
-    public var romAnimLoops = false
+    /// A loop count of 3 or more drops by two at a row's end, as
+    /// Obj_AnimTickAndQueue does (DEC, DEC, STA; ct_scene_run.py durations:
+    /// 24 of 24 animation cases). Off only to replay traces taken before
+    /// 2026-10-23, when the model took one off.
+    public var romAnimLoops = true
 
     public static let limitations = [
         "leader probes: Map_Unk8A6D's four straight cases without the corner slides; a diagonal runs the X case then the Y case",

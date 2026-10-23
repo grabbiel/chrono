@@ -178,7 +178,7 @@ final class CTSceneRunTests: XCTestCase {
         let rom = try rom()
         for location in [29, 7, 71] {
             var o = CTSceneRun.Options()
-            o.frames = 240; o.scrollTo = false; o.skipBattles = false; o.romAnimLoops = false
+            o.frames = 240; o.scrollTo = false; o.skipBattles = false
             let r = try CTSceneRun.run(rom: rom, location: location, options: o)
             XCTAssertNil(r.error)
             // The same location in a plain field, its trace kept by frame.
