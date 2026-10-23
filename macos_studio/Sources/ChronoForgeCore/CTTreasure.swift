@@ -96,9 +96,12 @@ public enum CTTreasure {
     }
 
     static func records(_ lists: [[Record]]) -> [UInt8] {
-        lists.flatMap { $0 }.flatMap { r in
-            [UInt8(r.tile & 0xFF), UInt8(r.tile >> 8), UInt8(r.contents & 0xFF), UInt8(r.contents >> 8)]
+        var out: [UInt8] = []
+        for r in lists.joined() {
+            out.append(UInt8(r.tile & 0xFF)); out.append(UInt8(r.tile >> 8))
+            out.append(UInt8(r.contents & 0xFF)); out.append(UInt8(r.contents >> 8))
         }
+        return out
     }
 
     /// The limits a build keeps: 512 flags in all, 128 records in a list.
@@ -161,10 +164,20 @@ public enum CTTreasure {
         write(words(new, start: first), wordsPC, "TreasureRom_LocOfs")
         write(body, pc, "TreasureRom")
         if placement == "moved" { relocated("TreasureRom", oldPC, pc, body.count) }
+        // Renumbered: a chest kept (same location, tile and contents) whose flag changed.
         let before = numbers(old), after = numbers(new)
+        var oldFlags: [Int: [Record: [Int]]] = [:]
+        for i in 0..<CTMapROM.locCount where !isRedirect(old[i]) {
+            for (r, n) in zip(old[i], before[i]) { oldFlags[i, default: [:]][r, default: []].append(n) }
+        }
         var renumbered = 0
-        for i in 0..<CTMapROM.locCount where !isRedirect(old[i]) && !isRedirect(new[i]) {
-            renumbered += zip(before[i], after[i]).filter { $0 != $1 }.count
+        for i in 0..<CTMapROM.locCount where !isRedirect(new[i]) {
+            var left = oldFlags[i] ?? [:]
+            for (r, n) in zip(new[i], after[i]) {
+                guard var flags = left[r], !flags.isEmpty else { continue }
+                if flags.removeFirst() != n { renumbered += 1 }
+                left[r] = flags
+            }
         }
         return ReportBlock(address: CTROMBuilder.snes(pc), pc: pc, records: body.count / CTMapROM.treasureBytes,
                            bytes: body.count, placement: placement, from: placement == "moved" ? CTROMBuilder.snes(oldPC) : nil,

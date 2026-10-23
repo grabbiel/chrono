@@ -303,10 +303,18 @@ original fields; files with only those still load and save unchanged.
   CGADSUB, and the steps are explained in [Maps](maps.md#the-6-byte-head).
 - **`treasure`.** This location's chest list, taken from the redirected list
   where there is one. `contents` bit 15 means gold (bits 0–14 × 2), bit 14
-  means empty, and otherwise bits 0–8 are an item.
+  means empty, and otherwise bits 0–8 are an item. A chest's flag is its place
+  in the whole TreasureRom, so it is not stored. `chronoforge maps chest list`
+  and the Studio show it. No record may be on tile 0,0, a list holds at most
+  128 and all lists together 512 ([Chests](maps.md#chests)). A redirected
+  map's list must equal its target's.
 - **`rom`.** Where the import read the map, for write-back. `staleTiles`
   counts the tile-property triples the ROM's map lacks; they are 0 in the
-  project.
+  project. `treasureList` is the location whose list the map uses (its own, or
+  a redirect's target). `createdFrom` (optional) marks a location created over
+  one the game never loads (448, 452–455, 461–463) and names its source
+  location ([New locations](maps.md#new-locations)). A reimport keeps such a
+  map.
 - **`t12_none`.** Locations without either tileset use the empty tileset
   `t12_none` (one chip-less metatile, `tileCount` 0).
 

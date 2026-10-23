@@ -1,4 +1,4 @@
-# Maps (Multi-Plane Map Editor, slice 1)
+# Maps (Multi-Plane Map Editor)
 
 Chrono Trigger's location maps are decoded with evidence: the header, the three
 tile planes, the tile-property plane, exits and treasure. They are imported
@@ -139,6 +139,89 @@ from word i to word i + 1. There are 814 records in all.
   already taken, it steps the layer-1 metatile $FE→$FF or $E0→$E1 on tiles
   whose HiBits bit 0 is set.
 
+## Chests
+
+A chest's taken state is one bit of `Treasure_Flags` (`$7F:0001`, 64 bytes,
+`Treasure_FlagByteMask` $3F: 512 flags). Its number is its record's place in
+`TreasureRom`: `(offset − word 0) / 4`, counted from `Map_TreasureRec0`
+(`$1D06`, set from word 0 by `Map_LoadTreasureTiles`).
+
+- **Readers and writers.** `re_workspace/tools/ct_chests.py check` proves it
+  from ChronoRET's source and the code bytes. `Field_CheckTileInFront`
+  (`$C0:1DF4`) is the opener: it reads and sets the bit (`LDA.l`/`STA.l
+  $7F0001,X` at `$C0:1E3E` / `$C0:1E48`) and gives the item or gold
+  (`JSL $C1:8003` services 1 and 4). `Map_TreasureTaken` (`$C0:A7BC`) reads it
+  when a map loads. No event op among 142,702 instructions in the 461
+  non-empty event packs addresses `$7F:0001–0040` (the lowest event address in
+  that page is `$7F:0050`). The other code reading `$7F:0000,X` is the window
+  tables and the Mode 7 scenes' save and restore of the whole page. So a
+  renumbering needs no other rewrite.
+- **Limits.** 512 records in all (the five redirect records and location 0's
+  dummy take numbers too) and 128 in one list (`Map_TreasureIdx` keeps 7 bits;
+  bit 7 is "none"). The ROM uses 249 records: 263 flags are left.
+- **Placement.** The block stays in place while it fits. When it grows it takes
+  free space right after it, or any free span in bank $F5 (the records are
+  read from bank $F5). The ROM has no such span (bank $F5's only padding,
+  `$F5:FE04`, 508 bytes, is too small and not next to the records), so the
+  builder moves the smallest bank-$F5 MapProps pack this build does not write
+  out to free space, byte for byte, repoints every `Map_PropsPtrs` entry naming
+  it, and puts the records in its span. The old record span is reclaimed. The
+  report's `treasureRom` gives the address, placement, records, flags left,
+  chests renumbered and the moved pack (`evicted`).
+- **Seen in the game's code.** On built ROMs, `Map_LoadTreasureTiles` and
+  `Field_CheckTileInFront` run in ChronoRET's interpreter. An added gold chest
+  and an added item chest set their new flags and give 200 G and the item. A
+  removed chest's tile is no chest any more ($80). A later chest (location 449
+  on) sets its moved flag. A taken chest gives nothing.
+
+```
+chronoforge maps chest list P [loc_026]
+chronoforge maps chest add P loc_026 --at 20,20 (--item '$A5' | --gold 200 | --empty) [--index 1]
+chronoforge maps chest move P loc_026 1 --at 21,20 [--item N | --gold G | --empty]
+chronoforge maps chest remove P loc_013 0
+```
+
+## New locations
+
+Eight location numbers are never loaded by the game: 448, 452–455 and 461–463.
+`ct_chests.py unused-locations` proves each one:
+
+- no exit names it;
+- no event warp names it (ops $DC–$E1). The one warp with a computed number
+  (`$E2` in event pack 361 at $023F) reads `$7F:0166`, which packs 324, 325
+  and 337 set only to $01, $0C and $75;
+- no world-map exit list names it (`C2SceneRom_ListPacks`, `$C6:FFC0`) and no
+  world-map script word does;
+- its record is the placeholder (MapProps 0, Tileset12 18, Tileset3 $FF,
+  palette 75, no exits, no treasure), and its Events entry is not an event pack.
+
+`chronoforge maps new-location P --from loc_029 --number 448 --entrance loc_028
+--at 46,9 --to 6,6 --facing 11 [--list]` writes `maps/loc_448.map.json`, a copy
+of the source with `rom.createdFrom` set, and adds an exit to the entrance map.
+
+- **What it copies.** It copies the source's layers, tile properties,
+  settings, header and exits, so the way back works. The record runs the
+  source's event pack (its Events entry).
+- **What is its own.** Its MapProps takes a free `Map_PropsPtrs` slot when
+  built, and its chests are its own list, with flags of their own.
+- **Refusals.** The build refuses a created location whose number is not one
+  of the eight, or whose Events entry is not an event pack. It refuses an exit
+  to one of the eight that this build does not create. It refuses an edit to
+  one of the eight that was not created.
+- **Seen in the game's code.** On the built ROM, `LocLoad_UnkA33B` loads 448
+  exactly as the decode says and as location 29 loads (planes, HiBits, AttrA,
+  AttrB, sizes, limits, TM/TS/CGADSUB), on MapProps entry 202. Location 28's
+  `Map_TileExitIdx` puts the new exit on tile (46, 9), leading to 448.
+
+## Listing maps in a build
+
+`chronoforge maps rom-list P [id …] [--remove] [--base rom.sfc]` puts maps in
+`rom.maps` (or takes them out) and prints the list. With `--base`, it runs a
+dry build and prints the free space left, the TreasureRom placement, the flags
+left, the moved pack and each listed map's chest flags, or the build's
+refusal. Nothing is written. The Studio's **ROM Build Maps…** sheet shows the
+same thing.
+
 ## Not map data
 
 Save points, encounters and the chests' opening are event objects in the
@@ -234,6 +317,20 @@ The tests:
 - **Exits.** Click a tile to select the exit on it, or click an empty tile to
   add one. Edit its position, span, direction, destination, arrival tile and
   facing.
+- **Chests.** Click a chest to select it, or an empty tile to add one; drag a
+  chest to move it. The form sets what it holds (an item, gold or nothing) and
+  deletes it. Each chest shows the flag a build of the whole project gives it
+  (`#235`), and the tool line counts the flags in use out of 512. A refusal
+  (tile 0,0, a tile already used, 128 chests in a map, more than 512 flags, a
+  map showing another location's list) goes to the status line.
+- **Toolbar.** **List in ROM Build** puts the selected map in `rom.maps` (or
+  takes it out). **New Location from…** makes a location the game never loads
+  from it ([New locations](#new-locations)). **ROM Build Maps…** lists
+  `rom.maps` and runs a dry build ([Listing maps in a build](#listing-maps-in-a-build)).
+- **Launch arguments.** `--module Maps --select loc_448 --map-tool Chests
+  --map-chest 0` opens the chest tool on a chest; `--map-sheet new-location`
+  or `--map-sheet rom-list` opens a sheet; `--rom ct_clean.sfc` names the base
+  ROM for the dry run (else the playback ROM).
 - **Inspector.** It shows:
   - the tile under the pointer (metatiles, shape, levels, raw bytes, flags,
     exit);
@@ -270,12 +367,11 @@ its `rom.location`; its `tileset` must be the one its location record loads.
    records) is rebuilt at once. It may grow into the confirmed padding that
    begins right where it ends (`$E5:1A44`, 1,468 bytes). Unused bits stay 0, as
    in every ROM exit.
-5. **Treasure.** Records are rewritten in place. A chest's flag number is its
-   record's position in `TreasureRom` (`(offset − word 0) / 4`), so adding or
-   removing a chest would renumber every later chest: a change in count is
-   refused. Two maps sharing one list must agree. The five redirects and
-   location 0's dummy record are kept; a first record on tile 0,0 (the redirect
-   marker) is refused.
+5. **Treasure.** `TreasureRom` is rebuilt as a whole: its 513 offset words and
+   every location's records, one list after another ([Chests](#chests)). Adding
+   or removing a chest renumbers every later chest's flag. Two maps sharing one
+   list must agree. The five redirects and location 0's dummy record are kept;
+   a record on tile 0,0 (the redirect marker) is refused.
 6. **Header.** The 14-byte LocRom record is written in place.
 
 **Checks.** Validate (gate 4) runs the same checks before a build. After it,
@@ -300,5 +396,11 @@ decodes the built ROM against the project (the `--content` flag leaves out the
   slice.
 - **No undo.** The Studio has no undo stack for painting: edits stay in the
   editor until **Apply**.
-- **Write-back.** New locations are not created; a map keeps its number of
-  chests; the Studio has no button to list maps in `rom.maps` yet.
+- **Old saves.** Renumbering changes which chests an existing save file has
+  opened: a chest's taken state is its flag number, not its place.
+- **New locations.** A created location runs its source's event pack (its own
+  pack is a Scene Director slice), and only the eight numbers the game never
+  loads can be created. A dummy that is loaded (both tilesets $FF: cutscene
+  locations) is not one of them.
+- **Chest opening.** The chests' graphics and the opening animation are the
+  field's; the editor draws a ring placeholder.

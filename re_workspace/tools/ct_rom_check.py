@@ -822,8 +822,16 @@ def check_treasure(clean, built, report, inside):
     for m in report.get("maps") or []:
         check(m.get("flags") == numbers[m["treasureList"]], f"map {m['id']}: flags are not the records' places")
     old_numbers = cch.treasure_numbers(clean)
-    moved = sum(a != b for i in range(cm.LOC_COUNT) if not (before[i] and before[i][0][0] == 0)
-                for a, b in zip(old_numbers[i], numbers[i]))
+    moved = 0                                   # chests kept (location, tile, contents) whose flag changed
+    for i in range(cm.LOC_COUNT):
+        if (before[i] and before[i][0][0] == 0) or (after[i] and after[i][0][0] == 0):
+            continue
+        left = {}
+        for r, n in zip(before[i], old_numbers[i]):
+            left.setdefault(r, []).append(n)
+        for r, n in zip(after[i], numbers[i]):
+            if left.get(r):
+                moved += left[r].pop(0) != n
     check(moved == t["renumbered"], f"{moved} chests renumbered, the report says {t['renumbered']}")
     span = range(t["pc"], t["pc"] + t["bytes"])
     for e in t.get("evicted") or []:
@@ -890,6 +898,7 @@ def map_zones(clean, report, regions):
 
 def check_maps(clean, built, report, inside):
     maps = report.get("maps")
+    moved = {e for x in (report.get("treasureRom") or {}).get("evicted") or [] for e in x["entries"]}
     if maps is None:
         for i in range(cm.LOC_COUNT):
             check(bytes(built[lpc(cm.LOC_ROM) + cm.LOC_BYTES * i:lpc(cm.LOC_ROM) + cm.LOC_BYTES * (i + 1)])
@@ -922,7 +931,8 @@ def check_maps(clean, built, report, inside):
                 check(False, f"{name}: MapProps overlaps another")
             spans[span.start] = span
         else:
-            check(at == cm.props_pointer(clean, cm.header(clean, loc)["mapProps"]), f"{name}: unchanged MapProps moved")
+            check(at == cm.props_pointer(clean, cm.header(clean, loc)["mapProps"]) or m["entry"] in moved,
+                  f"{name}: unchanged MapProps moved")   # moved: out of bank $F5 for TreasureRom (check_treasure)
         try:
             cm.parse_props(data)
         except Exception as e:  # noqa: BLE001
@@ -940,7 +950,6 @@ def check_maps(clean, built, report, inside):
         check(a.stop <= b.start, f"MapProps at ${a.start:06X} and ${b.start:06X} overlap")
     check_treasure(clean, built, report, inside)
     check_created(clean, built, report)
-    moved = {e for x in (report.get("treasureRom") or {}).get("evicted") or [] for e in x["entries"]}
     for i in range(cm.LOC_COUNT):
         if i not in reported:
             check(map_content(built, i, moved) == map_content(clean, i, moved), f"location {i} changed but is not reported")

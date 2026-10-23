@@ -362,6 +362,9 @@ public enum CTMapPatch {
         treasureBlock = try CTTreasure.apply(lists: tlists, base: base, keep: Set(images.map(\.entry)), space: &space,
                                      write: write, relocated: relocated)
         let numbers = treasureBlock == nil ? nil : CTTreasure.numbers(tlists)
+        // A pack moved out of bank $F5 for the records: its maps report where it is now.
+        var movedOut: [Int: Int] = [:]
+        for e in treasureBlock?.evicted ?? [] { for entry in e.entries { movedOut[entry] = e.pc } }
 
         return items.map { it in
             let entry = entryOf[it.loc] ?? it.base.header.mapProps
@@ -371,7 +374,7 @@ public enum CTMapPatch {
                 ?? it.base.treasure.map { GameMap.Treasure(x: $0.x, y: $0.y, contents: $0.contents) }
             let unpacked = it.image ?? CTMapROM.packProps(it.base.props)
             let shaBytes = it.image ?? (try? CTTilesetROM.unpack(base, it.base.at).out) ?? unpacked
-            let pc = placed?.pc ?? CTMapROM.pc(it.base.at)
+            let pc = placed?.pc ?? movedOut[entry] ?? CTMapROM.pc(it.base.at)
             return ReportMap(id: it.map.id, location: it.loc, entry: entry, newEntry: entryOf[it.loc] != nil,
                              address: CTROMBuilder.snes(pc), pc: pc, packedBytes: placed?.packed ?? it.base.packedBytes,
                              unpackedBytes: shaBytes.count, unpackedSHA256: CTEventPack.sha256(shaBytes),
