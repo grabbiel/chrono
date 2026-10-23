@@ -4,14 +4,17 @@
 //
 // cases.json: {"packs": {"<label>": "<hex>"}, "cases": [{"id": n, "pack":
 // "<label>", "y": offset, "regions": [[address, "<hex>"], ...]}]}: the pack
-// is at $7F:2000, the regions over a zeroed WRAM, Obj_Cur among them.
+// is at $7F:2000, the regions over a zeroed WRAM, Obj_Cur among them. A case
+// with "routine" runs that field routine instead of the opcode at y:
+// "palAnimTick" (PalAnim_TickAll), "palClaim" (Obj_Unk7170, carry = claimed;
+// reason "skipped" when it does nothing) or "palRelease" (Obj_Unk734C).
 // results.json: {"families": {name: [opcode]}, "results": [{"id", "kind": "go"|"halted"|"unmodelled", "x", "carry",
 // "reason", "mem": {"<address>": byte}}], mem holding the final value of each
 // WRAM byte the model wrote.}
 import Foundation
 
 public enum CTEventVMVectors {
-    struct Case: Decodable { let id: Int; let pack: String; let y: Int; let regions: [[Region]] }
+    struct Case: Decodable { let id: Int; let pack: String; let y: Int; let regions: [[Region]]; let routine: String? }
     enum Region: Decodable {
         case address(Int), hex(String)
         init(from decoder: Decoder) throws {
@@ -61,12 +64,23 @@ public enum CTEventVMVectors {
                 for (i, b) in bytes(hex: hex).enumerated() { vm.wram[at + i] = b }
             }
             vm.wram.recording = true
-            let outcome = vm.execute(at: c.y)
+            var reason: String?
+            let outcome: CTEventVM.Outcome
+            switch c.routine {
+            case nil: outcome = vm.execute(at: c.y)
+            case "palAnimTick": vm.palAnimTick(); outcome = .go(x: 0, carry: false)
+            case "palRelease": vm.releasePaletteSlot(); outcome = .go(x: 0, carry: false)
+            case "palClaim":
+                let claimed = vm.claimPaletteSlot()
+                if claimed == nil { reason = "skipped" }
+                outcome = .go(x: 0, carry: claimed ?? false)
+            default: throw CTEventError("case \(c.id): no routine \(c.routine ?? "")")
+            }
             var mem: [String: Int] = [:]
             for (a, v) in vm.wram.writtenValues { mem[String(a)] = Int(v) }
             switch outcome {
             case .go(let x, let carry):
-                results.append(Result(id: c.id, kind: "go", x: x, carry: carry, reason: nil, mem: mem))
+                results.append(Result(id: c.id, kind: "go", x: x, carry: carry, reason: reason, mem: mem))
             case .halted(let why):
                 results.append(Result(id: c.id, kind: "halted", x: nil, carry: nil, reason: why, mem: mem))
             case .unmodelled(let why):

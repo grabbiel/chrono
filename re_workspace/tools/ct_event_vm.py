@@ -36,6 +36,13 @@ offsets. The packs and states pass to the CLI through a temporary file.
 The ROM-handler runs are spread over J worker processes (default: the CPU
 count), each with its own interpreter; the report does not depend on J.
   ct_event_vm.py unmodelled [--cli PATH]
+  ct_event_vm.py routines [--cases N] [--jobs J] [--json report.json]
+
+`routines` does the same for the field routines the runtime runs around the
+opcodes, on seeded random states: PalAnim_TickAll ($FD:E39C, every
+FieldAnimB record; its DP scratch $0500C-$051A left out), Obj_Unk7170 (a
+palette slot claimed as an object comes into view; with the carry) and
+Obj_Unk734C (given back as it leaves).
 """
 
 import argparse
@@ -70,6 +77,7 @@ TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E, 0x92, 0x96, 0x9C, 0xA0)
 ITEM_OPS = (0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7)
 PARTY_OPS = (0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6)
 MAP_OPS = (0xE4, 0xE5)
+PAL_OPS = (0x2E, 0x33, 0x88)
 SLOW_OPS = (0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83)   # sprite loads, unpacking
 
 # The last full `check` (2026-10-22, default --per-op 24 --states 2): per family the opcodes
@@ -92,11 +100,14 @@ EVIDENCE = {
     "messages": {"opcodes": 7, "verified": 7, "operandSets": 151, "cases": 337, "agree": 337, "disagree": 0},
     "movement": {"opcodes": 11, "verified": 11, "operandSets": 161, "cases": 555, "agree": 555, "disagree": 0},
     "objects": {"opcodes": 22, "verified": 22, "operandSets": 218, "cases": 1083, "agree": 1083, "disagree": 0},
+    "palettes": {"opcodes": 3, "verified": 3, "operandSets": 56, "cases": 144, "agree": 144, "disagree": 0},
     "party": {"opcodes": 2, "verified": 2, "operandSets": 2, "cases": 96, "agree": 96, "disagree": 0},
     "sound": {"opcodes": 4, "verified": 4, "operandSets": 96, "cases": 192, "agree": 192, "disagree": 0},
     "warps": {"opcodes": 5, "verified": 5, "operandSets": 61, "cases": 246, "agree": 246, "disagree": 0},
 }
-EVIDENCE_UNMODELLED = {"opcodes": 29, "instructions": 3505, "instructionsInPacks": 142702}
+EVIDENCE_UNMODELLED = {"opcodes": 26, "instructions": 2307, "instructionsInPacks": 142702}
+# The last `routines` (2026-10-23, default --cases 200): cases and agreements per routine.
+EVIDENCE_ROUTINES = {"palAnimTick": (200, 200), "palClaim": (200, 200), "palRelease": (200, 200)}
 
 
 def scratch(a):
@@ -145,6 +156,23 @@ def party_order(rng, char, slots):
     tail = bytearray(biased(rng) for _ in range(0x30 - 9))
     unk1101 = [(0x7E1101 + s, bytes((char if rng.random() < 0.5 else rng.randrange(8),))) for s in slots]
     return [(0x7E2980, order + tail), (0x7E21A0, bytearray(rng.randrange(256) for _ in range(0x60)))] + unk1101
+
+
+def palettes(rng):
+    """FieldAnimB ($0520, 12 records of 12 bytes: some of the 8 the handlers
+    search free), ObjX_PalAnimRec (a record offset or none), Obj_PalSrc (any
+    offset in bank $E4), Pal_Buf and Pal_CgramBuf."""
+    recs = bytearray(rng.randrange(256) for _ in range(0x90))
+    for k in range(12):
+        if rng.random() < 0.4:
+            recs[12 * k] = 0
+    links = bytearray()
+    for _ in range(16):
+        w = 0xFFFF if rng.random() < 0.4 else 12 * rng.randrange(8)
+        links += bytes((w & 0xFF, w >> 8))
+    src = bytearray(rng.randrange(256) for _ in range(0x20))
+    return [(0x7E0520, recs), (0x7F0B80, links), (0x7E1400, src),
+            (0x7E2000, bytearray(rng.randrange(256) for _ in range(0x400)))]
 
 
 def state(rng, objects, op, e4, operand=b"\0\0"):
@@ -207,6 +235,8 @@ def state(rng, objects, op, e4, operand=b"\0\0"):
     if op in (0xD9, 0xDA):                                  # the arrival counters, around their end values
         story = next(b for at, b in out if at == 0x7F0000)
         story[0x3FC], story[0x3FE] = rng.choice((0, 0, 1, 2, 3, 4, 5)), rng.choice((0, 1, 2, 3, 3, 4))
+    if op in PAL_OPS:
+        out += palettes(rng)
     if op in PARTY_OPS:
         slots = [dp[0x97 + p] for p in (0, 2, 4) if dp[0x97 + p] < 0x80]
         out += party_order(rng, operand[0], slots)
@@ -300,7 +330,7 @@ class Concrete:
         interp.machine = m
         self.interp, self.absint, self.machine = interp, absint, m
 
-    def execute(self, s, known):
+    def execute(self, s, known, ret="rts"):
         """Machine.run for one concrete state: no forks, and a loop is a branch
         reached again with the same registers and no write since (a halt)."""
         m, absint = self.machine, self.absint
@@ -320,7 +350,7 @@ class Concrete:
                 continue
             if r[0] == "fork":
                 raise absint.Unresolved("the handler forks on an unknown (hardware) value")
-            if r[0] != "rts":
+            if r[0] != ret:
                 raise absint.Unresolved(f"the handler ends with {r[0]}")
             return s
         raise absint.Unresolved("too many steps")
@@ -354,6 +384,32 @@ class Concrete:
         return ("go", st.x, st.c, mem, known)
 
 
+    def run_routine(self, pc, short_xy, ret, regions, carry):
+        """A field routine from `pc` (M=1, DP=$0100, DB=$00): ('go', None, carry, {addr: byte}, known)."""
+        absint = self.absint
+        s = absint.State()
+        s.pc, s.a, s.b, s.x, s.y = pc, 0, 0, 0, 0
+        s.d, s.db, s.m, s.xf = 0x0100, 0x00, True, short_xy
+        s.z = s.n = s.v = None
+        s.c = carry
+        s.sp, s.spt, s.mem, s.memt = [], [], {}, {}
+        s.at = s.xt = s.yt = s.ft = absint.E
+        s.depth = 0
+        known = {}
+        for at, block in regions:
+            known.update((at + i, b) for i, b in enumerate(block))
+        try:
+            st = self.execute(s, known, ret)
+        except absint.Unresolved as e:
+            return ("unknown", f"interpreter: {e}")
+        if st is None:
+            return ("halted",)
+        mem = {a: v for a, v in st.mem.items() if a >> 16 in (0x7E, 0x7F)}
+        if any(v is None for v in mem.values()):
+            return ("unknown", "the routine writes an unknown (hardware) value")
+        return ("go", None, st.c, mem, known)
+
+
 def compare(rom_out, swift, known):
     """None when they agree, else a short reason (addresses, never bytes of the ROM)."""
     kind = swift["kind"]
@@ -375,6 +431,53 @@ def compare(rom_out, swift, known):
         if r != s:
             return f"WRAM ${a:06X}: ROM {r:#04x} vs model {s:#04x}"
     return None
+
+
+ROUTINES = {                               # entry PC, 8-bit X/Y, how it returns
+    "palAnimTick": (0xFDE39C, False, "rtl"),
+    "palClaim": (0xC07170, True, "rts"),
+    "palRelease": (0xC0734C, True, "rts"),
+}
+ROUTINE_SCRATCH = range(0x7E050C, 0x7E051B)    # PalAnim_Save ... PalAnim_Dest (DP $0500)
+
+
+def tick_state(rng):
+    """12 FieldAnimB records of every kind, most due this frame (.Unk4 = .Unk5 - 1),
+    .Unk2 1-32 colours, .Unk6 mostly 0-7, and random Pal_Buf / Pal_CgramBuf."""
+    recs = bytearray()
+    for _ in range(12):
+        kind = rng.choice((0, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xF0))
+        kind = kind | rng.randrange(16) if kind else 0
+        period = rng.randrange(1, 256)
+        tick = (period - 1) if rng.random() < 0.75 else rng.randrange(256)
+        ptr = rng.randrange(0x10000)
+        channels = rng.randrange(8) if rng.random() < 0.7 else rng.randrange(256)     # .Unk6: kinds 4-7 pick by 0-7
+        recs += bytes((kind, rng.randrange(256), rng.randrange(1, 33), rng.randrange(256), tick, period,
+                       channels, biased(rng), biased(rng), ptr & 0xFF, ptr >> 8, rng.choice((0xFD, 0xF6, 0xC0))))
+    return [(0x7E0520, recs), (0x7E2000, bytearray(rng.randrange(256) for _ in range(0x400)))]
+
+
+def slot_state(rng):
+    """Obj_Cur and its kind, the 8 palette slots (free or owned), the chain
+    links, a few shared Obj_PalSrc values and the Obj_OamAttr palette bits."""
+    cur = 2 * rng.randrange(16)
+    dp = bytearray(biased(rng) for _ in range(0xC0))
+    dp[0x6D], dp[0x6E] = cur, 0
+    dp[0x54] = 0x80 if rng.random() < 0.15 else rng.randrange(0x80)       # Field_Unk54 bit 7: no slots
+    kinds = bytearray(biased(rng) for _ in range(32))
+    kinds[cur] = rng.choice(list(range(12)) + [0x80, 0x85])
+    owners = [2 * rng.randrange(16) for _ in range(4)] + [cur]
+    slots = bytearray(0x80 if rng.random() < 0.4 else rng.choice(owners) for _ in range(8))
+    links = bytearray(0x80 if rng.random() < 0.5 else 2 * rng.randrange(16) for _ in range(0x20))
+    srcs = bytearray()
+    for _ in range(16):
+        w = rng.choice((0x1000, 0x1018, 0x2430, rng.randrange(0x10000)))
+        srcs += bytes((w & 0xFF, w >> 8))
+    attr = bytearray(biased(rng) for _ in range(32))
+    for k in range(1, 32, 2):
+        attr[k] = rng.randrange(8) << 1 if rng.random() < 0.8 else rng.randrange(256)
+    return [(0x7E0100, dp), (0x7E1100, kinds), (0x7E0B80, slots), (0x7E0B00, links), (0x7E1400, srcs),
+            (0x7E0F80, attr)]
 
 
 _WORKER = {}
@@ -407,15 +510,39 @@ def _verdict(task):
     return cid, "halts" if outs[0][0] == "halted" else "agree", None
 
 
-def verdicts(tasks, by_label, jobs):
+def _routine_verdict(task):
+    """One routine case: the ROM routine (entry carry clear and set) against the
+    model's writes, and its carry where the model claims a slot."""
+    cid, name, regions, swift = task
+    pc, short_xy, ret = ROUTINES[name]
+    conc = _WORKER["conc"]
+    outs = [conc.run_routine(pc, short_xy, ret, regions, carry) for carry in (False, True)]
+    if outs[0][0] != "go" or outs[1][0] != "go":
+        return cid, "unverifiable", f"{name} #{cid}: {outs[0][1:] if outs[0][0] != 'go' else outs[1][1:]}"
+    _, _, c0, mem, known = outs[0]
+    if mem != outs[1][3]:
+        return cid, "carry-dependent", None
+    if name == "palClaim" and swift.get("reason") != "skipped" and not (c0 == outs[1][2] == swift["carry"]):
+        return cid, "disagree", f"{name} #{cid}: carry {c0}/{outs[1][2]} vs model {swift['carry']}"
+    smem = {int(k): v for k, v in swift["mem"].items()}
+    for a in sorted(set(mem) | set(smem)):
+        if scratch(a) or a in ROUTINE_SCRATCH:
+            continue
+        r, m = mem.get(a, known.get(a, 0)), smem.get(a, known.get(a, 0))
+        if r != m:
+            return cid, "disagree", f"{name} #{cid}: WRAM ${a:06X}: ROM {r:#04x} vs model {m:#04x}"
+    return cid, "agree", None
+
+
+def verdicts(tasks, by_label, jobs, fn=_verdict):
     """{case id: (outcome, message)} for the tasks, over `jobs` processes (1: in this one)."""
     if jobs <= 1:
         _worker_init(by_label)
-        return {cid: (k, m) for cid, k, m in map(_verdict, tasks)}
+        return {cid: (k, m) for cid, k, m in map(fn, tasks)}
     used = {t[1] for t in tasks}
     with ProcessPoolExecutor(max_workers=jobs, initializer=_worker_init,
                              initargs=({k: v for k, v in by_label.items() if k in used},)) as pool:
-        return {cid: (k, m) for cid, k, m in pool.map(_verdict, tasks, chunksize=4)}
+        return {cid: (k, m) for cid, k, m in pool.map(fn, tasks, chunksize=4)}
 
 
 def check(args):
@@ -507,6 +634,53 @@ def check(args):
     return 1 if t["disagree"] else 0
 
 
+def routines(args):
+    rom = packs.read_rom()
+    table = json.loads(packs.TABLE.read_text())["opcodes"]
+    loaded, _ = load(rom, table)
+    label, data, _ = loaded[0]                           # any pack: the routines do not read it
+    rng = random.Random(SEED + 1)
+    cases, meta = [], {}
+    for name in ROUTINES:
+        for _ in range(args.cases):
+            regions = tick_state(rng) if name == "palAnimTick" else slot_state(rng)
+            cid = len(cases)
+            cases.append({"id": cid, "pack": label, "y": 0, "routine": name,
+                          "regions": [[at, bytes(b).hex()] for at, b in regions]})
+            meta[cid] = (name, regions)
+    with tempfile.TemporaryDirectory(prefix="ct-event-vm-") as tmp:
+        cin, cout = Path(tmp) / "cases.json", Path(tmp) / "results.json"
+        cin.write_text(json.dumps({"packs": {label: data.hex()}, "cases": cases}))
+        r = subprocess.run([str(args.cli), "runtime", "vectors", str(packs.WS / "ct_clean.sfc"), str(cin), "--out", str(cout)],
+                           capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            raise SystemExit(f"runtime vectors failed: {r.stdout}{r.stderr}")
+        results = {r["id"]: r for r in json.loads(cout.read_text())["results"]}
+    tasks = [(cid, name, regions, results[cid]) for cid, (name, regions) in meta.items()]
+    done = verdicts([(t[0], label, t[1], t[2], t[3]) for t in tasks], {label: data}, args.jobs,
+                    fn=_routine_task)
+    report = {}
+    for cid, (name, _) in meta.items():
+        kind, msg = done[cid]
+        row = report.setdefault(name, {"cases": 0, "agree": 0, "disagree": 0, "failures": []})
+        row["cases"] += 1
+        row[kind] = row.get(kind, 0) + 1
+        if msg and len(row["failures"]) < 5:
+            row["failures"].append(msg)
+    if args.json:
+        Path(args.json).write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
+    for name, row in report.items():
+        print(f"{name:<12} {row['agree']:5d} of {row['cases']:5d} cases agree  {row['disagree']} disagree")
+        for m in row["failures"][:3]:
+            print(f"  {m}")
+    return 1 if any(row["disagree"] for row in report.values()) else 0
+
+
+def _routine_task(task):
+    cid, _, name, regions, swift = task
+    return _routine_verdict((cid, name, regions, swift))
+
+
 def unmodelled(args):
     rom = packs.read_rom()
     table = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -540,8 +714,13 @@ def main():
     c.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     u = sub.add_parser("unmodelled")
     u.add_argument("--cli", default=str(CLI))
+    r = sub.add_parser("routines")
+    r.add_argument("--cli", default=str(CLI))
+    r.add_argument("--cases", type=int, default=200)
+    r.add_argument("--json")
+    r.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     args = ap.parse_args()
-    return check(args) if args.cmd == "check" else unmodelled(args)
+    return {"check": check, "unmodelled": unmodelled, "routines": routines}[args.cmd](args)
 
 
 if __name__ == "__main__":

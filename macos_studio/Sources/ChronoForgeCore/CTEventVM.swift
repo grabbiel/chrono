@@ -35,6 +35,8 @@ public final class CTEventVM {
     /// Menu_RunCommand runs that ended with Menu_Unk834D's refresh (not modelled).
     public var menuRefreshes = 0
     /// Map region copies done (Field_UnkAF4E), oldest first; the field drains them.
+    /// Colour numbers (0-255) the palette opcodes and their records wrote in Pal_CgramBuf.
+    public var paletteWrites: Set<Int> = []
     public var mapCopies: [MapCopy] = []
 
     /// One Field_UnkAF4E copy: the layers whose tiles changed and the destination cells (row << 8 | column).
@@ -289,6 +291,7 @@ public final class CTEventVM {
         "items": [0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7],
         "gather": [0xD9, 0xDA],
         "maps": [0xE4, 0xE5],
+        "palettes": [0x2E, 0x33, 0x88],
     ]
     public static let modelled: Set<UInt8> = Set(families.values.joined())
 
@@ -605,6 +608,9 @@ public final class CTEventVM {
         case 0xD9: return partyWalkToTiles(y)
         case 0xDA: return partyGather(y)
         case 0xE4, 0xE5: return mapCopyOp(op, y)
+        case 0x88: return objPalAnim(y)
+        case 0x2E: return palAnim(y)
+        case 0x33: return setPalette(y)
         case 0xE3: wram[WRAM.fieldControlEnabled] = UInt8(data(y + 1)); return .go(x: y + 2, carry: true)
         case 0xE6:
             let amount = dataWord(y + 1), layers = data(y + 3)

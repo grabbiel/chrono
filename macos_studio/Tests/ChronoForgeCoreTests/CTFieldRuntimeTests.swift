@@ -203,5 +203,16 @@ final class CTFieldRuntimeTests: XCTestCase {
         let layer = try XCTUnwrap(live.layers.firstIndex { $0.bg == edited.key })
         XCTAssertNotEqual(live.layers[layer].metatiles, field.gameMap.layers[layer].metatiles)
     }
+
+    func testThePaletteOpcodesChangeTheColours() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 85)  // $2E records on the telepods' colours
+        try field.start()
+        try run(field, "", frames: 40)
+        let written = field.vm.paletteWrites.filter { $0 < 128 }
+        XCTAssertFalse(written.isEmpty)
+        let picture = CTFieldPicture.frame(field, base: nil).picture
+        for c in written { XCTAssertEqual(picture.cgram[c], UInt16(field.vm.wram.word(WRAM.palCgramBuf + 2 * c))) }
+        XCTAssertTrue((0..<8).contains { field.vm.wram[WRAM.objPalSlot + $0] & 0x80 == 0 })   // claimed slots
+    }
 }
 

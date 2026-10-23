@@ -1,8 +1,9 @@
 // CTEventVMOpcodesTests.swift — the opcode families slice 3 models, on
 // synthetic packs and WRAM: items and gold ($C7-$CE, $D7) through
 // BankC1_RunService's services, and party membership ($CF-$D4, $D6) through
-// Menu_RunCommand's party commands, the party walks ($D9, $DA) and the map
-// region copies ($E4, $E5). The ROM handlers themselves are compared
+// Menu_RunCommand's party commands, the party walks ($D9, $DA), the map
+// region copies ($E4, $E5), and the palettes ($2E, $33, $88) with
+// PalAnim_TickAll and the palette slots. The ROM handlers themselves are compared
 // by re_workspace/tools/ct_event_vm.py check.
 import XCTest
 @testable import ChronoForgeCore
@@ -146,4 +147,75 @@ final class CTEventVMOpcodesTests: XCTestCase {
         XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x22, carry: true))
         XCTAssertEqual(v.wram[WRAM.fieldUnk54] & 0x01, 0)
     }
+
+    func testColoursAreCopiedAndACycleRecordIsSetUp() throws {
+        let v = try vm([0x2E, 0x80, 0x10, 0x06, 0x00, 0x11, 0x22, 0x33, 0x44, 0x2E, 0x45, 0x20, 0x04, 0x37, 0x02])
+        XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x2A, carry: true))   // n = 6: four colour bytes
+        XCTAssertEqual((0..<4).map { v.wram[WRAM.palCgramBuf + 0x20 + $0] }, [0x11, 0x22, 0x33, 0x44])
+        XCTAssertEqual((0..<4).map { v.wram[WRAM.palBuf + 0x20 + $0] }, [0x11, 0x22, 0x33, 0x44])
+        XCTAssertEqual(v.paletteWrites, [0x10, 0x11])
+        XCTAssertEqual(v.execute(at: 0x2A), .go(x: 0x30, carry: true))
+        let rec = (0..<9).map { v.wram[WRAM.fieldAnimB + $0] }
+        XCTAssertEqual(rec, [0x40, 0x20, 0x04, 0x08, 0x00, 0x02, 0x05, 0x33, 0x77])
+        for k in 0..<8 { v.wram[WRAM.fieldAnimB + 12 * k] = 0x10 }       // records 0-7 taken
+        XCTAssertEqual(v.execute(at: 0x2A), .go(x: 0x30, carry: false))  // dropped
+    }
+
+    func testAnObjectsRecordIsLinkedAndUndone() throws {
+        let v = try vm([0x88, 0x20, 0x31, 0x04, 0x88, 0x00])
+        v.wram[WRAM.objOamAttr] = 0x0A                                   // palette slot 5: colour 0 = $D0
+        v.wram.setWord(WRAM.objXPalAnimRec, 0xFFFF)
+        XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x25, carry: true))
+        XCTAssertEqual((0..<6).map { v.wram[WRAM.fieldAnimB + $0] }, [0x20, 0xD3, 0x01, 0x00, 0x00, 0x04])
+        XCTAssertEqual(v.wram.word(WRAM.objXPalAnimRec), 0)
+        v.wram[WRAM.palSpriteRows + 5 * 0x20 + 2] = 0x55
+        XCTAssertEqual(v.execute(at: 0x25), .go(x: 0x27, carry: true))
+        XCTAssertEqual(v.wram[WRAM.fieldAnimB], 0)                        // freed
+        XCTAssertEqual(v.wram.word(WRAM.objXPalAnimRec), 0xFFFF)
+        XCTAssertEqual(v.wram[WRAM.palSpriteRows + 5 * 0x20 + 2], 0)       // the 12 colours again (bank $E4: none here)
+    }
+
+    func testTheTickRotatesAndFades() throws {
+        let v = try vm([])
+        let up: [UInt8] = [0x30, 4, 2, 0, 0, 1], fade: [UInt8] = [0x50, 8, 1, 0x40, 0, 1, 0, 0x80, 0x00]
+        for (i, b) in up.enumerated() { v.wram[WRAM.fieldAnimB + i] = b }
+        for (i, b) in fade.enumerated() { v.wram[WRAM.fieldAnimB + 12 + i] = b }
+        for c in 4...6 { v.wram.setWord(WRAM.palBuf + 2 * c, c - 3) }
+        v.wram.setWord(WRAM.palBuf + 16, 0x7FFF)
+        v.palAnimTick()
+        XCTAssertEqual((4...6).map { v.wram.word(WRAM.palBuf + 2 * $0) }, [3, 1, 2])   // rotated up, the top wrapping
+        XCTAssertEqual(v.wram.word(WRAM.palCgramBuf + 16), 0x1CE7)        // white x $40 / 256
+        XCTAssertEqual(v.wram[WRAM.fieldAnimB + 12 + 7], 0x40)
+        v.palAnimTick()
+        XCTAssertEqual(v.wram.word(WRAM.palCgramBuf + 16), 0)             // level 0, not yet ended
+        XCTAssertEqual(v.wram[WRAM.fieldAnimB + 12], 0x50)
+        v.palAnimTick()
+        XCTAssertEqual(v.wram[WRAM.fieldAnimB + 12], 0)                   // past the target: ended
+    }
+
+    func testPaletteSlotsAreClaimedSharedAndGivenBack() throws {
+        let v = try vm([])
+        for s in 0..<8 { v.wram[WRAM.objPalSlot + s] = 0x80 }
+        for x in [2, 4] { v.wram[WRAM.objUnk1100 + x] = 3; v.wram.setWord(WRAM.objPalSrc + x, 0x1234) }
+        v.wram[WRAM.objUnk1100 + 6] = 0
+        v.wram.setWord(WRAM.objCur, 2)
+        XCTAssertEqual(v.claimPaletteSlot(), true)
+        XCTAssertEqual(v.wram[WRAM.objPalSlot], 2)
+        v.wram.setWord(WRAM.objCur, 4)
+        XCTAssertEqual(v.claimPaletteSlot(), true)                        // the same colours: shared
+        XCTAssertEqual([v.wram[WRAM.objPalSlot], v.wram[WRAM.objPalPrev + 4], v.wram[WRAM.objPalNext + 2]], [4, 2, 4])
+        XCTAssertEqual(v.wram[WRAM.objOamAttr + 4], 0)
+        v.wram.setWord(WRAM.objCur, 6)
+        XCTAssertEqual(v.claimPaletteSlot(), true)                        // kind 0: slot 5
+        XCTAssertEqual(v.wram[WRAM.objOamAttr + 6], 0x0A)
+        v.wram.setWord(WRAM.objCur, 4)
+        v.releasePaletteSlot()
+        XCTAssertEqual([v.wram[WRAM.objPalSlot], v.wram[WRAM.objPalNext + 2]], [2, 0x80])
+        v.wram.setWord(WRAM.objCur, 2)
+        v.releasePaletteSlot()
+        XCTAssertEqual(v.wram[WRAM.objPalSlot], 0x80)                     // free again
+        v.wram[WRAM.fieldUnk54] = 0x80
+        XCTAssertNil(v.claimPaletteSlot())                                // Field_Unk54 bit 7: no slots
+    }
 }
+

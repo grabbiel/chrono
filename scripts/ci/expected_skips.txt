@@ -118,3 +118,4 @@ ChronoForgeCoreTests.CTProjectAuditionTests/testTheRackAuditionDecodesTheProject
 ChronoForgeCoreTests.CTProjectAuditionTests/testADrumPadAuditionPlaysTheProjectSample       skip      # local ROM
 ChronoForgeCoreTests.CTTreasureTests/testAGrownTreasureRomAndANewLocationBuild                  skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testARedrawCopyChangesTheMapsPicture                  skip      # local ROM
+ChronoForgeCoreTests.CTFieldRuntimeTests/testThePaletteOpcodesChangeTheColours                skip      # local ROM

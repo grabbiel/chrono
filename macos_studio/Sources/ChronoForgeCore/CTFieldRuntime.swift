@@ -149,7 +149,8 @@ public final class CTFieldRuntime {
         "the dialogue box's own code (Field_Unk1F87) is CTDialogueLayout's; the D-pad is held while the box is open; a choice answers its first line",
         "the frame-build queue (ObjQ_Head/Tail) is drained every frame, so every object's animation advances",
         "Party_LeaderAnim: no idle rows (Party_AnimIdle) and no shape-$1E stair row; followers hold their place (Party_UnkA26B/A2CE not run)",
-        "battles, menus, fades and palettes are not run",
+        "battles, menus and fades are not run",
+        "palettes: the location's own animation records (FieldFD_LoadAnimSetB) and Pal_Buf row 0 are not loaded; the picture takes the background from the project's palette and only the colours the palette opcodes wrote from Pal_CgramBuf",
         "after a party or item-count command, Menu_RunCommand's refresh (Menu_Unk834D: weapon records, BankFF_UnkF958, Menu_Unk82E1) is not run",
     ]
 
@@ -190,6 +191,7 @@ public final class CTFieldRuntime {
         initLoadState(&w)
         try loadMap(&w)
         vm.wram = w
+        vm.loadLocationPalette(map.header.palette)                 // LocLoad_Unk7084, Pal_LoadUnkRow0's copy
         let entry = try CTEventROM.entries(rom: rom)
         let events = map.header.events
         guard events < entry.count else { throw CTEventError("location \(location): no event pack \(events)") }
@@ -305,6 +307,7 @@ public final class CTFieldRuntime {
         for c in vm.changes { changes.append((frameCount, c)) }
         vm.changes.removeAll()
         drainMapCopies()
+        vm.palAnimTick()                                            // FdVec_FFF7: PalAnim_TickAll
         objectMotion()
         if runsScrollTo { scrollToOrFollow() } else { followCamera() }
         frameCount += 1
@@ -785,7 +788,8 @@ public final class CTFieldRuntime {
     }
 
     /// Obj_UpdateInView: inside the window an object is active (Obj_Unk0F00
-    /// bit 7, its animation reset on entry); leaving it, a message's speaker
+    /// bit 7, its animation reset and a palette slot claimed on entry);
+    /// leaving it, the slot goes back and a message's speaker
     /// (ObjX_LeaveView) closes the box (Field_Unk29 = $0D).
     func updateInView(_ x: Int) -> Bool {
         let kind = vm.wram[WRAM.objUnk1100 + x], u = vm.wram[WRAM.objUnk1A81 + x]
@@ -797,11 +801,13 @@ public final class CTFieldRuntime {
                 vm.wram[WRAM.objUnk0F00 + x] = 0x80
                 vm.wram[WRAM.objAnimColumn + x] = 0; vm.wram[WRAM.objAnimTimer + x] = 0
                 vm.wram[WRAM.objState + x] = 0; vm.wram[WRAM.objLastFrame + x] = 0xFF
+                vm.claimPaletteSlot()                                  // Obj_Unk7170
             }
             return true
         }
         if vm.wram[WRAM.objUnk0F00 + x] & 0x80 != 0 {
             vm.wram[WRAM.objUnk0F00 + x] = 0
+            vm.releasePaletteSlot()                                    // Obj_Unk734C
             if vm.wram[WRAM.objXLeaveView + x] != 0, vm.wram[WRAM.fieldUnk30] == 0 { vm.wram[WRAM.fieldUnk29] = 0x0D }
         }
         if vm.wram[WRAM.objXAnimLoops + x] != 0 { vm.wram[WRAM.objXAnimLoops + x] = 2 }
