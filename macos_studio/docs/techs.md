@@ -208,7 +208,12 @@ fills the project. The matrix shows:
   modifiers, animation script and frames, and each part's MP and 12 effect bytes;
 - a target-zone preview: the menu mode's zone (dashed) and the area record's
   zone (filled) over a sample layout, with what they take in;
-- a tech-point simulator: three slots, unlock bits and a list of awards.
+- a tech-point simulator: three slots, unlock bits and a list of awards;
+- **Help line**: the selected tech's description as the menu draws it
+  (`Menu_TechDescText`, BG3 rows 21-22) through the PPU, with a fits /
+  overflows indicator and the project's character names. Tech descriptions are
+  not part of the project, so the draft field there is a preview only.
+  See [dialogue box](dialogue.md#the-menus-help-line).
 
 The header shows the range check and a **Write techs to ROM** toggle
 (`rom.techs`). **Build ROM…** writes the build.

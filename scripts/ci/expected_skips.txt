@@ -110,3 +110,4 @@ ChronoForgeMetalTests.PPUFeatureParityTests/testParityModes2To6OffsetPerTileAndD
 ChronoForgeMetalTests.PPUFeatureParityTests/testParityMosaic                                    may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPUFeatureParityTests/testParityOverscanBorder                            may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPUFeatureParityTests/testParityRandomFeatureFrames                       may-skip  # Metal device availability on hosted runners
+ChronoForgeCoreTests.CTHelpLineTests/testEveryROMDescriptionFits                                skip      # local ROM

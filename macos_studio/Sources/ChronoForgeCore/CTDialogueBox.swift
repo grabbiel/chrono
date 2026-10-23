@@ -3,7 +3,8 @@
 // in VRAM, and the band's per-line registers (BG1SC/BG3SC, scroll, TM, colour
 // math) as the field's HDMA sets them, for any frame of a CTDialogueLayout.
 // Rendered by PPUReferenceRenderer (CLI, tests) or ChronoForgeMetal (Studio).
-// Outside the band the field would show the map; here it is the backdrop.
+// Outside the band the field shows the map: `frame(_:at:over:)` composes the
+// box over a field picture (LocationScene.frame); otherwise the backdrop.
 import Foundation
 
 public struct CTDialogueBox: Sendable {
@@ -67,7 +68,10 @@ public struct CTDialogueBox: Sendable {
         }
     }
 
-    /// The band's registers at Field_Unk27 = `open` (0 closed) and `place`.
+    /// The band's registers at Field_Unk27 = `open` (0 closed) and `place`:
+    /// EngFD_UnkC124's records (BG1SC = BG3SC = $1C, HOFS 0 and the VOFS pair,
+    /// TM with TS = TMW = TSW = 0) and the gradient, whose last line keeps the
+    /// picture's own CGADSUB.
     public static func applyBand(_ f: inout PPUFrame, open: Int, place: Int) {
         guard open > 0 else { return }
         let (first, lines) = CTDialogueWindow.band(n: open, place: place)
@@ -77,10 +81,15 @@ public struct CTDialogueBox: Sendable {
             guard y >= 0 && y < f.height else { continue }
             f.lines[y].bg[0].sc = CTDialogueROM.bandSC
             f.lines[y].bg[2].sc = CTDialogueROM.bandSC
+            f.lines[y].bg[0].hofs = 0
+            f.lines[y].bg[2].hofs = 0
             f.lines[y].bg[0].vofs = scroll.0
             f.lines[y].bg[2].vofs = scroll.1
             f.lines[y].tm = b.tm
-            f.lines[y].cgadsub = b.cgadsub ?? 0
+            f.lines[y].ts = 0
+            f.lines[y].tmw = 0
+            f.lines[y].tsw = 0
+            f.lines[y].cgadsub = b.cgadsub ?? f.lines[y].cgadsub
             f.lines[y].fixedColor = coldata(b.coldata)
         }
     }
@@ -94,11 +103,46 @@ public struct CTDialogueBox: Sendable {
         return BGR555(word: r | g | b)
     }
 
-    /// The picture after `frame` of `layout` (clamped to its frames).
-    public func frame(_ layout: CTDialogueLayout, at frame: Int) -> PPUFrame {
+    /// The picture after `frame` of `layout` (clamped to its frames); `cursor`:
+    /// a choice message's cursor line (CTChoiceCursor), shown from the end wait.
+    public func frame(_ layout: CTDialogueLayout, at frame: Int, cursor: Int? = nil) -> PPUFrame {
         var f = blankFrame()
         guard !layout.frames.isEmpty else { return f }
         let t = min(max(0, frame), layout.frames.count - 1)
+        Self.storeText(&f, layout, through: t)
+        let s = layout.frames[t]
+        Self.applyBand(&f, open: s.open, place: s.place)
+        if let cursor, let first = CTChoiceCursor.firstFrame(layout), t >= first {
+            CTChoiceCursor.apply(&f, row: cursor, mem: mem)
+        }
+        return f
+    }
+
+    /// The box over a field picture `map` (LocationScene.frame, same layout:
+    /// mode 1, BG1/2 characters at $1000, BG3's at $5000): the frame set at
+    /// $1F00 / $4FC0, the two tilemaps at $1C00 / $1D00, the cursor characters
+    /// at $57E0 (Field_UploadUnk57E0 runs at every field load), colours 1-15
+    /// (Pal_LoadUnkRow0), the text lines, and the band over the map's own
+    /// registers. The map keeps everything else, CGRAM 0 and 16-255 included.
+    public func frame(_ layout: CTDialogueLayout, at frame: Int, over map: PPUFrame, cursor: Int? = nil) -> PPUFrame {
+        var f = map
+        let (tiles, alt) = CTDialogueWindow.frameSet(mem, style: style)
+        Self.storeBytes(&f, tiles, atWord: CTDialogueROM.frameVRAM)
+        Self.storeBytes(&f, alt, atWord: CTDialogueROM.frameAltVRAM)
+        let colours = CTDialogueWindow.palette(mem, style: style)
+        for i in 1..<16 { f.cgram[i] = colours[i] ?? 0 }
+        for (r, row) in CTDialogueWindow.textTilemap().enumerated() {
+            for (c, w) in row.enumerated() { f.vram[CTDialogueROM.tilemapText + 32 * r + c] = w }
+        }
+        for (r, row) in CTDialogueWindow.frameTilemap().enumerated() {
+            for (c, w) in row.enumerated() { f.vram[CTDialogueROM.tilemapFrame + 32 * r + c] = w }
+        }
+        guard !layout.frames.isEmpty else { return f }
+        let t = min(max(0, frame), layout.frames.count - 1)
+        // Field_UploadUnk57E0's characters, and the cursor once the end wait starts (else the grid).
+        var row = CTChoiceROM.cursorOff
+        if let cursor, let first = CTChoiceCursor.firstFrame(layout), t >= first { row = cursor }
+        CTChoiceCursor.apply(&f, row: row, mem: mem)
         Self.storeText(&f, layout, through: t)
         let s = layout.frames[t]
         Self.applyBand(&f, open: s.open, place: s.place)
@@ -106,8 +150,8 @@ public struct CTDialogueBox: Sendable {
     }
 
     /// 256 x 224 RGBA8 of `frame`.
-    public func render(_ layout: CTDialogueLayout, at frame: Int) -> [UInt8] {
-        PPUReferenceRenderer.render(self.frame(layout, at: frame))
+    public func render(_ layout: CTDialogueLayout, at frame: Int, cursor: Int? = nil) -> [UInt8] {
+        PPUReferenceRenderer.render(self.frame(layout, at: frame, cursor: cursor))
     }
 
     /// The frame at which page `page` is fully drawn (nil past the last page).

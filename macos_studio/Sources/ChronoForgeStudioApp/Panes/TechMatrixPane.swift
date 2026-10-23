@@ -83,6 +83,8 @@ private struct TechMatrixEditor: View {
                     }
                     if page != .points && system.techs.indices.contains(selected) {
                         TechEditor(system: $system, id: selected)
+                        TechHelpLine(id: selected, romPath: store.sceneROMPath,
+                                     names: CTDialogueSettings.projectNames(project))
                     }
                 }
                 .padding()
@@ -717,5 +719,44 @@ private struct TechPointsSimulator: View {
             }
         }
         return names.isEmpty ? "—" : names.joined(separator: ", ")
+    }
+}
+
+/// The tech's description in the menu's help line (Menu_TechDescText, BG3 rows
+/// 21-22), from the ROM; a draft text previews live. Tech descriptions are
+/// not part of the project yet, so a draft is not saved.
+private struct TechHelpLine: View {
+    let id: Int
+    let romPath: String?
+    let names: [Int: String]
+    @State private var drafts: [Int: String] = [:]
+
+    var body: some View {
+        GroupBox("Help line") {
+            VStack(alignment: .leading, spacing: 6) {
+                if id < CTHelpLineROM.techCount {
+                    HStack {
+                        TextField("Draft a description (preview only)", text: Binding(
+                            get: { drafts[id] ?? romText ?? "" }, set: { drafts[id] = $0 }))
+                            .frame(maxWidth: 420)
+                        if drafts[id] != nil { Button("Revert") { drafts[id] = nil } }
+                    }
+                    HelpLinePreviewView(source: drafts[id].map { .text($0) } ?? .rom(id), place: .tech,
+                                        romPath: romPath, names: names, scale: 1.5)
+                    Text("Tech descriptions are not saved in the project yet: a draft only previews.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text(String(format: "Tech $%02X has no description (the table covers $00-$75)", id))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// The ROM's description decoded with its dictionary.
+    private var romText: String? {
+        guard let romPath, let assets = DialogueAssets.load(romPath), let codec = assets.codec else { return nil }
+        let bytes = CTHelpLine.description(CTDialogueMemory(rom: assets.rom), place: .tech, index: id)
+        return try? codec.decode(bytes)
     }
 }

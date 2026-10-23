@@ -1,4 +1,4 @@
-# Dialogue box preview (Item, Gear & Lore Database, slice 2)
+# Dialogue box preview (Item, Gear & Lore Database, slices 2-3)
 
 The in-game dialogue box for any message: the ROM's variable-width font, the
 window's frame and colours, and how the field lays the text out and paces it,
@@ -13,7 +13,12 @@ which also checks every claim. It cites the matched ChronoRET routines:
 - `CTDialogueFont.swift`: `CTDialogueROM`, `CTDialogueMemory`, `CTDialogueFont`
   and `CTDialogueWindow`.
 - `CTDialogueLayout.swift`: `CTDialogueSettings` and `CTDialogueLayout`.
-- `CTDialogueBox.swift`: `CTDialogueBox`.
+- `CTDialogueBox.swift`: `CTDialogueBox`, with the box over a field picture.
+- `CTDialogueChoice.swift`: `CTBoxPlace`, `CTChoice` and `CTChoiceCursor`
+  (evidence: `ct_boxchoice.py`).
+- `CTDialogueOverMap.swift`: a project location's field picture behind the box.
+- `CTDialogueNames.swift`: the names from the project's characters.
+- `CTHelpLine.swift`: the menu's help line (evidence: `ct_helpline.py`).
 
 No ROM bytes, glyphs or dialogue are stored in the repository. The tests use an
 invented font and invented strings.
@@ -91,11 +96,94 @@ placeholders (`CTDialogueSettings.placeholder`): names "A"–"H", party 0–2, i
 1, and arguments `$12`, `$34`, …. The key is pressed a chosen number of frames
 after each wait begins.
 
+## The box's place
+
+`Field_Unk1F87` picks the place on the first frame of state 5. The message
+opcodes set `Field_Unk30`: `OpBB` and `OpC0` 0, `OpC1` and `OpC3` 1, `OpC2` and
+`OpC4` 2. With 1 the band is centred on line 48 (the top), with 2 on line 171
+(the bottom). With anything else it reads the low byte of the speaker's
+`Obj_ScreenY` (`$0A80` + `Field_Unk2E`, the object that ran the opcode): below
+`$80` (the upper half of the screen) the box goes to the bottom, from `$80` on
+to the top. The high byte is not read.
+
+## Choices
+
+`OpC0`, `OpC3` and `OpC4` carry a choice byte (`Evt_MsgChoiceStart`): bits 2-3
+are the first choice line (`Field_Unk64`) and bits 0-1 the last
+(`Field_Unk65`). When the text has ended (state 7, `TextWin_Status` 0), the
+cursor `Field_Unk63` starts on the first line. `Sub_1ADF` moves it each frame:
+
+- Down goes one line on, and past the last line back to the first.
+- Otherwise Up goes one line back; from line 0, or below the first line, it
+  goes to the last.
+- Otherwise the confirm button (`Pad_Unk00F8` bit 7) makes the choice.
+
+The opcode stores the line in the object's `ObjX_Unk7F0A80`.
+
+`Irq_DrawChoiceCursor` draws the cursor as 2 × 2 tiles of the text grid at
+`$1C00`: words `$28FC $28FD` over `$28FE $28FF` (BG3 characters `$0FC`-`$0FF`,
+palette 2) at columns 2-3 of the line's two map rows. It puts the grid's own
+words back on the other three lines. The four characters are the 64 bytes
+`Field_UploadUnk57E0` sends from `$FF:9260` to VRAM `$57E0`; it runs at every
+field load. Rendered, they are the game's pointing hand. Line 0 loses the
+cursor's top 4 lines, as it does the text's: the band shows BG3 only from its
+11th line.
+
+## Over the map
+
+Outside the band the field shows the location. Inside it,
+`EngFD_UnkC124`'s HDMA records write:
+
+- BG1SC = BG3SC = `$1C`;
+- HOFS 0 for BG1 and BG3 (each scroll pair's first word), and the VOFS pair;
+- TM 5 or 1, with TS = TMW = TSW = 0;
+- the gradient's CGADSUB/COLDATA on every line but the last, which keeps the
+  map's CGADSUB.
+
+`CTDialogueBox.frame(_:at:over:)` composes the box over a
+`LocationScene.frame` picture. It adds the box's own VRAM (the frame set at
+`$1F00`/`$4FC0`, the tilemaps at `$1C00`/`$1D00`, the cursor characters at
+`$57E0`, the text from `$5800`) and colours 1-15. The map keeps everything
+else, including CGRAM 0 and 16-255.
+
+## The menu's help line
+
+The item and tech menus draw a description in one line of BG3, not in a box.
+`Menu_DrawDescText` (`$C2:F2F3`; items, table `$CC:2EB1`, 242 entries) and
+`Menu_TechDescText` (`$C2:BE33`; techs, table `$CC:3A09`, ids 0-`$75`) both use
+`Menu_StartDescText` and `Menu_TextStepLoop`.
+
+**How it draws.**
+
+- The decoder is the dialogue box's own (`TextWin`, mode 0), stepping one step
+  a frame. It draws into the glyph buffer `$7E:5E00`, which goes to VRAM
+  `$7800`.
+- Tile words start at `$3101` (palette 4, priority). The lower row uses the
+  same words with bit 4 set.
+- They go to BG3 map rows 2-3 for items (VRAM `$6840`) and rows 21-22 for
+  techs (`$6AA0`).
+- Screen x is the pen + 16. Colours 16-19 come from `$FF:9C78`.
+
+**The routine's limits.**
+
+- A new line (`$05`) moves the drawing two rows on, but only the first two rows
+  are ever sent: a description has one visible line. A third line lands back
+  on the first, because the column is 8-bit.
+- A pen past 240 puts tile words past column 31, into the next map row.
+- A pen reset without a new line (`$06`-`$0C`), or a pen wrap past 255, makes
+  the next tile count wrap, and the routine would write 65536 words.
+
+"Fits" means none of these happen. Every real description fits: the widest end
+at pen 219 (items) and 207 (techs). The menu's window frame (BG1/BG2) behind
+the line is not drawn.
+
 ## CLI
 
 ```
 chronoforge text preview <rom> <TABLE:INDEX | --text "..."> [--page N | --frame F] [--png out.png]
                          [--frames] [--layout-json] [--press N] [--place 1|2] [--style 0-7]
+                         [--opcode BB|C0-C4 [--speaker-y Y]] [--choice K] [--location N --project P [--camera X,Y]]
+chronoforge text preview <rom> --help-line item|tech <N | --text "..."> [--png out.png] [--layout-json]
 chronoforge text font <rom> [--json]
 chronoforge text fit <rom> <message.txt | dialogue.json> [--json]
 ```
@@ -107,6 +195,15 @@ chronoforge text fit <rom> <message.txt | dialogue.json> [--json]
 - **`--frames`** prints the frame-by-frame timeline: state, opening, page, key
   waits and glyphs.
 - **`--layout-json`** prints the numbers that `ct_dialogue.py` compares.
+- **`--opcode`** places the box as that opcode does. For `OpBB` and `OpC0` it
+  uses the speaker's screen Y (`--speaker-y`).
+- **`--choice K`** draws a choice message's cursor on box line K from the end
+  wait.
+- **`--location N`** draws the box over location N of a project
+  (`chronoforge maps import`), with the camera at X,Y.
+- **`--help-line`** lays out description N (or `--text`) in the menu's help
+  line. It reports the glyphs, pens, frames and fits / overflows, and writes a
+  256 × 16 PNG of the two rows through the PPU.
 - **`font`** prints the font, widths, frame and colour digests and the box
   geometry.
 - **`fit`** is report-only. It lists the lines of a `dialogue.json` (or of one
@@ -124,7 +221,13 @@ has:
   scaled by a viewer speed of ¼× to 4×;
 - a choice of the 8 frame styles;
 - the frame count;
-- a warning for any line past the frame.
+- a warning for any line past the frame;
+- the place: as the caller set it, top, bottom, or by the speaker's screen Y;
+- a choice cursor: a **Choice** toggle with the first and last lines; ↑ and ↓
+  move the cursor (click the picture to focus it);
+- the party (names from the project's characters, else the game's defaults);
+- **Behind**: an imported location of the project behind the box (camera at its
+  centre), when the caller passes the project.
 
 It reads the ROM from the Scenes/Music ROM (`--rom`). It appears in two
 places:
@@ -135,6 +238,10 @@ places:
 - **Scenes:** the statement inspector shows it for `OpBB` and `OpC0`–`OpC4`.
   The table is the last `OpB8_SetMsgPtr` before the statement. `OpC2` and
   `OpC4` put the box at the bottom.
+
+`HelpLinePreviewView` shows the menu's help line, with a fits / overflows
+indicator. It appears in the item description editor (**In the menu**, live as
+you type) and under the Tech matrix's tech editor (**Help line**).
 
 ## Verification
 
@@ -154,19 +261,34 @@ places:
 - **The CLI.** `ct_dialogue.py verify-cli` compares the CLI's `text font --json`
   and `text preview --layout-json` with the Python decode: 94 of 94 message
   layouts.
-- **Tests.** `re_workspace/tests/test_dialogue.py`, and `CTDialogueTests`,
+- **Help line.** `ct_helpline.py check --run` holds 35 claims. The run claims
+  cover every item description (242 of 242, 2143 frames) and every tech
+  description (118 of 118, 2711 frames) through `Menu_TextStepLoop` with every
+  queued upload compared. They also cover 20 synthetic runs, plus 4 the model
+  stops as runaways.
+- **Place and choices.** `ct_boxchoice.py check --run` holds 40 claims.
+  - The place: `Field_Unk1F87`, 324 of 324 cases over `Field_Unk30`, the screen
+    Y bytes and the object.
+  - `Sub_1ADF`: 3360 of 3360 cases.
+  - `Irq_DrawChoiceCursor`: 7 of 7, with the VRAM port recorded.
+  - `ct_dialogue.py check` includes both tools' claims.
+- **Tests.** `re_workspace/tests/test_dialogue.py`, `test_helpline.py`,
+  `test_boxchoice.py`; `CTHelpLineTests` and `CTDialogueChoiceTests` (their
+  vectors `helpline_vectors.json`, `choice_vectors.json`, the cursor and the
+  composition over a map), and `CTDialogueTests`,
   which runs the Python vectors (`dialogue_vectors.json`) and renders a
   hand-made font and frame through `PPUReferenceRenderer`, pixel by pixel.
 
 ## Limitations
 
-- **Outside the band.** Lines outside the band show the backdrop. In the game
-  they show the map, and the last band line uses the map's colour math.
-- **Choices.** `OpC0`/`OpC3`/`OpC4` previews draw the text, not the choice
-  cursor.
-- **The box's place.** `OpBB` and `OpC0` are shown at the top. Their real place
-  depends on `Field_Unk30`, which is not traced.
-- **Item descriptions.** They are previewed in the dialogue box, not in the
-  menu's help line.
-- **Real names and numbers.** The preview uses placeholder names, party,
-  item and arguments, not a save file's.
+- **The Scenes inspector** passes only the place (`OpBB` and `OpC0` show at the
+  top). The speaker's screen Y, the choice byte and the event pack's location
+  are not passed yet, because the inspector is the Scenes worker's file. The
+  preview's own controls set them.
+- **The map picture** is the location at a still camera (its centre in the
+  Studio), without the objects' sprites.
+- **The choice cursor** shows from the end wait. The layout then runs the key
+  wait and close of a plain message, not the wait for a choice.
+- **The help line** does not draw the menu's window frame. Tech descriptions
+  are not in the project, so they are previewed, not saved.
+- **Numbers** (item and arguments) are still placeholders.
