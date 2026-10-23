@@ -52,7 +52,12 @@ public struct CTChoice: Equatable, Sendable {
 
     /// The cursor after one key (nil: no key).
     public func step(_ cursor: Int, _ key: Key?) -> Int {
-        let f7 = key == .down ? CTChoiceROM.padDown : key == .up ? CTChoiceROM.padUp : 0
+        let f7: Int
+        switch key {
+        case .down: f7 = CTChoiceROM.padDown
+        case .up: f7 = CTChoiceROM.padUp
+        case nil: f7 = 0
+        }
         return Self.sub1ADF(f62: CTChoiceROM.active, f63: cursor, f64: first, f65: last, f66: 0, f6: 0, f7: f7,
                             f8: 0, f34: 0).f63
     }

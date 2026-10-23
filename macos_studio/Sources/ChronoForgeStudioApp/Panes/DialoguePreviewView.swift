@@ -191,6 +191,26 @@ struct DialoguePreviewView: View {
 
     private func nameOf(_ id: Int) -> String { names[id] ?? CTDialogueSettings.defaultNames[id] }
 
+    // The choice and location helpers below keep the view's expressions short for CI's older
+    // type checker (Xcode 26.6).
+    private func setFirst(_ first: Int, of c: CTChoice) {
+        let last: Int = max(first, c.last)
+        operand = first << 2 | last
+        cursor = first
+    }
+
+    private func setLast(_ last: Int, of c: CTChoice) {
+        let first: Int = min(c.first, last)
+        operand = first << 2 | last
+        cursor = first
+    }
+
+    private func locationLabel(_ n: Int, in project: CTProject) -> String {
+        let label: String = String(format: "Location $%03X", n)
+        guard let map = project.maps[CTMaps.id(n)] else { return label }
+        return label + " " + map.name
+    }
+
     @ViewBuilder private func placeAndChoice(pages: Int) -> some View {
         HStack(spacing: 6) {
             Picker("Place", selection: $placeMode) {
@@ -209,10 +229,10 @@ struct DialoguePreviewView: View {
                     if on { cursor = CTChoice(operand: operand).first; page = pages - 1; focused = true }
                 }
             if let c = activeChoice {
-                Picker("", selection: Binding(get: { c.first }, set: { operand = $0 << 2 | max($0, c.last); cursor = $0 })) {
+                Picker("", selection: Binding(get: { c.first }, set: { (v: Int) in setFirst(v, of: c) })) {
                     ForEach(0..<4, id: \.self) { Text("from line \($0 + 1)").tag($0) }
                 }.frame(width: 110).labelsHidden()
-                Picker("", selection: Binding(get: { c.last }, set: { operand = min(c.first, $0) << 2 | $0; cursor = min(c.first, $0) })) {
+                Picker("", selection: Binding(get: { c.last }, set: { (v: Int) in setLast(v, of: c) })) {
                     ForEach(0..<4, id: \.self) { Text("to line \($0 + 1)").tag($0) }
                 }.frame(width: 100).labelsHidden()
                 Text("cursor line \(cursor + 1) · ↑↓ to move").foregroundStyle(.secondary).monospacedDigit()
@@ -224,7 +244,7 @@ struct DialoguePreviewView: View {
             Picker("Behind", selection: $behind) {
                 Text("Backdrop").tag(Int?.none)
                 ForEach(locations, id: \.self) { n in
-                    Text(String(format: "Location $%03X", n) + (project.maps[CTMaps.id(n)].map { " \($0.name)" } ?? ""))
+                    Text(locationLabel(n, in: project))
                         .tag(Int?.some(n))
                 }
             }.frame(width: 230)

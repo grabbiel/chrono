@@ -156,6 +156,9 @@ func boostText(_ n: Int, _ tables: ItemTablesDef?) -> String {
 // MARK: - Item form
 
 private struct ItemForm: View {
+    // A plain constant: the concatenation inline made the preview row slow to type-check.
+    private static let dialogueBoxHelp = "The text through the field's dialogue box (font, widths, frame, pacing); "
+        + "the menu draws descriptions in its own help line"
     @Binding var item: ItemDef
     let tables: ItemTablesDef?
     let project: CTProject
@@ -247,8 +250,7 @@ private struct ItemForm: View {
                     Text("In a dialogue box").foregroundStyle(.secondary)
                     DialoguePreviewView(source: .text(text), romPath: romPath, scale: 1.5,
                                         names: CTDialogueSettings.projectNames(project), project: project)
-                        .help("The text through the field's dialogue box (font, widths, frame, pacing); "
-                              + "the menu draws descriptions in its own help line")
+                        .help(Self.dialogueBoxHelp)
                 }
             }
             if category < 4 { EquipPreview(item: item, tables: tables, project: project) }
