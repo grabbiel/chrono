@@ -60,7 +60,8 @@ private struct TechMatrixEditor: View {
         .flatMap { (1..<CTTechROM.count).contains($0) ? $0 : nil }
 
     nonisolated static func page(of id: Int) -> Page {
-        id < CTTechROM.firstDouble ? .character((id - 1) / 8) : id < CTTechROM.firstTriple ? .doubles : .triples
+        if id < CTTechROM.firstDouble { return .character((id - 1) / 8) }
+        return id < CTTechROM.firstTriple ? .doubles : .triples
     }
 
     var body: some View {
@@ -824,15 +825,15 @@ private struct ComboBuilder: View {
                                 Stepper(value: $system.combos[index].requirements[k][p], in: 1...8) {
                                     Text("\(system.combos[index].requirements[k][p])").monospacedDigit()
                                 }
-                                TextField("", value: Binding(get: { (m.part ?? 0) & 0x7F }, set: { n in
+                                TextField("", value: Binding(get: { () -> Int in (m.part ?? 0) & 0x7F }, set: { (n: Int) in
                                     error = attempt { try CTTechCombos.setPart(&system, tech: id, member: m.char, part: n) }
                                 }), format: .number).frame(width: 44)
-                                Text(m.mp.map(String.init) ?? "—").monospacedDigit()
+                                Text(techNumberText(m.mp)).monospacedDigit()
                                 TextField("", value: Binding(get: { m.menuIndex ?? 0 }, set: { n in
                                     error = attempt { try CTTechCombos.setMenuCost(&system, tech: id, member: m.char, index: n) }
                                 }), format: .number).frame(width: 44).disabled(m.menuIndex == nil)
                                 HStack(spacing: 4) {
-                                    Text(m.menuMP.map(String.init) ?? "—").monospacedDigit()
+                                    Text(techNumberText(m.menuMP)).monospacedDigit()
                                     if m.menuMP != nil, m.menuMP != m.mp {
                                         Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                                             .help("The field menu shows another MP than the battle charges")
@@ -881,4 +882,11 @@ private struct ComboBuilder: View {
     private func attempt(_ body: () throws -> Void) -> String? {
         do { try body(); return nil } catch { return "\(error)" }
     }
+}
+
+/// A number, or a dash when there is none. (A helper: CI's older type checker,
+/// Xcode 26.6, is slow on `map(String.init) ?? "—"` inside a view builder.)
+func techNumberText(_ n: Int?) -> String {
+    guard let n else { return "—" }
+    return String(n)
 }

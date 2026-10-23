@@ -62,11 +62,18 @@ public enum CTTechText {
 
     /// Per string, its bytes up to (not with) its $00; nil when a pointer leaves the span.
     public static func descriptionBytes(rom: [UInt8]) -> [[UInt8]?] {
-        (0..<strings).map { n in
-            let at = 0x0C0000 + Int(rom[tablePC + 2 * n]) | Int(rom[tablePC + 2 * n + 1]) << 8
-            guard at >= bodyPC, at < bodyEnd, let end = rom[at..<bodyEnd].firstIndex(of: 0) else { return nil }
-            return Array(rom[at..<end])
+        // A loop with typed lets: CI's older type checker (Xcode 26.6) is slow on Int(...) mixed with +, | and <<.
+        var out: [[UInt8]?] = []
+        for n in 0..<strings {
+            let lo: Int = Int(rom[tablePC + 2 * n]), hi: Int = Int(rom[tablePC + 2 * n + 1])
+            let at: Int = (0x0C0000 + lo) | hi << 8
+            if at >= bodyPC, at < bodyEnd, let end = rom[at..<bodyEnd].firstIndex(of: 0) {
+                out.append(Array(rom[at..<end]))
+            } else {
+                out.append(nil)
+            }
         }
+        return out
     }
 
     /// Each tech's description, decoded (nil where it does not decode).

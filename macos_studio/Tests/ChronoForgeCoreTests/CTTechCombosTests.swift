@@ -11,7 +11,8 @@ final class CTTechCombosTests: XCTestCase {
     private func syntheticROM() -> [UInt8] {
         var rom = [UInt8](repeating: 0, count: CTROMBuilder.romSize)
         func put(_ at: Int, _ bytes: [Int]) { for (i, b) in bytes.enumerated() { rom[at + i] = UInt8(b) } }
-        let pairs = (0..<6).flatMap { a in ((a + 1)..<6).map { [a, $0] } }      // 15 pairs of 0-5
+        var pairs: [[Int]] = []                                                  // 15 pairs of 0-5
+        for a in 0..<6 { for b in (a + 1)..<6 { pairs.append([a, b]) } }
         let trios = [[0, 1, 2], [0, 1, 3], [0, 1, 4], [0, 2, 3], [0, 2, 4], [1, 2, 3], [1, 2, 4], [1, 3, 4], [2, 3, 4], [0, 3, 4]]
         for c in 0..<7 {
             put(CTTechROM.userSetsPC + 3 * c, [c, 255, 255])
@@ -19,10 +20,13 @@ final class CTTechCombosTests: XCTestCase {
         }
         var req = 0x27FA, rec = CTTechROM.combosPC
         for (i, who) in (pairs + trios).enumerated() {
-            let count = i < 15 ? 3 : 1, first = i < 15 ? 0x39 + 3 * i : 0x66 + i - 15
-            let m = who.reduce(0) { $0 | 0x80 >> $1 }
+            let count: Int = i < 15 ? 3 : 1
+            let first: Int = i < 15 ? 0x39 + 3 * i : 0x66 + i - 15
+            var m: Int = 0
+            for c in who { m |= 0x80 >> c }
             put(rec, [m, first, count, req & 0xFF, req >> 8])
-            put(CTTechROM.userSetsPC + 3 * (7 + i), who + (who.count == 2 ? [255] : []))
+            let pad: [Int] = who.count == 2 ? [255] : []
+            put(CTTechROM.userSetsPC + 3 * (7 + i), who + pad)
             for k in 0..<count {
                 put(0x0C0000 + req, (0..<3).map { $0 < who.count ? 1 + ($0 + k) % 8 : 0xFF })
                 put(CTTechROM.recPC + 11 * (first + k), [7 + i, 0, 0x40, 0, 0] + who.map { 1 + 8 * $0 + k } + (who.count == 2 ? [0x80] : []))

@@ -38,12 +38,21 @@ public enum CTTechCombos {
         let who = combo.members, count = combo.requirements.count
         if i < pairRecords, who.count == 2, count <= 3 {
             let cols = columns(record: i, members: who, userSets: userSets)
-            return (0..<count).map { k in
-                who.map { c in Int(rom[menuTilesPC + 6 * i + 2 * k + cols.firstIndex(of: c)!]) }
+            // Loops with typed lets: CI's older type checker (Xcode 26.6) is slow on nested closures with arithmetic.
+            var out: [[Int]] = []
+            for k in 0..<count {
+                var row: [Int] = []
+                for c in who {
+                    let at: Int = menuTilesPC + 6 * i + 2 * k + cols.firstIndex(of: c)!
+                    row.append(Int(rom[at]))
+                }
+                out.append(row)
             }
+            return out
         }
         if i >= pairRecords, i < pairRecords + trioRecords, who.count == 3, count == 1 {
-            return [(0..<3).map { Int(rom[lineTilesPC + 3 * (i - pairRecords) + $0]) }]
+            let base: Int = lineTilesPC + 3 * (i - pairRecords)
+            return [(0..<3).map { (k: Int) -> Int in Int(rom[base + k]) }]
         }
         return nil
     }
@@ -56,9 +65,13 @@ public enum CTTechCombos {
     }
 
     public static func decodeRocks(rom: [UInt8]) -> [TechSystemDef.Rock] {
-        (0..<rockCount).map { r in
-            .init(mask: Int(rom[comboMembersPC + r]), needs: (0..<3).map { Int(rom[comboNeedsPC + 3 * r + $0]) })
+        var rocks: [TechSystemDef.Rock] = []
+        for r in 0..<rockCount {
+            let base: Int = comboNeedsPC + 3 * r
+            let needs: [Int] = (0..<3).map { (k: Int) -> Int in Int(rom[base + k]) }
+            rocks.append(TechSystemDef.Rock(mask: Int(rom[comboMembersPC + r]), needs: needs))
         }
+        return rocks
     }
 
     // MARK: Editing
@@ -118,13 +131,24 @@ public enum CTTechCombos {
         guard let (i, k) = s.combo(of: id) else { return [] }
         let users = s.techs[id].userSet < s.userSets.count ? s.userSets[s.techs[id].userSet] : []
         let costs = s.combos[i].menuCosts
-        return s.combos[i].members.enumerated().map { p, c in
-            let u = users.firstIndex(of: c)
-            let part = u.flatMap { s.techs[id].parts.indices.contains($0) ? s.techs[id].parts[$0] : nil }
-            let menu = costs.flatMap { $0.indices.contains(k) && $0[k].indices.contains(p) ? $0[k][p] : nil }
-            func mp(_ n: Int?) -> Int? { n.flatMap { s.parts.indices.contains($0 & 0x7F) ? s.parts[$0 & 0x7F].mp : nil } }
-            return Member(char: c, user: u, part: part, mp: mp(part), menuIndex: menu, menuMP: mp(menu))
+        // A loop with typed lets: CI's older type checker (Xcode 26.6) is slow on nested optional closures.
+        var out: [Member] = []
+        for (p, c) in s.combos[i].members.enumerated() {
+            let u: Int? = users.firstIndex(of: c)
+            var part: Int? = nil
+            if let u, s.techs[id].parts.indices.contains(u) { part = s.techs[id].parts[u] }
+            var menu: Int? = nil
+            if let costs, costs.indices.contains(k), costs[k].indices.contains(p) { menu = costs[k][p] }
+            out.append(Member(char: c, user: u, part: part, mp: partMP(s, part), menuIndex: menu, menuMP: partMP(s, menu)))
         }
+        return out
+    }
+
+    /// A part's MP (bit 7 of the part byte is not the index), or nil past the parts.
+    static func partMP(_ s: TechSystemDef, _ n: Int?) -> Int? {
+        guard let n else { return nil }
+        let k: Int = n & 0x7F
+        return s.parts.indices.contains(k) ? s.parts[k].mp : nil
     }
 
     /// Sets member `c`'s battle part number of tech `id` (bit 7, "runs nothing", kept).
@@ -154,8 +178,9 @@ public enum CTTechCombos {
         for (i, c) in s.combos.enumerated() {
             let name = String(format: "combination $%02X", c.first)
             try need((0...0xFE).contains(c.mask) && c.mask & 1 == 0, "\(name): mask \(c.mask) names characters 0-6 only")
-            try need(c.members.count == (isPairRecord(i) ? 2 : 3),
-                     "\(name): record \(i) is a \(isPairRecord(i) ? "pair" : "trio") (its state byte holds \(isPairRecord(i) ? "doubles" : "a triple"))")
+            let pair: Bool = isPairRecord(i)
+            let shape: String = pair ? "pair" : "trio", holds: String = pair ? "doubles" : "a triple"
+            try need(c.members.count == (pair ? 2 : 3), "\(name): record \(i) is a \(shape) (its state byte holds \(holds))")
             try need(masks.insert(c.mask).inserted, "\(name): another record has the same members (only the first is learnt)")
             if let costs = c.menuCosts {
                 try need(costs.count == c.requirements.count && costs.allSatisfy { $0.count == c.members.count }
