@@ -89,7 +89,8 @@ public enum CTEnemySpritePatch {
         guard (0..<CTEnemySpriteROM.ids).contains(src.set) else { return ["rom set \(src.set) is not an enemy record 0-254"] }
         let layout = src.layout ?? 0
         guard CTEnemySpriteROM.assembled.contains(layout) else {
-            return ["layout \(layout): only frame layouts 0-2 have an OBJ assembly the battle's tables give"]
+            return ["layout \(layout): only frame layouts 0-2 have an OBJ assembly the battle's tables give " +
+                    "(a layout-3 import is the field's view, read-only)"]
         }
         let shape = CTEnemySpriteROM.layouts[layout]
         var problems: [String] = []

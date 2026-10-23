@@ -114,6 +114,8 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-npc-sprites-') as directory
         return d
 
     every = sorted(p.name[:-len('.sprite.json')] for p in (project / 'sprites').glob('*.sprite.json'))
+    # Layout-3 enemies are the field's view, read-only: the build refuses them.
+    every = [n for n in every if not (n.startswith('enemy_') and load(n)['rom'].get('layout') == 3)]
     npcs = [n for n in every if n.startswith('npc_')]
     if len(npcs) != 191 or len(every) != 450:
         fail(f'{len(npcs)} NPC sprites and {len(every)} sprites imported')

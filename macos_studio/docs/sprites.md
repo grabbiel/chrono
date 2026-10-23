@@ -387,8 +387,59 @@ run along row pairs. This comes from the battle's DMA tables and OBJ records
 (`BattleRom_SprTileListPtr`: slot s's OBJs start at `Battle_SprRec` record 4s;
 layout 2 in slot 3 uses the fixed DMA words of `Battle_InitSceneGfx`, elsewhere
 the row order of layout 5) and holds for layout 0 in all 8 enemy slots, layout 1
-in slots 3, 5, 7 and 9 and layout 2 in slots 3 and 6. No slot gives layout 3 an
-assembly, so those three records are not imported.
+in slots 3, 5, 7 and 9 and layout 2 in slots 3 and 6. No battle slot gives
+layout 3 an assembly; the field does ([Layout 3](#layout-3-the-fields-large-objects)).
+
+### Layout 3: the field's large objects
+
+The battle has no assembly for layout 3, but the field draws it. Opcode `$83`
+(`Evt_Op83_InitEnemySprite`) calls `Spr_LoadLargeObj` (`$C0:E12A`) when the size
+class is 3 (`ObjSpr_SizeLarge`). That routine does three things:
+
+1. It copies the 96 tile words of the record's **first** frame record
+   (`SprBuf_Tiles`), in order, into the `$7F:3800` buffer (`SprBuf_Base`),
+   mirroring where bit 14 is set.
+2. It DMAs the `$0C00` bytes to VRAM word `$0400` (`SprBuf_VramWord`). So cell k
+   is OBJ tile `$40` + k: a grid of 16 × 6 cells, 16 per VRAM row.
+3. It fills 24 `SprTile` records:
+   - the (x, y) pairs after the words (`LargeObj_LayoutOfs` `$C0`), x
+     sign-extended and y added in 8 bits;
+   - tiles `$40` + 32p + 2q (`LargeObj_TileRow0`–`2`; p = n / 8, q = n % 8), so
+     three rows of eight 16×16 OBJs;
+   - the fixed attribute `$22` (`LargeObj_Attr`: priority 2, palette 1), which
+     `Spr_AppendToOam` copies as it is.
+
+That one frame is all the object ever shows:
+- `Obj_BuildSpriteFrameStep` returns without a builder for size 3;
+- `Spr_PrepareTiles` only re-places it (`Spr_Place24`).
+
+Records 111 and 215 are the same record. Records 111, 147 and 215 are loaded by
+4, 2 and 3 event packs.
+
+`sprites import` writes each as a `ct-enemy` sprite with `rom.layout` 3, and
+the Studio shows it in the Enemy filter. The sprite has:
+- one frame: the 96 cells, with `stream` 16 × 6 at OBJ tile `$40`;
+- 24 OBJs at tiles 32p + 2q, each in palette 1 with priority 2;
+- `palettes` 0 and 1, both the record's colours;
+- no animations;
+- `battle`, as for any record.
+
+The write-back refuses it: "only frame layouts 0–2…". The Validator says the
+same when it is listed. A part that a layout-3 record shares therefore stays
+frozen.
+
+Tile 0 of both graphics is blank. The Studio draws cell word 0 blank, and the
+field copies tile 0, so the two agree.
+
+**Evidence.** The `LARGE_*` claims of `ct_sprites.py check`:
+- ChronoRET's lines and constants;
+- the code bytes at `$C0:46DF`, `$C0:E12A` and `$C0:CAD9`;
+- the records' data.
+
+`check --run` also runs opcode `$83` for each of the three records in ChronoRET's
+interpreter. The `$7F:3800` buffer, the 24 `SprTile` records and the VRAM DMA
+registers equal `decode_large`. `verify-import` checks the CLI import against
+the decode.
 
 ### Evidence
 
@@ -409,8 +460,10 @@ equals the decode. The run does not cover `Battle_InitScene` itself.
 ### Import
 
 `chronoforge sprites import` (and the Studio's **Import Sprites from ROM…**)
-writes `sprites/enemy_NNN.sprite.json` and `.png` for the 252 records of
-layouts 0–2 (`--enemy N` for some only; `--set` alone imports no enemies):
+writes `sprites/enemy_NNN.sprite.json` and `.png` for all 255 records
+(`--enemy N` for some only; `--set` alone imports no enemies). The 252 of
+layouts 0–2 are imported as the battle shows them, and the 3 of layout 3 as the
+field does ([Layout 3](#layout-3-the-fields-large-objects)):
 
 - `rom.family` is `ct-enemy`, `rom.set` the enemy id, `rom.layout` the frame
   layout and `rom.packed` whether the tiles were unpacked.
@@ -586,8 +639,10 @@ The sprite list has an All / PC / Enemy / NPC / Other filter. `--select <id>` an
 - An imported enemy sprite is a snapshot of the clean ROM. A PC write-back
   warns about records `$F8`–`$FE` (`spriteWarnings`) but does not update their
   project files.
-- Layout 3 (records 111, 147 and 215) is not imported or written. No slot's DMA
-  and OBJ tables give it an assembly.
+- Layout 3 (records 111, 147 and 215) is imported read-only, as the field shows
+  it: one frame and no animations. The build refuses it, because the battle's
+  DMA and OBJ tables give it no assembly. Its second frame record
+  (the end rule counts 2) is not shown by any code traced.
 - Records 117 and 253 have cells past their graphics. They show as blank in the
   Studio. In the game they read past the pack. Records 26, 27 and 254 have
   animations naming frames past the frame set; the import leaves those

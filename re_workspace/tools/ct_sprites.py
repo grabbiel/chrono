@@ -971,6 +971,138 @@ def decode_enemy(rom, i):
     }
 
 
+# Layout 3 has no battle assembly, but the field draws it (opcode $83 calls
+# Spr_LoadLargeObj when the size class is 3): the first frame record's 96
+# tile words are copied in order to the $7F:3800 buffer and DMAed ($0C00 B) to
+# VRAM word $0400, so cell k is OBJ tile $40 + k: 16 cells per VRAM row, 6
+# rows. The 24 SprTile records get the 24 (x, y) pairs after the words
+# (x sign-extended, y added in 8 bits), tiles $40 + 32p + 2q (p = n // 8,
+# q = n % 8: three rows of eight 16x16 OBJs) and the fixed attribute $22
+# (LargeObj_Attr: priority 2, palette 1). Obj_BuildSpriteFrameStep builds
+# nothing for size 3 and Spr_PrepareTiles only re-places it (Spr_Place24), so
+# the field shows that one frame and never another.
+LARGE = 3
+LARGE_COLUMNS, LARGE_ROWS = 16, 6
+LARGE_OBJS = 24
+LARGE_SLOT_TILE = 0x40                # !SprBuf_VramWord $0400
+LARGE_ATTR = 0x22                     # !LargeObj_Attr
+LARGE_PALETTE, LARGE_PRIORITY = LARGE_ATTR >> 1 & 7, LARGE_ATTR >> 4 & 3
+
+
+def large_obj_tile(n):
+    """OBJ n's tile from the slot: rows $40, $60, $80 of eight 16x16 tiles."""
+    return 32 * (n // 8) + 2 * (n % 8)
+
+
+def decode_large(rom, i):
+    """A layout-3 record as the field shows it: its first frame record on a 16 x 6 grid."""
+    d = decode_enemy(rom, i)
+    assert d["record"]["size"] == LARGE, f"record {i} is not layout 3"
+    f = d["frameList"][0]
+    return {"id": i, "record": d["record"], "tiles": d["tiles"], "frames": d["frames"], "palette": d["palette"],
+            "grid": {"columns": LARGE_COLUMNS, "rows": LARGE_ROWS, "baseTile": LARGE_SLOT_TILE},
+            "frame": {"cells": f["cells"], "pieces": f["pieces"],
+                      "objTiles": [large_obj_tile(n) for n in range(LARGE_OBJS)]},
+            "palette_obj": LARGE_PALETTE, "priority": LARGE_PRIORITY}
+
+
+LARGE_ASM_CLAIMS = (
+    ("bankC0/bankC0.asm", "Evt_Op83_InitEnemySprite",
+     ("AND.b #!ObjSpr_SizeMask", "CMP.b #!ObjSpr_SizeLarge", "JSR Spr_LoadLargeObj")),
+    ("bankC0/bankC0.asm", "Spr_LoadLargeObj",
+     ("LDA.w !Obj_FrameOfs,X", "LDA.w #!SprBuf_Tiles", "LDA.b [!Spr_FramePtr],Y", "BIT.w #!SprFrame_HFlip",
+      "JSR Spr_CopyTile", "JSR Spr_CopyTileFlipped", "LDY.w #!SprBuf_VramWord", "STY.w VMADDL",
+      "LDY.w #!SprBuf_Base", "LDY.w #!SprBuf_Bytes", "LDY.w #!LargeObj_LayoutOfs", "STA.l SprTile.OfsX,X",
+      "STA.l SprTile.OfsY,X", "LDA.b #!LargeObj_TileRow0", "LDA.b #!LargeObj_TileRow1", "LDA.b #!LargeObj_TileRow2",
+      "LDA.b #!LargeObj_Attr")),
+    # Size 3: no frame builder, only re-placing; the OAM copy takes each record's own attribute.
+    ("bankC0/bankC0.asm", "Obj_BuildSpriteFrameStep",
+     ("CMP #$02", "BEQ .type2", "CLC", "RTS", "BRL Obj_BuildFrame4", "BRL Obj_BuildFrame8", "BRL Obj_BuildFrame12")),
+    ("bankC0/bankC0.asm", "Spr_PrepareTiles", ("BRL Spr_Place24",)),
+    ("bankC0/bankC0.asm", "Spr_AppendToOam", ("LDA.b #!Spr_Size3Tiles", "LDA.l SprTile.Tile,X", "LDA.l SprTile.Attr,X")),
+)
+
+LARGE_CONSTANT_CLAIMS = (
+    ("include/constants_engine.inc", "!ObjSpr_SizeLarge = $03"),
+    ("include/constants_engine.inc", "!SprBuf_Tiles = $0060"),
+    ("include/constants_engine.inc", "!SprBuf_Bytes = $0C00"),
+    ("include/constants_engine.inc", "!SprBuf_VramWord = $0400"),
+    ("include/constants_engine.inc", "!LargeObj_LayoutOfs = $00C0"),
+    ("include/constants_engine.inc", "!LargeObj_TileRow0 = $40"),
+    ("include/constants_engine.inc", "!LargeObj_TileRow1 = $60"),
+    ("include/constants_engine.inc", "!LargeObj_TileRow2 = $80"),
+    ("include/constants_engine.inc", "!LargeObj_Attr = $22"),
+    ("include/constants_engine.inc", "!Spr_Size3Tiles = $18"),
+    ("include/ram_engine.inc", "!SprBuf_Base = $7F3800"),
+)
+
+
+def large_code_claims(rom):
+    """The size-3 path in the ROM's code bytes."""
+    out = []
+    op83 = _body(rom, 0xC046DF, 0xC04866)
+    out.append(("$C0:46DF calls Spr_LoadLargeObj for size class 3 (AND #$03; CMP #$03; ... JSR $E12A)",
+                bytes.fromhex("2903c903") in op83 and bytes.fromhex("202ae1") in op83, ""))
+    load = _body(rom, 0xC0E12A, 0xC0E533)
+    out.append(("$C0:E12A copies 96 tile words (LDA #$0060), DMAs $0C00 B from $7F:3800 to VRAM word $0400, "
+                "reads the pairs at +$C0 and writes attribute $22",
+                all(bytes.fromhex(p) in load for p in ("a96000", "a000048c1621", "a000388c7243", "a0000c8c7543",
+                                                         "a0c000", "a922")), ""))
+    step = _body(rom, 0xC0CAD9, 0xC0CB09)
+    out.append(("$C0:CAD9 returns C=0 for size 3 without a builder (CMP #$02; BEQ; CLC; RTS)",
+                bytes.fromhex("c902f0081860") in step, ""))
+    return out
+
+
+def large_data_claims(rom):
+    """The layout-3 records: which they are, their first frame inside their graphics, tile 0 blank."""
+    large = [i for i in range(ENEMY_IDS) if enemy_record(rom, i)["size"] == LARGE]
+    out = [(f"layout 3 records: {' '.join(map(str, large))}", bool(large), "")]
+    for i in large:
+        d = decode_large(rom, i)
+        tb, _ = enemy_tile_bytes(rom, i)
+        cells = d["frame"]["cells"]
+        out.append((f"enemy {i}: frame 0's 96 cells name its {len(tb)} tiles (bits 0-10 and 14 only) and tile 0 "
+                    "is blank (the Studio draws word 0 blank; the field copies tile 0)",
+                    all(c & 0x7FF < len(tb) and not c & ~0x47FF for c in cells) and not any(tb[0]),
+                    f"{sum(1 for c in cells if c & 0x7FF == 0)} cells name tile 0"))
+    return out
+
+
+def large_run_claims(rom, ref=REF):
+    """Opcode $83 run by ChronoRET's interpreter for each layout-3 record
+    (Evt_Op83_InitEnemySprite -> Spr_LoadLargeObj): the $7F:3800 buffer is the
+    decoded cells' tiles in order (mirrored where bit 14 is set), the 24 SprTile
+    records are the decoded pairs with tiles $40 + 32p + 2q and attribute $22,
+    and the DMA is $0C00 B to VRAM word $0400."""
+    import ct_npc_sprites as ns
+    runner = ns.FieldRunner(rom, ref)
+    out = []
+    for i in (i for i in range(ENEMY_IDS) if enemy_record(rom, i)["size"] == LARGE):
+        known = runner.blank()
+        y = 0x40
+        known[ns.ADDR["Evt_Data"] + y] = ns.OP_ENEMY
+        known[ns.ADDR["Evt_Data"] + y + 1] = i
+        known[ns.ADDR["Evt_Data"] + y + 2] = 0
+        mem = runner.run(0xC046DF, known, y=y)
+        d = decode_large(rom, i)
+        tb, _ = enemy_tile_bytes(rom, i)
+        want = b"".join(bytes(BIT_REVERSE[b] for b in tb[c & 0x7FF]) if c & 0x4000 else tb[c & 0x7FF]
+                        for c in d["frame"]["cells"])
+        buf = bytes(mem.get(0x7F3800 + k) or 0 for k in range(0xC00))
+        rec_ofs = ns.get16(mem, ns.ADDR["Obj_TileRecOfs"] + ns.OBJ)
+        recs = []
+        for n in range(LARGE_OBJS):
+            at = 0x7F4BC0 + rec_ofs + 8 * n                                     # SprTile
+            ox, oy = ns.get16(mem, at + 2), mem.get(at + 4)
+            recs.append([ox - 0x10000 if ox & 0x8000 else ox, s8(oy or 0), mem.get(at + 6), mem.get(at + 7)])
+        expect = [[x, y_, LARGE_SLOT_TILE + t, LARGE_ATTR] for (x, y_), t in zip(d["frame"]["pieces"], d["frame"]["objTiles"])]
+        dma = [mem.get(a) for a in (0x2116, 0x2117, 0x4372, 0x4373, 0x4374, 0x4375, 0x4376)]
+        out.append((f"enemy {i}: opcode $83 run: the buffer, the 24 SprTile records and the VRAM DMA as decode_large",
+                    buf == want and recs == expect and dma == [0x00, 0x04, 0x00, 0x38, 0x7F, 0x00, 0x0C], ""))
+    return out
+
+
 def enemy_palette(rom, i):
     at = ANIM_BANK + enemy_record(rom, i)["palette"] * PAL_BYTES
     return [u16(rom, at + 2 * k) for k in range(PAL_COLOURS)]
@@ -1607,7 +1739,27 @@ def verify_enemy_import(rom, project):
                 [px[(t % cols) * 8 + k % 8, (t // cols) * 8 + k // 8] for k in range(64)] == tile_indices(tb[t])
                 for t in range(len(tb)))):
             bad["sheet"].append(i)
-    others = sorted(i for i in range(ENEMY_IDS) if i not in wanted and
+    large = [i for i in range(ENEMY_IDS) if enemy_record(rom, i)["size"] == LARGE]
+    large_bad = []
+    for i in large:
+        path = Path(project) / "sprites" / f"enemy_{i:03d}.sprite.json"
+        if not path.exists():
+            large_bad.append(i)
+            continue
+        s = json.loads(path.read_text())
+        d = decode_large(rom, i)
+        f = s["frames"][0] if len(s["frames"]) == 1 else {"tiles": [], "cells": None}
+        ok = s["rom"]["family"] == "ct-enemy" and s["rom"]["layout"] == LARGE and not s["animations"] \
+            and f["cells"] == d["frame"]["cells"] \
+            and [[t["x"], t["y"]] for t in f["tiles"]] == d["frame"]["pieces"] \
+            and [t["tile"] for t in f["tiles"]] == d["frame"]["objTiles"] \
+            and all(t["size16"] and t["pal"] == LARGE_PALETTE and t.get("priority") == LARGE_PRIORITY
+                    and not t["hflip"] and not t["vflip"] for t in f["tiles"]) \
+            and s["stream"] == d["grid"] \
+            and all([int(w, 16) for w in p] == [0] + enemy_palette(rom, i) + [0, 0, 0] for p in s["palettes"][:2])
+        if not ok:
+            large_bad.append(i)
+    others = sorted(i for i in range(ENEMY_IDS) if i not in wanted and i not in large and
                     (Path(project) / "sprites" / f"enemy_{i:03d}.sprite.json").exists())
     n = len(wanted)
     return [
@@ -1620,7 +1772,9 @@ def verify_enemy_import(rom, project):
         (f"enemies: palette = 0 + the 12 ROM colours + 3 zeros ({n})", not bad["palette"], _first(bad["palette"])),
         (f"enemies: streamed columns x rows cells at OBJ tile $40 ({n})", not bad["stream"], _first(bad["stream"])),
         (f"enemies: sheet holds the record's tiles, 16 per row ({n})", not bad["sheet"], _first(bad["sheet"])),
-        ("enemies: layout 3 records are not imported", not others, _first(others)),
+        (f"enemies: layout 3 records {' '.join(map(str, large))} imported as the field shows them (one frame, "
+         f"16 x 6 cells at OBJ tile $40, OBJ tiles $40 + 32p + 2q, palette 1)", not large_bad, _first(large_bad)),
+        ("enemies: no other records imported", not others, _first(others)),
     ]
 
 
@@ -1702,8 +1856,10 @@ def main():
     claims += enemy_code_claims(rom) + enemy_data_claims(rom)
     claims += asm_claims(routines=BATTLE_ASM_CLAIMS, constants=BATTLE_CONSTANT_CLAIMS)
     claims += battle_code_claims(rom) + battle_data_claims(rom)
+    claims += asm_claims(routines=LARGE_ASM_CLAIMS, constants=LARGE_CONSTANT_CLAIMS)
+    claims += large_code_claims(rom) + large_data_claims(rom)
     if args.run:
-        claims += run_claims(rom) + enemy_run_claims(rom)
+        claims += run_claims(rom) + enemy_run_claims(rom) + large_run_claims(rom)
     return report(claims)
 
 

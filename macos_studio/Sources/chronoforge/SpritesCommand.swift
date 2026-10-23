@@ -34,7 +34,7 @@ private func loadSprites(_ path: String) throws -> [LoadedSprite] {
         return LoadedSprite(sprite: CTSpriteROM.spriteDef(d, id: CTSpriteROM.names[c]),
                             sheet: SpriteSheet.tiles(sheet), palette: sheet.palette)
     }
-    for i in 0..<CTEnemySpriteROM.ids where CTEnemySpriteROM.assembled.contains(CTEnemySpriteROM.record(rom, i).size) {
+    for i in 0..<CTEnemySpriteROM.ids {
         let d = try CTEnemySpriteROM.decode(rom: rom, id: i)
         let sheet = CTEnemySpriteROM.sheet(d)
         out.append(LoadedSprite(sprite: CTEnemySpriteROM.spriteDef(d, id: CTEnemySpriteROM.id(i)),
@@ -100,7 +100,7 @@ func cmdSprites(_ args: [String]) -> Int32 {
                 let wanted: [Int] = all ? Array(0..<CTSpriteROM.sets) : sets
                 ids = try CTSpriteROM.importSprites(rom: rom, into: &project, sets: wanted)
             }
-            var foes: (ids: [String], skipped: [Int]) = ([], [])
+            var foes: (ids: [String], fieldOnly: [Int]) = ([], [])
             if all || !enemies.isEmpty || families.contains("enemy") {
                 let wanted: [Int]? = all || (families.contains("enemy") && enemies.isEmpty) ? nil : enemies
                 foes = try CTEnemySpriteROM.importSprites(rom: rom, into: &project, ids: wanted)
@@ -116,12 +116,13 @@ func cmdSprites(_ args: [String]) -> Int32 {
                 print("\(id): set \(s.rom!.set), \(s.rom!.tileCount) tiles, \(s.frames.count) frames, " +
                       "\(s.animations.count) animations -> \(s.sheet)")
             }
-            if !foes.ids.isEmpty || !foes.skipped.isEmpty {
-                var layouts = [0, 0, 0]
+            if !foes.ids.isEmpty {
+                var layouts = [0, 0, 0, 0]
                 for id in foes.ids { layouts[project.sprites[id]!.rom!.layout ?? 0] += 1 }
-                print("enemies: \(foes.ids.count) sprites (frame layouts 0/1/2: \(layouts.map(String.init).joined(separator: "/")))" +
-                      " -> sprites/enemy_NNN.*" + (foes.skipped.isEmpty ? "" :
-                        "; left out (layout 3, no OBJ assembly): " + foes.skipped.map(String.init).joined(separator: " ")))
+                let counts = layouts.map(String.init).joined(separator: "/")
+                let large = foes.fieldOnly.map(String.init).joined(separator: " ")
+                print("enemies: \(foes.ids.count) sprites (frame layouts 0/1/2/3: \(counts)) -> sprites/enemy_NNN.*" +
+                      (foes.fieldOnly.isEmpty ? "" : "; layout 3 as the field shows it, read-only: " + large))
             }
             if !people.isEmpty {
                 var sizes = [0, 0]

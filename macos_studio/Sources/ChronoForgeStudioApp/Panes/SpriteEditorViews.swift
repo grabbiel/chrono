@@ -24,7 +24,7 @@ struct SpriteEditor: View {
     @State private var selectedOBJ: Int?
     @State private var snap = false
     @State private var onion = false
-    @State private var battleColours = false
+    @State private var battleColours = CommandLine.arguments.contains("--battle-palette")   // e.g. --select crono --battle-palette
     @State private var animationID: String?
     @State private var stepIndex = 0
     @State private var playStart: Date?
@@ -113,8 +113,14 @@ struct SpriteEditor: View {
     /// rom.sprites, the pack budget, the sharers and (enemies) the record's battle fields.
     private var romPanel: some View {
         VStack(alignment: .leading, spacing: 4) {
+            let fieldOnly = sprite.rom?.family == CTEnemySpriteROM.family && sprite.rom?.layout == CTEnemySpriteROM.large
             Toggle("Write to the ROM (rom.sprites)", isOn: Binding(get: { listed },
                                                                    set: { _ = store.setROMSprite(sprite.id, listed: $0) }))
+                .disabled(fieldOnly && !listed)
+            if fieldOnly {
+                Text("layout 3: the field's view (Spr_LoadLargeObj), read-only; the battle has no assembly to write")
+                    .foregroundStyle(.secondary)
+            }
             if let b = CTEnemySpritePatch.packBudget(sprite, sheet: sheetTiles) {
                 Text(b.packed <= b.budget ? "pack \(b.packed) of \(b.budget) bytes: written in place"
                                           : "pack \(b.packed) bytes, over its \(b.budget)-byte span: moved into free space")

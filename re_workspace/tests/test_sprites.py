@@ -370,3 +370,23 @@ def test_battle_palette_claims(rom, chronoret):
     claims += cs.battle_code_claims(rom) + cs.battle_data_claims(rom)
     assert not failed(claims)
     assert all(cs.pc_battle(rom, c)["weaponColourRecord"] < cs.WEAPON_RECORDS for c in range(cs.SETS))
+
+
+# --- Layout 3: the field's one large frame ------------------------------------------------
+
+def test_large_objs_take_three_rows_of_eight_16x16_tiles():
+    assert [cs.large_obj_tile(n) for n in (0, 7, 8, 23)] == [0, 14, 32, 78]
+    assert (cs.LARGE_PALETTE, cs.LARGE_PRIORITY) == (1, 2)
+    assert cs.LARGE_COLUMNS * cs.LARGE_ROWS == cs.LAYOUTS[cs.LARGE][0] * cs.LAYOUTS[cs.LARGE][1]
+
+
+def test_large_claims(rom, chronoret):
+    claims = cs.asm_claims(chronoret, routines=cs.LARGE_ASM_CLAIMS, constants=cs.LARGE_CONSTANT_CLAIMS)
+    assert len(claims) == len(cs.LARGE_ASM_CLAIMS) + len(cs.LARGE_CONSTANT_CLAIMS)
+    claims += cs.large_code_claims(rom) + cs.large_data_claims(rom)
+    assert not failed(claims)
+
+
+def test_field_loads_the_large_records_as_decoded(rom, chronoret):
+    claims = cs.large_run_claims(rom, ref=chronoret)
+    assert len(claims) == 3 and not failed(claims)

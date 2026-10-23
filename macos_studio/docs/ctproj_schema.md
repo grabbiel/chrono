@@ -204,7 +204,9 @@ original fields; files with only those still load and save unchanged.
   An enemy's battle sprite (`sprites/enemy_NNN.*`) has `rom.family` `ct-enemy`,
   `rom.set` the enemy id, `rom.layout` its frame layout (0–2) and `rom.packed`
   (tiles unpacked from a pack); its `stream` is 8 × 2, 16 × 2 or 8 × 6 at
-  baseTile 64. `rom.packedBytes` is a packed record's stream length (its
+  baseTile 64. A layout-3 record (`rom.layout` 3) is the field's view and is
+  read-only: one frame of 16 × 6 cells at baseTile 64, with OBJs in palette 1.
+  Listing it in `rom.sprites` is refused. `rom.packedBytes` is a packed record's stream length (its
   in-place budget). `battle` holds the record's fields: `flags` (byte +4,
   bits 2–7), `screenOffsetX`, `screenOffsetY`, `halfWidth`, `height` (0–255),
   `moveSpeed` (0–7) and `moveDelay` (0–15); absent, the record is kept. Both
