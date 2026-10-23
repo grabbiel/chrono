@@ -313,7 +313,7 @@ public enum CTMIDIImport {
         for d in o.drums where !samples.contains(d.sample) { _ = slot(d.sample) }
         if !unmapped.isEmpty {
             throw CTSongError("programs " + unmapped.sorted().map(String.init).joined(separator: ", ")
-                              + " have no sample: give each one (--programs P:S,...) or a default sample")
+                              + " have no sample: map each one in the program table (music import-midi --programs P:S,...) or give a default sample")
         }
         if !unmappedKeys.isEmpty {
             throw CTSongError("channel 10 keys " + unmappedKeys.sorted().map(String.init).joined(separator: ", ") + " have no drum pad")

@@ -1,7 +1,8 @@
 // SongSoundViews.swift — a song's instrument rack (its @samples row, the ROM's
 // tuning and ADSR words or a project sample's, the build's budget, one-note
-// auditions through the driver) and its echo
-// designer (EDL, EVOL, EFB, FIR set, echo per track, and their responses).
+// auditions through the driver, with project samples from a scratch ROM built
+// in memory), its drum kit (the @drum pads, each auditioned in drum mode) and
+// its echo designer (EDL, EVOL, EFB, FIR set, echo per track, and their responses).
 import SwiftUI
 import ChronoForgeCore
 
@@ -18,6 +19,7 @@ struct InstrumentRackView: View {
     private var samples: [Int] { model.tables?.samples ?? [] }
 
     var body: some View {
+        ScrollView(.vertical) {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Instruments: @samples loads these into directory entries $20–$2F").font(.headline)
@@ -30,11 +32,11 @@ struct InstrumentRackView: View {
                 Button("Add @samples (one sample, number 1)") { edit("Add Samples") { $0.setDirective("@samples", "1") } }
             }
             Table(rack ?? []) {
-                TableColumn("Slot") { i in Text(String(format: "$%02X", 0x20 + i.slot)).monospaced() }.width(44)
+                TableColumn("Slot") { i in Text(String(format: "$%02X", 0x20 + i.slot)).monospaced() }.width(min: 36, ideal: 44)
                 TableColumn("ROM sample") { i in
                     Stepper("\(i.sample)", onIncrement: { setSample(i.slot, min(sampleCount, i.sample + 1)) },
                             onDecrement: { setSample(i.slot, max(1, i.sample - 1)) })
-                }.width(110)
+                }.width(min: 80, ideal: 110)
                 TableColumn("Project sample") { i in
                     Menu(projectSample(i.sample)?.id ?? "ROM's") {
                         ForEach(placed, id: \.number) { p in
@@ -43,23 +45,25 @@ struct InstrumentRackView: View {
                     }
                     .disabled(placed.isEmpty || model.tables?.samples == nil)
                     .help("Load a sample rom.samples writes (SFX Lab › Use in game) in this slot")
-                }.width(130)
-                TableColumn("Tuning") { i in Text(String(format: "$%04X ×%.4f", i.tuning, i.pitchFactor)).monospaced() }.width(130)
+                }.width(min: 80, ideal: 130)
+                TableColumn("Tuning") { i in Text(String(format: "$%04X ×%.4f", i.tuning, i.pitchFactor)).monospaced() }.width(min: 80, ideal: 130)
                 TableColumn("ADSR") { i in
                     let e = i.envelope
                     Text(e.on ? "A\(e.attack) D\(e.decay) SL\(e.sustainLevel) SR\(e.sustainRate)" : String(format: "GAIN $%04X", i.adsr))
                         .monospaced()
-                }.width(140)
-                TableColumn("BRR") { i in Text("\(i.length) B, loop at \(i.loopOffset)").monospaced() }.width(150)
-                TableColumn("Uses") { i in Text("\(uses[0x20 + i.slot, default: 0]) notes") }.width(70)
+                }.width(min: 90, ideal: 140)
+                TableColumn("BRR") { i in Text("\(i.length) B, loop at \(i.loopOffset)").monospaced() }.width(min: 90, ideal: 150)
+                TableColumn("Uses") { i in Text("\(uses[0x20 + i.slot, default: 0]) notes") }.width(min: 50, ideal: 70)
                 TableColumn("") { i in
                     Button("Audition", systemImage: "play.fill") {
                         store.audition(slot: i.slot, number: auditionNumber, tables: model.tables ?? .init(), replacing: target)
                     }.labelStyle(.iconOnly)
-                    .disabled(projectSample(i.sample) != nil)
-                    .help(projectSample(i.sample) != nil ? "Auditions play the playback ROM's samples: build the ROM to hear a project sample" : "Audition")
-                }.width(30)
+                    .help(projectSample(i.sample) != nil
+                          ? "Audition: the driver loads this project sample from a ROM built in memory with rom.samples"
+                          : "Audition")
+                }.width(min: 24, ideal: 30)
             }
+            .frame(height: CGFloat(max(3, rack?.count ?? 0)) * 30 + 40)
             HStack {
                 Button("Add slot") { setSamples(samples + [samples.last ?? 1]) }.disabled(samples.count >= 16 || model.tables?.samples == nil)
                 Button("Remove last slot") { setSamples(Array(samples.dropLast())) }.disabled(samples.count <= 1)
@@ -70,6 +74,7 @@ struct InstrumentRackView: View {
                                 target, b.sampleBytes, b.sampleStart, b.freeBytes, b.echoStart, b.sequenceBytes, b.sequenceMax,
                                 b.reachesEffectsBlock ? " (reaches the $2F00 effects block)" : ""))
                         .foregroundStyle(b.fits ? Color.secondary : Color.red).font(.caption)
+                        .lineLimit(3).frame(minWidth: 120, alignment: .trailing)
                         .help("The build refuses a song whose samples reach the echo buffer or whose sequence reaches $4700")
                 case .failure(let error):
                     Text(String(describing: error)).foregroundStyle(.secondary).font(.caption)
@@ -77,9 +82,12 @@ struct InstrumentRackView: View {
                     EmptyView()
                 }
             }
+            Divider()
+            DrumKitView(store: store, model: model, edit: edit, target: target, placed: placed)
             overrides
         }
         .padding()
+        }
         .onAppear(perform: reload)
         .onChange(of: samples) { _, _ in reload() }
         .onChange(of: model.text) { _, _ in budget = store.songBudget(target, listing: model.text) }
@@ -123,6 +131,126 @@ struct InstrumentRackView: View {
 
     private func setSamples(_ list: [Int]) {
         edit("Set Samples") { $0.setDirective("@samples", list.isEmpty ? "none" : list.map(String.init).joined(separator: " ")) }
+    }
+}
+
+/// The song's drum kit (its @drum rows, CTDrumKit): twelve pads, each a
+/// directory entry ($20 + slot of @samples), a note and a pan, as
+/// Spc_DrumNote plays them for a note of index 0-11 in drum mode (`drums_on`).
+/// Each pad auditions through the driver in drum mode.
+struct DrumKitView: View {
+    let store: ProjectStore
+    let model: SongModel
+    let edit: SongEditing
+    let target: Int
+    let placed: [CTProjectSamples.Placed]
+
+    private var samples: [Int] { model.tables?.samples ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Drum kit: in drum mode (drums_on) a note's index 0–11 plays that pad").font(.headline)
+                Spacer()
+                if let kit = model.doc.drumKit, !kit.isEmpty {
+                    Button("Clear kit") { set(.empty, "Clear Drum Kit") }
+                }
+            }
+            if let kit = model.doc.drumKit {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 8)], spacing: 8) {
+                    ForEach(0..<CTDrumKit.padCount, id: \.self) { k in pad(k, kit) }
+                }
+                let problems = kit.problems(listed: model.tables?.samples?.count)
+                if !problems.isEmpty {
+                    Text(problems.joined(separator: "\n")).font(.caption).foregroundStyle(.red)
+                }
+                Text(drumTracks).font(.caption).foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Text("This listing has no @drum rows: the ROM song's kit stays as it is.").foregroundStyle(.secondary)
+                    Button("Add a kit") { set(.empty, "Add Drum Kit") }
+                }
+            }
+        }
+    }
+
+    /// Which tracks play in drum mode, and how many notes.
+    private var drumTracks: String {
+        let tracks = (model.timeline?.tracks ?? []).compactMap { t -> String? in
+            let n = t.notes.filter(\.drum).count
+            return n > 0 ? "track \(t.index) (\(n) notes)" : nil
+        }
+        return tracks.isEmpty ? "No track turns drum mode on: put drums_on before a track's notes (Listing view)."
+                              : "Drum mode: " + tracks.joined(separator: ", ")
+    }
+
+    private func uses(_ k: Int) -> Int {
+        (model.timeline?.tracks ?? []).flatMap(\.notes).filter { $0.drum && $0.semitone == k }.count
+    }
+
+    private func name(_ slot: Int) -> String {
+        guard samples.indices.contains(slot) else { return String(format: "$%02X (not listed)", CTDrumKit.firstEntry + slot) }
+        let n = samples[slot]
+        let id = placed.first { $0.number == n }?.id
+        return String(format: "$%02X: sample %d", CTDrumKit.firstEntry + slot, n) + (id.map { " (\($0))" } ?? "")
+    }
+
+    @ViewBuilder private func pad(_ k: Int, _ kit: CTDrumKit) -> some View {
+        let p = kit.pads[k]
+        GroupBox {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Pad \(k) · \(CTSongISA.noteNames[k])").font(.subheadline.bold())
+                    Spacer()
+                    Button("Audition pad \(k)", systemImage: "play.fill") {
+                        store.auditionPad(k, kit: kit, tables: model.tables ?? .init(), replacing: target)
+                    }
+                    .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(p.isEmpty)
+                    .help("Play this pad once in drum mode through the driver")
+                }
+                Menu(p.isEmpty ? "unused" : p.slot.map(name) ?? String(format: "$%02X", p.sample)) {
+                    ForEach(samples.indices, id: \.self) { slot in
+                        Button(name(slot)) {
+                            var q = p
+                            q.sample = CTDrumKit.firstEntry + slot
+                            if p.isEmpty { q.note = CTSampleTuning.defaultRoot; q.pan = 0x40 }
+                            setPad(k, q, kit)
+                        }
+                    }
+                    Divider()
+                    Button("Unused") { setPad(k, .init(), kit) }
+                }
+                .disabled(samples.isEmpty)
+                Stepper("note \(CTSongTimeline.noteName(p.number()))", onIncrement: {
+                    var q = p; q.note = min(CTDrumKit.noteRange.upperBound, p.note + 1); setPad(k, q, kit)
+                }, onDecrement: {
+                    var q = p; q.note = max(CTDrumKit.noteRange.lowerBound, p.note - 1); setPad(k, q, kit)
+                }).disabled(p.isEmpty).help("The note the driver plays (at transpose $0A: the note number)")
+                HStack {
+                    Toggle("track's pan", isOn: Binding(get: { p.keepsPan }, set: { keep in
+                        var q = p; q.pan = keep ? 0x80 : 0x40; setPad(k, q, kit)
+                    })).toggleStyle(.checkbox)
+                    Stepper(p.keepsPan ? "" : String(format: "$%02X", p.pan), onIncrement: {
+                        var q = p; q.pan = min(0x7F, p.pan + 8); setPad(k, q, kit)
+                    }, onDecrement: {
+                        var q = p; q.pan = max(0, p.pan - 8); setPad(k, q, kit)
+                    }).disabled(p.isEmpty || p.keepsPan)
+                }
+                .disabled(p.isEmpty)
+                Text("\(uses(k)) notes").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func setPad(_ k: Int, _ pad: CTDrumKit.Pad, _ kit: CTDrumKit) {
+        var pads = kit.pads
+        pads[k] = pad
+        guard let next = try? CTDrumKit(pads: pads) else { return }
+        set(next, "Drum Pad \(k)")
+    }
+
+    private func set(_ kit: CTDrumKit, _ name: String) {
+        edit(name) { $0.setDrumKit(kit) }
     }
 }
 

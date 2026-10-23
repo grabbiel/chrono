@@ -91,9 +91,56 @@ extension ProjectStore {
         return try? CTSongEcho.firSets(rom: rom)
     }
 
-    /// Plays one note on instrument `slot` through the driver, in place of song `song`.
+    /// Plays one note on instrument `slot` through the driver, in place of song `song`,
+    /// with the project's samples (`playWithProjectSamples`).
     public func audition(slot: Int, number: Int, tables: CTSongTables, replacing song: Int) {
         let text = CTSongInstrument.audition(slot: slot, number: number, tables: tables)
-        playListing(text, replacing: song, title: String(format: "sample $%02X %@", 0x20 + slot, CTSongTimeline.noteName(number)))
+        playWithProjectSamples(text, replacing: song, title: String(format: "sample $%02X %@", 0x20 + slot, CTSongTimeline.noteName(number)))
+    }
+
+    /// Plays drum pad `pad` of `kit` once, in drum mode, in place of song `song`.
+    public func auditionPad(_ pad: Int, kit: CTDrumKit, tables: CTSongTables, replacing song: Int) {
+        let text = CTProjectAudition.pad(pad, kit: kit, tables: tables)
+        playWithProjectSamples(text, replacing: song, title: "drum pad \(pad)")
+    }
+
+    /// Plays `text` in place of song `song`. With rom.samples, from a scratch ROM
+    /// built in memory with those samples (CTProjectAudition), so project samples
+    /// sound before a build; without, as `playListing` does.
+    public func playWithProjectSamples(_ text: String, replacing song: Int, title: String) {
+        guard let project, !(project.project.rom?.samples ?? []).isEmpty else {
+            return playListing(text, replacing: song, title: title)
+        }
+        guard let path = playbackROMPath else {
+            statusMessage = "choose the CT ROM to play songs from (Sound ROM… in the playback bar)"
+            statusIsError = true
+            return
+        }
+        Task { await audio.play(String(format: "%@ as song $%02X (project samples)", title, song)) {
+            try CTProjectAudition.stream(base: try Self.playbackROM(path), project: project, listing: text, song: song)
+        } }
+    }
+
+    /// Converts a MIDI file (CTMIDIImport) into song `song`: checks the budgets
+    /// with rom.samples, writes the listing under audio/songs and lists it in
+    /// rom.songs. Returns its path and the import report, or throws why not.
+    public func importMIDI(_ url: URL, song: Int, options: CTMIDIImport.Options) throws -> (rel: String, report: CTMIDIImport.Report) {
+        guard let project else { throw CTSongError("open a project first") }
+        guard let rom = musicROM() else { throw CTSongError("choose the CT ROM (Sound ROM… in the playback bar) to check the budgets") }
+        let file = try CTMIDIFile(bytes: [UInt8](try Data(contentsOf: url)))
+        let name = url.deletingPathExtension().lastPathComponent
+        let (text, report, _) = try CTMIDIImport.importSong(file, options: options, rom: rom, project: project, song: song,
+                                                            title: String(format: "%@ as song $%02X", url.lastPathComponent, song))
+        let safe = String(name.map { $0.isLetter || $0.isNumber ? $0 : "_" })
+        var rel = "\(Self.songDirectory)/\(safe).ctsong", n = 2
+        while FileManager.default.fileExists(atPath: project.fileURL(relative: rel).path) {
+            rel = "\(Self.songDirectory)/\(safe)_\(n).ctsong"; n += 1
+        }
+        guard writeSongListing(rel, text), setSongTarget(rel, song: song) else { throw CTSongError("could not save \(rel)") }
+        statusMessage = String(format: "imported %@: %d voices, %d notes, rounding at most %.2f steps → %@ as song $%02X",
+                               url.lastPathComponent, report.voices.count, report.notes, report.maxErrorSteps,
+                               (rel as NSString).lastPathComponent, song)
+        statusIsError = false
+        return (rel, report)
     }
 }
