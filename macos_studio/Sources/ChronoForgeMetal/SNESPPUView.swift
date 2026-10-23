@@ -11,6 +11,10 @@ public final class SNESPPUView: MTKView, MTKViewDelegate {
     /// The picture: video memory plus per-line registers. Only memory that
     /// changed is uploaded, so a CGRAM edit is a palette-LUT write.
     public var picture = PPUFrame()
+    /// How the picture is drawn. The default is the 256-wide picture
+    /// (hi-res lines show their main-screen columns); `highResolution`
+    /// draws 512 columns, `overscanBorder` the 239-line display area.
+    public var renderOptions = PPURenderOptions(highResolution: false)
     /// Called once per displayed frame with the frame counter, before
     /// rendering: animate here (palette cycling, scroll, HDMA-style tables).
     public var tick: ((inout PPUFrame, Int) -> Void)?
@@ -44,7 +48,7 @@ public final class SNESPPUView: MTKView, MTKViewDelegate {
         frameCount += 1
         guard let drawable = currentDrawable,
               let cmd = renderer.queue.makeCommandBuffer(),
-              let texture = try? renderer.encode(picture, into: cmd) else { return }
+              let texture = try? renderer.encode(picture, options: renderOptions, into: cmd) else { return }
         renderer.present(texture, to: drawable.texture, commandBuffer: cmd)
         cmd.present(drawable)
         cmd.commit()

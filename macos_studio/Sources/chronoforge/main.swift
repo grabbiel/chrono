@@ -260,6 +260,7 @@ case "items":           exit(cmdItems(rest))
 case "sfx":             exit(cmdSFX(rest))
 case "story":           exit(cmdStory(rest))
 case "runtime":         exit(cmdRuntime(rest))
+case "ppu":             exit(cmdPPU(rest))
 default:
     print("""
     chronoforge — ChronoForge Studio CLI
@@ -279,6 +280,7 @@ default:
       chronoforge sfx <encode|synth|info|render> ...             (BRR samples: WAV import, synth, S-DSP render)
       chronoforge story <flags|graph|check|import|annotate> ...  (story flag registry and world graph)
       chronoforge runtime <run|vectors> <rom.sfc> ...            (the embedded event VM and field loop)
+      chronoforge ppu demos [--out DIR] [--gpu] ...              (synthetic PPU feature scenes as PNGs)
       chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render|play|events|edit|verify-model> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]
       chronoforge scene <raise|graph|timeline> <rom.sfc> <location> ...   (a location's event pack as a scene)
