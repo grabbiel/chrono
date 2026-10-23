@@ -32,6 +32,9 @@ public enum CTMapList {
         public var treasure: CTTreasure.ReportBlock?
         public var flags: [String: [Int]]          // the listed maps' chest flags
         public var refusal: String?                // the build's first refusal
+        public init(maps: Int, freeBytesLeft: Int?, treasure: CTTreasure.ReportBlock?, flags: [String: [Int]], refusal: String? = nil) {
+            self.maps = maps; self.freeBytesLeft = freeBytesLeft; self.treasure = treasure; self.flags = flags; self.refusal = refusal
+        }
     }
 
     /// What building the project on `base` would give, without writing anything.

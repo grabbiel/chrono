@@ -1,4 +1,5 @@
-// ProjectStore+Maps.swift — the Maps pane's import and picture assets.
+// ProjectStore+Maps.swift — the Maps pane's import, picture assets, new
+// locations, rom.maps and the build budget (docs/maps.md).
 import Foundation
 import ChronoForgeCore
 
@@ -31,5 +32,53 @@ extension ProjectStore {
             statusIsError = true
             return nil
         }
+    }
+
+    /// Creates location `number` from map `source` (CTNewLocation.create); the new map's id, or nil.
+    @discardableResult
+    public func createLocation(from source: String, number: Int, entrance: CTNewLocation.Entrance?, list: Bool) -> String? {
+        guard var candidate = project else { return nil }
+        do {
+            let ids = try CTNewLocation.create(in: &candidate, from: source, number: number, entrance: entrance, list: list)
+            try candidate.save()
+            project = candidate
+            statusMessage = "created \(ids[0]) from \(source)" + (entrance.map { ", entrance on \($0.map)" } ?? "") +
+                (list ? " (listed in rom.maps)" : "")
+            statusIsError = false
+            return ids[0]
+        } catch {
+            statusMessage = "new location: \(error)"
+            statusIsError = true
+            return nil
+        }
+    }
+
+    /// Puts maps in rom.maps, or takes them out.
+    public func setMapsListed(_ ids: [String], listed: Bool) {
+        guard var candidate = project else { return }
+        do {
+            let changed = try CTMapList.set(ids, listed: listed, in: &candidate)
+            try candidate.save()
+            project = candidate
+            statusMessage = changed.isEmpty ? "rom.maps unchanged"
+                : (listed ? "listed in rom.maps: " : "taken out of rom.maps: ") + changed.joined(separator: ", ")
+            statusIsError = false
+        } catch {
+            statusMessage = "rom.maps: \(error)"
+            statusIsError = true
+        }
+    }
+
+    /// A dry-run build of the project on the scene ROM (`--rom` or the playback ROM): free space left,
+    /// TreasureRom and the chests' flags, or the refusal. Nil without a ROM.
+    public func mapBudget() async -> CTMapList.Budget? {
+        guard let project, let path = sceneROMPath else { return nil }
+        return await Task.detached {
+            guard let base = try? ProjectStore.playbackROM(path) else {
+                return CTMapList.Budget(maps: CTMapList.listed(project).count, freeBytesLeft: nil, treasure: nil, flags: [:],
+                                        refusal: "cannot read the ROM at \(path)")
+            }
+            return CTMapList.budget(base: base, project: project)
+        }.value
     }
 }

@@ -1,7 +1,8 @@
 // MapEditorViews.swift — Module 7, the Multi-Plane Map Editor: the field
 // picture of a location on the SNES PPU (layer and colour-math toggles, zoom,
 // pan, the tileset's animations running), the collision painter over the
-// tile-property plane, metatile painting from the tileset and exit placement.
+// tile-property plane, metatile painting from the tileset, exit placement and
+// the chest tool (each chest's flag as a build of the project numbers it).
 // The logic lives in Core (LocationScene, CTTileProps, CTTilePropsPlane);
 // docs/maps.md describes the data.
 import SwiftUI
@@ -137,8 +138,10 @@ struct MapEditor: View {
     @Binding var map: GameMap
 
     enum Tool: String, CaseIterable, Identifiable {
-        case pan = "Pan", metatiles = "Metatiles", collision = "Collision", exits = "Exits"
+        case pan = "Pan", metatiles = "Metatiles", collision = "Collision", exits = "Exits", chests = "Chests"
         var id: String { rawValue }
+        /// `--map-tool Chests` opens the editor on that tool.
+        static var launch: Tool { LaunchArguments.value("--map-tool").flatMap { Tool(rawValue: $0) } ?? .pan }
     }
 
     enum Brush: String, CaseIterable, Identifiable {
@@ -166,7 +169,7 @@ struct MapEditor: View {
     @State private var cameraY = 0
     @State private var frame = 0
     @State private var animate = true
-    @State private var tool: Tool = .pan
+    @State private var tool: Tool = .launch
     @State private var showCollision = false
     @State private var showExits = true
     @State private var brush: Brush = .plane1
@@ -176,6 +179,8 @@ struct MapEditor: View {
     @State private var paintLayer = 1
     @State private var metatile = 0
     @State private var selectedExit: Int?
+    @State private var selectedChest: Int? = LaunchArguments.value("--map-chest").flatMap { Int($0) }
+    @State private var chestDrag: Int?
     @State private var hover: TilePoint?
     @State private var dragStart: (x: Int, y: Int)?
     @State private var dirtyProps = false
@@ -284,6 +289,18 @@ struct MapEditor: View {
                     }
                 }
             }
+            if showExits || tool == .chests {
+                let flags = chestFlags
+                for (n, t) in (map.treasure ?? []).enumerated() {
+                    let r = rect(t.x, t.y, s).insetBy(dx: s * 0.25, dy: s * 0.25)
+                    let selected = tool == .chests && n == selectedChest
+                    ctx.stroke(Path(ellipseIn: r), with: .color(selected ? .orange : .yellow), lineWidth: selected ? 3 : 2)
+                    if tool == .chests, let f = flags?[safe: n] {
+                        ctx.draw(Text("#\(f)").font(.system(size: max(9, s * 0.3), weight: .bold)).foregroundColor(.yellow),
+                                 at: CGPoint(x: r.midX, y: rect(t.x, t.y, s).minY - 6))
+                    }
+                }
+            }
             if showExits {
                 for (n, e) in map.exits.enumerated() {
                     for k in 0...max(0, e.span ?? 0) {
@@ -295,10 +312,6 @@ struct MapEditor: View {
                     }
                     ctx.draw(Text("\(n)→\(e.map)").font(.system(size: max(9, s * 0.3))).foregroundColor(.yellow),
                              at: CGPoint(x: rect(e.x, e.y, s).midX, y: rect(e.x, e.y, s).minY - 6))
-                }
-                for t in map.treasure ?? [] {
-                    let r = rect(t.x, t.y, s).insetBy(dx: s * 0.3, dy: s * 0.3)
-                    ctx.stroke(Path(ellipseIn: r), with: .color(.yellow), lineWidth: 2)
                 }
             }
             if let hover {
@@ -322,6 +335,10 @@ struct MapEditor: View {
             paintMetatile(at: v.location)
         case .exits:
             break
+        case .chests:
+            if chestDrag == nil, let p = tile(at: v.startLocation) {
+                chestDrag = (map.treasure ?? []).firstIndex { $0.x == p.x && $0.y == p.y } ?? -1
+            }
         }
     }
 
@@ -329,6 +346,8 @@ struct MapEditor: View {
         dragStart = nil
         if tool == .collision, dirtyProps, let plane { map.tileProps = plane.json; dirtyProps = false }
         if tool == .exits, let p = tile(at: v.location) { pickOrAddExit(p) }
+        if tool == .chests, let p = tile(at: v.location) { pickAddOrMoveChest(p, from: chestDrag) }
+        chestDrag = nil
     }
 
     private func paintProps(_ p: TilePoint) {
@@ -386,6 +405,89 @@ struct MapEditor: View {
         selectedExit = map.exits.count - 1
     }
 
+    // MARK: Chests
+
+    /// Each chest's flag in a build of the whole project with this map as edited (nil: not every location has a map).
+    private var chestFlags: [Int]? { CTTreasure.projectNumbers(project, replacing: map)?[map.id] }
+
+    /// A click on a chest selects it, on an empty tile adds one; a drag from a chest moves it (its flag stays).
+    private func pickAddOrMoveChest(_ p: TilePoint, from start: Int?) {
+        let list = map.treasure ?? []
+        if let k = start, k >= 0, list.indices.contains(k), list[k].x != p.x || list[k].y != p.y {
+            editChest { try CTTreasure.move(&$0, k, x: p.x, y: p.y) }
+            selectedChest = k
+        } else if let k = list.firstIndex(where: { $0.x == p.x && $0.y == p.y }) {
+            selectedChest = k
+        } else {
+            let contents = selectedChest.flatMap { list[safe: $0] }.map { CTTreasure.Contents(word: $0.contents) } ?? .item(1)
+            if editChest({ try CTTreasure.add(&$0, x: p.x, y: p.y, contents: contents) }) { selectedChest = list.count }
+        }
+    }
+
+    /// Applies a chest edit to the working copy, or puts the refusal in the status line.
+    @discardableResult
+    private func editChest(_ edit: (inout GameMap) throws -> Void) -> Bool {
+        var m = map
+        do {
+            try edit(&m)
+            if let total = CTTreasure.projectTotal(project, replacing: m), total > CTTreasure.flagCount {
+                throw CTROMBuildError("the project's maps would hold \(total) chests; Treasure_Flags has \(CTTreasure.flagCount) flags")
+            }
+            map = m
+            return true
+        } catch {
+            store.statusMessage = "chest: \(error)"
+            store.statusIsError = true
+            return false
+        }
+    }
+
+    private enum ChestKind: String, CaseIterable, Identifiable {
+        case item = "Item", gold = "Gold", empty = "Nothing"
+        var id: String { rawValue }
+    }
+
+    private func chestForm(_ k: Int) -> some View {
+        let t = map.treasure![k]
+        let contents = CTTreasure.Contents(word: t.contents)
+        let kind: ChestKind
+        let amount: Int
+        switch contents {
+        case .item(let i): kind = .item; amount = i
+        case .gold(let g): kind = .gold; amount = g
+        case .empty: kind = .empty; amount = 0
+        }
+        let flag = chestFlags?[safe: k]
+        return GroupBox("Chest \(k)" + (flag.map { " · flag \($0)" } ?? "")) {
+            Form {
+                mono("tile (\(t.x), \(t.y)) · drag it to move it; its flag stays")
+                Picker("Holds", selection: Binding(get: { kind }, set: { new in
+                    let c: CTTreasure.Contents = new == .item ? .item(1) : new == .gold ? .gold(100) : .empty
+                    editChest { try CTTreasure.move(&$0, k, x: t.x, y: t.y, contents: c) }
+                })) { ForEach(ChestKind.allCases) { Text($0.rawValue).tag($0) } }
+                if kind != .empty {
+                    StatField(kind == .item ? "Item" : "Gold", Binding(get: { amount }, set: { v in
+                        let c: CTTreasure.Contents = kind == .item ? .item(v) : .gold(v)
+                        editChest { try CTTreasure.move(&$0, k, x: t.x, y: t.y, contents: c) }
+                    }))
+                    if kind == .item { mono(String(format: "item $%03X", amount)) }
+                }
+                Button("Delete Chest", role: .destructive) {
+                    if editChest({ try CTTreasure.remove(&$0, k) }) { selectedChest = nil }
+                }
+                .help("Every later chest's flag moves down by one; old saves will see other chests opened")
+            }
+        }
+        .frame(maxWidth: 420)
+    }
+
+    private var chestSummary: String {
+        guard let total = CTTreasure.projectTotal(project, replacing: map) else {
+            return "Flags show once every location is imported."
+        }
+        return "\(total) of \(CTTreasure.flagCount) chest flags in a build of the project (\(CTTreasure.flagCount - total) left)."
+    }
+
     // MARK: Controls
 
     private var viewControls: some View {
@@ -440,6 +542,13 @@ struct MapEditor: View {
         case .exits:
             Text("Click an exit to select it, or an empty tile to add one.").font(.caption).foregroundStyle(.secondary)
             if let n = selectedExit, n < map.exits.count { exitForm(n) }
+        case .chests:
+            Text("Click a chest to select it, an empty tile to add one; drag a chest to move it. " + chestSummary)
+                .font(.caption).foregroundStyle(.secondary)
+            if let r = map.rom, r.treasureList != r.location {
+                Text("This map shows location \(r.treasureList)'s chests: edit them there.").font(.caption).foregroundStyle(.orange)
+            }
+            if let n = selectedChest, n < (map.treasure?.count ?? 0) { chestForm(n) }
         }
     }
 
@@ -541,8 +650,11 @@ struct MapEditor: View {
                 }
             }
             if let t = map.treasure, !t.isEmpty {
+                let flags = chestFlags
                 Section("Treasure (\(t.count))") {
-                    ForEach(Array(t.enumerated()), id: \.offset) { _, c in mono("(\(c.x), \(c.y)) " + treasureName(c.contents)) }
+                    ForEach(Array(t.enumerated()), id: \.offset) { k, c in
+                        mono("(\(c.x), \(c.y)) " + treasureName(c.contents) + (flags?[safe: k].map { " · flag \($0)" } ?? ""))
+                    }
                 }
             }
             let problems = LocationScene.invariants(map, project: project)
@@ -584,4 +696,8 @@ struct MapEditor: View {
     }
 
     private func mono(_ s: String) -> some View { Text(s).font(.system(.caption, design: .monospaced)) }
+}
+
+private extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
 }
