@@ -556,6 +556,110 @@ def run_claims(rom):
     return battle_menu_runs(rom, runner) + learn_runs(rom) + field_menu_runs(rom, runner) + rock_runs(rom, runner)
 
 
+# --- Built ROMs (ct_rom_check.py) ---------------------------------------------------------
+
+NAMES_END = T.TECH_NAMES_PC + T.NAME_SIZE * T.TECHS
+DESC_TABLE_PC, DESC_STRINGS = pc(0xCC, 0x3A09), 121           # MenuRom_TechTextTable
+DESC_BODY_PC, DESC_BODY_END = pc(0xCC, 0x3B0D), pc(0xCC, 0x43AF)
+NAME_PAD = 0xEF
+
+
+def write_zones(rom):
+    """The spans a tech build may also write (CTTechCombos, CTTechText): the
+    records' member bytes and the menu's copies, the MP indexes, the user
+    sets, the names and the description table."""
+    spans = [range(T.COMBOS_PC + T.COMBO_SIZE * i, T.COMBOS_PC + T.COMBO_SIZE * i + 1) for i in range(PAIR_RECORDS + TRIO_RECORDS)]
+    spans += [range(BYTE_MEMBERS_PC + 7, BYTE_MEMBERS_PC + 7 + PAIR_RECORDS), range(LINE_BITS_PC, LINE_BITS_PC + TRIO_RECORDS),
+              range(MENU_TILES_PC, MENU_TILES_PC + 6 * PAIR_RECORDS), range(LINE_TILES_PC, LINE_TILES_PC + 3 * TRIO_RECORDS),
+              range(T.USER_SETS_PC, T.USER_SETS_PC + 3 * T.USER_SETS), range(T.TECH_NAMES_PC + T.NAME_SIZE, NAMES_END),
+              range(DESC_TABLE_PC, DESC_TABLE_PC + 2 * DESC_STRINGS), range(DESC_BODY_PC, DESC_BODY_END)]
+    return spans
+
+
+def description_bytes(rom):
+    out = []
+    for n in range(DESC_STRINGS):
+        at = pc(0xCC, T.u(rom, DESC_TABLE_PC + 2 * n, 2))
+        end = rom.find(b"\x00", at, DESC_BODY_END) if DESC_BODY_PC <= at < DESC_BODY_END else -1
+        out.append(None if end < 0 else bytes(rom[at:end]))
+    return out
+
+
+def build_problems(clean, built, report):
+    """What an independent decode of a tech build finds wrong with its
+    combinations, user sets, menu copies, names and descriptions."""
+    out = []
+    system = report.get("techs")
+    if not system:
+        return [f"tech byte ${z.start:06X} changed but techs are not reported"
+                for z in write_zones(clean) if built[z.start:z.stop] != clean[z.start:z.stop]]
+    before, after = T.decode_combos(clean), T.decode_combos(built)
+    if len(after) != len(before) or len(after) != len(system["combos"]):
+        return ["the combination records' count changed"]
+    masks = [a["mask"] for a in after]
+    if len(set(masks)) != len(masks):
+        out.append("two combination records have the same members")
+    sets, base_sets = T.user_sets(built), T.user_sets(clean)
+    if sets != system["userSets"]:
+        out.append("the user sets are not the reported ones")
+    single_sets = {T.decode_tech(clean, t)["user_set"] for t in range(1, T.FIRST_DOUBLE)}
+    owned = set()
+    for i, a in enumerate(after):
+        owned |= {T.decode_tech(built, a["first"] + k)["user_set"] for k in range(a["count"])}
+        if i < PAIR_RECORDS:
+            owned.add(7 + i)
+    for n in range(T.USER_SETS):
+        if sets[n] != base_sets[n] and (n in single_sets or n not in owned):
+            out.append(f"user set {n} changed but is not a combination's")
+    menu, base_menu = decode_menu(built), decode_menu(clean)
+    for i, (b, a, want) in enumerate(zip(before, after, system["combos"])):
+        name = f"combination ${b['first']:02X}"
+        if (a["first"], a["count"], a["req_addr"]) != (b["first"], b["count"], b["req_addr"]) or a["mask"] != want["mask"]:
+            out.append(f"{name}: not the reported record")
+        who = T.members(a["mask"])
+        if a["mask"] & 1 or len(who) != (2 if i < PAIR_RECORDS else 3):
+            out.append(f"{name}: members do not fit its place")
+        users = [sets[T.decode_tech(built, a["first"] + k)["user_set"]] for k in range(a["count"])]
+        changed = a["mask"] != b["mask"] or any(u != base_sets[T.decode_tech(clean, a["first"] + k)["user_set"]]
+                                                for k, u in enumerate(users))
+        if changed and any(sorted(c for c in u if c != T.NONE) != who for u in users):
+            out.append(f"{name}: a tech's user set does not hold exactly the members")
+        if i < PAIR_RECORDS:
+            if changed and (sorted(sets[7 + i][:2]) != who or sets[7 + i][2] != T.NONE):
+                out.append(f"{name}: user set {7 + i} (the menu's columns) does not hold the members")
+            if menu["byte_members"][7 + i] != (a["mask"] if a["mask"] != b["mask"] else base_menu["byte_members"][7 + i]):
+                out.append(f"{name}: the field menu's members byte")
+            cols = sets[7 + i][:2] if sorted(sets[7 + i][:2]) == who else who
+            got = [[menu["menu_tiles"][i][k][cols.index(c)] for c in who] for k in range(a["count"])]
+        else:
+            if menu["line_bits"][i - PAIR_RECORDS] != (a["mask"] if a["mask"] != b["mask"] else base_menu["line_bits"][i - PAIR_RECORDS]):
+                out.append(f"{name}: the field menu's members byte")
+            got = [menu["line_tiles"][i - PAIR_RECORDS]]
+        if want.get("menuCosts") is not None and got != want["menuCosts"]:
+            out.append(f"{name}: the field menu's MP indexes are not the reported ones")
+        if any(x >= T.PARTS for row in got for x in row):
+            out.append(f"{name}: an MP index past MpCost")
+    if menu["combo_needs"] != base_menu["combo_needs"] or menu["combo_members"] != base_menu["combo_members"]:
+        out.append("the rock combinations changed")
+    for t in range(1, T.TECHS):
+        raw = built[T.TECH_NAMES_PC + T.NAME_SIZE * t:T.TECH_NAMES_PC + T.NAME_SIZE * (t + 1)]
+        if raw == clean[T.TECH_NAMES_PC + T.NAME_SIZE * t:T.TECH_NAMES_PC + T.NAME_SIZE * (t + 1)]:
+            continue
+        body = raw[1:] if raw[0] < 0xA0 and raw[0] not in (NAME_PAD, T.NONE) else raw
+        glyphs = body.rstrip(bytes([NAME_PAD]))
+        if NAME_PAD in glyphs or not glyphs:
+            out.append(f"tech ${t:02X}: the name is not glyphs then $EF padding")
+        if raw[0] != clean[T.TECH_NAMES_PC + T.NAME_SIZE * t] and clean[T.TECH_NAMES_PC + T.NAME_SIZE * t] < 0xA0:
+            out.append(f"tech ${t:02X}: the name's icon changed")
+    if built[DESC_TABLE_PC:DESC_BODY_END] != clean[DESC_TABLE_PC:DESC_BODY_END]:
+        strings = description_bytes(built)
+        if any(x is None for x in strings):
+            out.append("a tech description pointer leaves the strings' span")
+        gap = range(DESC_TABLE_PC + 2 * DESC_STRINGS, DESC_BODY_PC)
+        if built[gap.start:gap.stop] != clean[gap.start:gap.stop]:
+            out.append("the bytes between the description pointers and strings changed")
+    return out
+
 ASM_CLAIMS = (
     ("bankC1/bankC1.asm", "BattleSys_UnkCA1A",
      ("LDA.b #!Tech_FirstComboId", "LDA.b #!Tech_FirstTripleId", "LDA.w !Battle_TechBits2,X",

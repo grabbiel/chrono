@@ -310,7 +310,7 @@ public enum CTTechROM {
         try need(s.techs.count == base.techs.count, "need techs 0-$74 in order")
         for (t, b) in zip(s.techs, base.techs) {
             let name = String(format: "tech $%02X", t.id)
-            try need(t.kind == b.kind && t.userSet == b.userSet, "\(name): kind and user set number are read-only")
+            try need(t.kind == b.kind && t.userSet == b.userSet, "\(name): kind and user set are read-only")
             try need(t.flags == b.flags && t.attr == b.attr, "\(name): flags and attributes are read-only")
             let (a, x) = (t.anim, b.anim)
             try need(a.gfxA == x.gfxA && a.gfxB == x.gfxB && a.pal == x.pal && a.obj == x.obj && a.arg == x.arg,

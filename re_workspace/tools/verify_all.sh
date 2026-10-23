@@ -141,6 +141,11 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_techs.py check --run >/tmp/verify_tech_claims.log 2>&1
   RC=$?
   note "Tech evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_tech_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Combinations: the battle and field menus' list builders, the learn path and the rock path
+  # run in the interpreter over every ROM combination (ct_tech_combos.py).
+  $PY re_workspace/tools/ct_tech_combos.py check --run >/tmp/verify_tech_combos.log 2>&1
+  RC=$?
+  note "Tech combinations ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_tech_combos.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   # Location tilesets: source, code and data claims, the ROM's decompressor, both
   # animation-list loaders and PalAnim_TickAll run; then a CLI import into a fixture
   # copy, checked by `tilesets verify` and by ct_tilesets.py.

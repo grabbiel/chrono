@@ -133,6 +133,7 @@ import ct_samples as csm  # noqa: E402
 import ct_spc_seq as spc  # noqa: E402
 import ct_sprites as csp  # noqa: E402
 import ct_techs as ct  # noqa: E402
+import ct_tech_combos as ctc  # noqa: E402
 import ct_text_profile  # noqa: E402
 import ct_tilesets as cts  # noqa: E402
 
@@ -602,7 +603,7 @@ def check_techs(clean, built, report):
     before, after = ct.decode_combos(clean), ct.decode_combos(built)
     check(len(after) == len(before) == len(system["combos"]), "the combination records' count")
     for b, a, want in zip(before, after, system["combos"]):
-        check((a["mask"], a["first"], a["count"], a["req_addr"]) == (b["mask"], b["first"], b["count"], b["req_addr"]),
+        check((a["first"], a["count"], a["req_addr"]) == (b["first"], b["count"], b["req_addr"]) and a["mask"] == want["mask"],
               f"combination ${b['first']:02X}: its record changed")
         check(a["requirements"] == want["requirements"], f"combination ${b['first']:02X}: not the reported requirements")
         n = len(ct.members(a["mask"]))
@@ -622,6 +623,14 @@ def check_techs(clean, built, report):
         check(built[at] & ~ct.ALL_TECHS == clean[at] & ~ct.ALL_TECHS
               and bool(built[at] & ct.ALL_TECHS) == (state["counts"][c] >= 8), f"record {c} +$02")
 
+
+
+def check_tech_combos(clean, built, report):
+    """Combinations, user sets, the field menu's copies, names and descriptions
+    (ct_tech_combos.build_problems decodes the built ROM independently)."""
+    for problem in ctc.build_problems(clean, built, report):
+        check(False, problem)
+    check(True, "tech combinations, names and descriptions")
 
 ITEM_FIELDS = {"weapon": ("attack", "byte1", "critical", "modifier", "modifierArg"),
                "armor": ("defence", "modifier", "modifierOn"), "helmet": ("defence", "modifier", "modifierOn"),
@@ -1161,6 +1170,7 @@ def main():
     zones += character_zones(report)
     if report.get("techs"):
         zones += ct.write_zones(clean)
+        zones += ctc.write_zones(clean)
     if report.get("items") is not None or report.get("itemTables") is not None:
         zones += ci.write_zones(clean)
     if report.get("maps") is not None or report.get("tilesets") is not None:
@@ -1222,6 +1232,7 @@ def main():
 
     check_characters(clean, built, report)
     check_techs(clean, built, report)
+    check_tech_combos(clean, built, report)
     check_items(clean, built, report)
     check_maps(clean, built, report, inside)
     check_tilesets(clean, built, report, inside)
