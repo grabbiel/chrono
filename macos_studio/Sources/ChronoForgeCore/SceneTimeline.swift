@@ -201,13 +201,17 @@ public struct CTSceneChoreography: Equatable, Sendable {
         case place          // $8B PlaceAtTile / $8D SetPos
         case walk           // $96 WalkToTile: facing and walk animation
         case move           // $A0 MoveToTile: no facing or animation
-        case camera         // $E7 ScrollTo: the view scrolls to the tile
+        case camera         // $E7 ScrollTo: the camera's top-left goes to the tile (Map_Unk91AC)
+        case direction      // $92 WalkDir / $9C MoveDir: an angle for a number of frames
     }
     public struct Point: Equatable, Sendable, Identifiable {
         public var kind: Kind
         public var function: Int
         public var offset: Int
         public var column: Int, row: Int
+        /// `.direction`: Obj_Direction (256 a turn), Obj_MoveFrames and the Obj_Speed
+        /// the walk last set (`$89`; Obj_Unk1A00Init $10 before one).
+        public var angle: Int? = nil, frames: Int? = nil, speed: Int? = nil
         public var id: Int { offset }
     }
     public var object: Int
@@ -223,10 +227,17 @@ public struct CTSceneChoreography: Equatable, Sendable {
             for f in 0..<CTEventPack.functionsPerObject {
                 let entry = pack.functions[k][f]
                 guard head <= entry, entry < size, pack.instructions[entry] != nil else { continue }
+                var speed = 0x10
                 for y in CTSceneWalk(pack, object: k, function: f).offsets where !seen.contains(y) {
                     let ins = pack.instructions[y]!, at = y + 2
                     let kind: Kind?
                     switch ins.opcode {
+                    case 0x89: speed = Int(pack.bytes[at]); kind = nil
+                    case 0x92, 0x9C:
+                        seen.insert(y)
+                        points.append(Point(kind: .direction, function: f, offset: y, column: 0, row: 0,
+                                            angle: Int(pack.bytes[at]), frames: Int(pack.bytes[at + 1]), speed: speed))
+                        continue
                     case 0x8B: kind = .place
                     case 0x96: kind = .walk
                     case 0xA0: kind = .move
@@ -249,12 +260,29 @@ public struct CTSceneChoreography: Equatable, Sendable {
     }
 }
 
+extension CTSceneChoreography {
+    /// Where a direction move ends, in tiles from where it starts: each frame
+    /// Obj_MoveStep adds Obj_VelX/Y, which Obj_SetVelocityChecked takes from
+    /// Obj_Speed x Rom_SineTable256 ($00:F800; X a quarter turn on). Obj_Pos
+    /// has 256 units a tile. A blocked tile on the way turns the object at
+    /// random (Obj_SetVelocityChecked), which only a run shows.
+    public static func directionDelta(angle: Int, frames: Int, speed: Int, rom: [UInt8]) -> (dx: Double, dy: Double) {
+        func part(_ a: Int) -> Int {
+            let i = a & 0xFF, sine = rom.count > 0xF800 + i ? Int(rom[0xF800 + i]) : 0
+            // As velocityPart: the high byte of speed x |sine| (Swift's >> binds tighter than *).
+            let product: Int = i < 0x80 ? speed * sine : speed * ((256 - sine) & 0xFF)
+            return i < 0x80 ? product >> 8 : -(product >> 8)
+        }
+        return (Double(part(angle + 0x40) * frames) / 256, Double(part(angle) * frames) / 256)
+    }
+}
+
 extension CTSceneDocument {
     /// Adds a waypoint (`$96`/`$A0`), placement (`$8B`) or camera keyframe
     /// (`$E7`) after `offset`, or at the start of `function` without one.
     public mutating func addPoint(_ kind: CTSceneChoreography.Kind, column: Int, row: Int,
                                   after offset: Int?, object: Int, function: Int) throws {
-        let op = CTSceneChoreography.opcodes[kind]!
+        guard let op = CTSceneChoreography.opcodes[kind] else { throw CTEventError("\(kind) is not a tile target") }
         let operands = [UInt8(clamping: column), UInt8(clamping: row)]
         if let offset { try insert(op, operands, after: offset) } else { try insert(op, operands, atStartOf: object, function: function) }
     }
@@ -287,7 +315,8 @@ public enum SceneChoreography {
         guard (0...255).contains(column), (0...255).contains(row) else {
             throw EventBytecode.CompileError("tile columns and rows are 0-255")
         }
-        scene.funcs[i].stmts.append(.ct(opcode: CTSceneChoreography.opcodes[kind]!, operands: [UInt8(column), UInt8(row)]))
+        guard let op = CTSceneChoreography.opcodes[kind] else { throw EventBytecode.CompileError("\(kind) is not a tile target") }
+        scene.funcs[i].stmts.append(.ct(opcode: op, operands: [UInt8(column), UInt8(row)]))
     }
 
     /// An animation (`$AA` row, `$AB` row once, `$B7` row count) or a line of

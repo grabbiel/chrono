@@ -118,6 +118,12 @@ the interpreter does not model the multiplier), and a patched pointer lands in
 `Field_Unk2B`–`2D`. Call levels and the slot encoding (object × 2, party operand
 0/2/4) agree with all 8,463 call opcodes in the ROM's packs.
 
+`$D8 a b` (StartBattle) does not choose a formation: `a` is `Battle_Unk2989`
+bits and `b` `FieldBtl_EvtFlags`; the enemies are the field's on-screen
+battle objects, handed over by `Field_Unk0617` and `FieldBtl_SaveObjs`
+([Scene Director: Formations](scene_director.md#formations), checked against
+the ROM's routines by `ct_scene_run.py formations`).
+
 ## Limitations
 
 - No dynamic execution: `$AD` timing, `$BB` message flow and object scheduling

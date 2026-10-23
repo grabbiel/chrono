@@ -263,6 +263,18 @@ if [ -f macos_studio/Package.swift ]; then
   RC=$?
   grep -q "message 1 from obj 8 at frame 21" /tmp/verify_runtime.log && grep -q "warp at frame 32: 74 -> 77" /tmp/verify_runtime.log || RC=1
   note "field runtime (loc 7 message, loc 74 exit)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Scene Director VM timeline: the timeline equals the runtime's trace at 10 locations; one
+  # instruction's frames against the ROM's handler, Obj_MoveStep and the animation tick in
+  # ChronoRET's interpreter; the battle hand-off's enemy list and records against the ROM's.
+  $PY re_workspace/tools/ct_scene_run.py trace-check >/tmp/verify_scene_trace.log 2>&1
+  RC=$?
+  note "scene VM timeline = runtime trace ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_scene_trace.log | tail -1) locations)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  $PY re_workspace/tools/ct_scene_run.py durations --per-op 4 --states 2 --frames 160 >/tmp/verify_scene_durations.log 2>&1
+  RC=$?
+  note "scene durations vs ROM handlers ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_scene_durations.log | tail -1) cases)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  $PY re_workspace/tools/ct_scene_run.py formations --cases 400 >/tmp/verify_scene_formations.log 2>&1
+  RC=$?
+  note "battle formations vs ROM hand-off ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_scene_formations.log | tail -1) cases)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi

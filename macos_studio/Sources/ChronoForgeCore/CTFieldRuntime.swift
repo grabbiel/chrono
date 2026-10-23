@@ -124,6 +124,16 @@ public final class CTFieldRuntime {
     public private(set) var dialogue: (layout: CTDialogueLayout, frame: Int)?
     /// Sound-driver commands, oldest first (drained from the VM each frame).
     public private(set) var audio: [(frame: Int, command: CTEventVM.AudioCommand)] = []
+    /// Packs to run instead of the ROM's, by location (an edited scene).
+    public var packOverrides: [Int: CTEventPack] = [:]
+    /// Opt-in: run `$E7`'s scroll-to (Map_Unk91AC) instead of centring on
+    /// the leader while Map_ScrollToMode is set; after one the camera stays.
+    public var runsScrollTo = false
+    private var cameraHeld = false
+    /// Opt-in: a loop count of 3 or more drops by two at a row's end, as
+    /// Obj_AnimTickAndQueue does (DEC, DEC, STA); off, by one (the model so
+    /// far). ct_scene_run.py durations shows the ROM's way.
+    public var romAnimLoops = false
 
     public static let limitations = [
         "leader probes: Map_Unk8A6D's four straight cases without the corner slides; a diagonal runs the X case then the Y case",
@@ -174,7 +184,7 @@ public final class CTFieldRuntime {
         let entry = try CTEventROM.entries(rom: rom)
         let events = map.header.events
         guard events < entry.count else { throw CTEventError("location \(location): no event pack \(events)") }
-        let pack = try CTEventPack(bytes: CTEventROM.unpack(rom: rom, entry: entry[events]))
+        let pack = try packOverrides[location] ?? CTEventPack(bytes: CTEventROM.unpack(rom: rom, entry: entry[events]))
         for a in 0..<16 { vm.wram[WRAM.evtUnk0920 + a] = 0xFF }     // Evt_ClearUnk0920
         vm.load(pack: pack)
         vm.initObjects()
@@ -272,7 +282,7 @@ public final class CTFieldRuntime {
         for c in vm.audio { audio.append((frameCount, c)) }
         vm.audio.removeAll()
         objectMotion()
-        followCamera()
+        if runsScrollTo { scrollToOrFollow() } else { followCamera() }
         frameCount += 1
     }
 
@@ -804,7 +814,7 @@ public final class CTFieldRuntime {
             let loops = vm.wram[WRAM.objXAnimLoops + x]
             if loops == 1 { vm.wram[WRAM.objAnimColumn + x] &-= 1; return }
             if loops == 2 { vm.wram[WRAM.objXAnimLoops + x] = 1; vm.wram[WRAM.objAnimColumn + x] &-= 1; return }
-            vm.wram[WRAM.objXAnimLoops + x] = loops &- 1
+            vm.wram[WRAM.objXAnimLoops + x] = romAnimLoops ? loops &- 2 : loops &- 1
         }
         vm.wram[WRAM.objAnimColumn + x] = 0
     }
@@ -826,6 +836,25 @@ public final class CTFieldRuntime {
             let minX = lim.left * 16, maxX = max(minX, (lim.right + 1) * 16 - 256)
             let minY = lim.top * 16, maxY = max(minY, (lim.bottom + 1) * 16 - 224)
             camera = (min(max(minX, px - 128), maxX), min(max(minY, py - 120), maxY))
+        }
+        vm.wram.setWord(WRAM.mapTileOriginX, camera.x >> 3); vm.wram.setWord(WRAM.mapTileOriginY, camera.y >> 3)
+        vm.wram.setWord(WRAM.mapUnk1D0C, (camera.x >> 3) + 32); vm.wram.setWord(WRAM.mapUnk1D10, (camera.y >> 3) + 28)
+    }
+
+    /// Map_Unk91AC's scroll-to: while Map_ScrollToMode is set the camera
+    /// steps a pixel a frame on each axis (Map_StepPos/Neg, $10 = 1 pixel)
+    /// until Map_TileOriginX/Y (8-pixel units) equal Map_ScrollToX/Y on a
+    /// 16-pixel boundary, then ScrollTo_Arrived ($02). The target is the
+    /// camera's top-left: `$E7 column, row` puts that tile at the corner.
+    func scrollToOrFollow() {
+        let mode = vm.wram[0x7E1D00]
+        guard mode != 0 || cameraHeld else { followCamera(); return }
+        cameraHeld = true
+        if mode == 1 {
+            let tx = Int(vm.wram[0x7E1D02]) * 8, ty = Int(vm.wram[0x7E1D03]) * 8
+            camera.x += tx > camera.x ? 1 : tx < camera.x ? -1 : 0
+            camera.y += ty > camera.y ? 1 : ty < camera.y ? -1 : 0
+            if camera.x == tx && camera.y == ty { vm.wram[0x7E1D00] = 2 }
         }
         vm.wram.setWord(WRAM.mapTileOriginX, camera.x >> 3); vm.wram.setWord(WRAM.mapTileOriginY, camera.y >> 3)
         vm.wram.setWord(WRAM.mapUnk1D0C, (camera.x >> 3) + 32); vm.wram.setWord(WRAM.mapUnk1D10, (camera.y >> 3) + 28)
