@@ -717,6 +717,144 @@ def run_claims(rom, sets=range(SETS), ref=REF):
     return out
 
 
+# --- The playable characters' battle palettes and weapon colours ------------------------
+
+# Party member k (Obj_Unk1100 = k) takes OBJ palette 5 + k on the field
+# (Obj_PalSlotKind0-2 give Obj_PalSlotFixed slots 5-7; it copies the set's 12
+# colours to colours 1-12 of that Pal_Buf row). The battle keeps the rows:
+# Battle_PaletteSavedLo/Saved alias Pal_Buf/Pal_SpriteRows ($7E:2000/$2100),
+# Battle_InitScene copies them ($200 B) to Battle_PaletteLiveLo/Live, sets the
+# PCs' Battler_Palette to $0A/$0C/$0E (attribute bits 1-3: palettes 5-7), and
+# writes 3 weapon colours over colours 13-15 of each: party member k's
+# Battle_Unk1C48 + 5k byte (BattleFD_UnkAEF2 copies its PcStatBlk +$29, the
+# character record's weapon) indexes BattleRom_WeaponColourIdx, and that
+# record's 6 B (BattleRom_WeaponColours) go to Battle_PaletteLive + $BA + $20k.
+# BattleCF_VblankUploads sends the $200 B from Battle_PaletteLiveLo to CGDATA
+# from CGADD 0, so Battle_PaletteLive is CGRAM 128 (OBJ palette 0) and +$BA is
+# palette 5's colour 13. No frame carries hitbox or weapon data: the weapon is
+# drawn in the frames' pixels, and the set-up gives every PC the same box in
+# code (screen offsets 0 and $F0, half width 8, height 8), where an enemy's
+# comes from its record (+5 to +8).
+
+PC_RECORDS = 0xCC0000                 # the new-game character records ($7E:2600 copy), $50 B per id
+PC_RECORD_BYTES = 0x50
+PC_WEAPON = 0x29                      # PcStatBlk.Unk29: the record's equipped weapon
+ITEM_BOUNDS = 0xC288A7                # Menu_ItemCategoryBounds: weapons are ids 0 to bounds[1] - 1
+WEAPON_COLOUR_IDX = 0xCD6CEC          # !BattleRom_WeaponColourIdx: 1 B per weapon id
+WEAPON_COLOURS = 0xD14B00             # !BattleRom_WeaponColours: 6 B (3 colours) per record
+WEAPON_COLOUR_BYTES = 6
+WEAPON_RECORDS = 32                   # $D1:4B00-$D1:4BBF; ChronoRET's data/bankD1.asm has padding from $D1:4BC0
+WEAPON_COLOUR_FIRST = 13              # colours 13-15 of the PC's palette
+PARTY_PALETTES = (5, 6, 7)            # !Battle_PcPalette0 $0A, +2 each; !ObjPal_SlotKind0-2
+PC_BOX = {"screenOffsetX": 0, "screenOffsetY": -16, "halfWidth": 8, "height": 8}
+
+
+def weapon_count(rom):
+    return u8(rom, ITEM_BOUNDS + 1)
+
+
+def weapon_colours(rom, weapon):
+    """(record, [3 BGR555 words]) the battle puts at colours 13-15 for `weapon`."""
+    k = u8(rom, WEAPON_COLOUR_IDX + weapon)
+    at = WEAPON_COLOURS + WEAPON_COLOUR_BYTES * k
+    return k, [u16(rom, at + 2 * j) for j in range(3)]
+
+
+def pc_battle(rom, c):
+    """What the battle adds to set c: the party palettes, the new-game weapon's colours, the box."""
+    weapon = u8(rom, PC_RECORDS + PC_RECORD_BYTES * c + PC_WEAPON)
+    k, colours = weapon_colours(rom, weapon)
+    return {"partyPalettes": list(PARTY_PALETTES), "weapon": weapon, "weaponColourRecord": k,
+            "weaponColours": [f"0x{w:04X}" for w in colours], **PC_BOX}
+
+
+BATTLE_ASM_CLAIMS = (
+    ("bankCC/bankCC.asm", "Battle_InitScene",
+     ("LDA.b #!Battle_PcOffsetYInit", "STZ.w !Battler_ScreenOffsetX,X", "STA.w !Battler_ScreenOffsetY,X",
+      "LDA.b #$08", "STA.w !Battler_HalfWidth,X", "STA.w !Battler_Height,X",
+      "LDX.w #!Battle_PaletteCopyBytes-1", "LDA.w !Battle_PaletteSavedLo,X", "STA.w !Battle_PaletteLiveLo,X",
+      "LDA.b #!Battle_PcPalette0", "STA.w !Battler_BasePalette", "STA.w !Battler_Palette",
+      "STA.w !Battler_Palette+1", "STA.w !Battler_Palette+2",
+      "LDA.w !Battle_Unk1C48,Y", "LDA.l !BattleRom_WeaponColourIdx,X", "LDA.b #$06",
+      "LDA.l !BattleRom_WeaponColours,X", "STA.w !Battle_PaletteLive+186,Y", "ADC.b #$05", "CMP.b #$03")),
+    ("bankCF/bankCF.asm", "BattleCF_VblankUploads",
+     ("LDA.b #!BBAD_CGDATA", "LDA.b #!Battle_PaletteLiveLo&$FF", "LDA.b #!Battle_PaletteLiveLo>>8",
+      "LDA.b #!Battle_CgramBytes&$FF", "LDA.b #!Battle_CgramBytes>>8", "TDC", "STA.l CGADD")),
+    ("bankFD/bankFD.asm", "BattleFD_UnkAEF2",
+     ("LDA.l !BattleRom_PcStatBlock,X", "LDA.w PcStatBlk.Unk29,X", "STA.l !Battle_Unk1C48,X")),
+    ("bankC0/bankC0.asm", "Obj_PalSlotKind0", ("LDX.b #!ObjPal_SlotKind0",)),
+    ("bankC0/bankC0.asm", "Obj_PalSlotKind1", ("LDX.b #!ObjPal_SlotKind1", "BRL Obj_PalSlotFixed")),
+    ("bankC0/bankC0.asm", "Obj_PalSlotKind2", ("LDX.b #!ObjPal_SlotKind2", "BRL Obj_PalSlotFixed")),
+    ("bankC0/bankC0.asm", "Obj_PalSlotFixed",
+     ("AND.b #!ObjPal_AttrMask", "STA.w !Obj_OamAttr,X", "ADC.w #!Pal_SpriteRows&$FFFF", "LDA.w #!ObjPal_CopyCount",
+      "ADC.w #!Pal_CgramBuf-!Pal_Buf")),
+)
+
+BATTLE_CONSTANT_CLAIMS = (
+    ("include/ram_engine.inc", "!Pal_Buf = $7E2000"),
+    ("include/ram_engine.inc", "!Pal_SpriteRows = $7E2100"),
+    ("include/ram_engine.inc", "!Pal_CgramBuf = $7E2200"),
+    ("include/ram_battle.inc", "!Battle_PaletteSavedLo   = $2000"),
+    ("include/ram_battle.inc", "!Battle_PaletteLiveLo    = $2200"),
+    ("include/ram_battle.inc", "!Battle_PaletteLive      = $2300"),
+    ("include/ram_battle.inc", "!BattleRom_WeaponColourIdx = $CD6CEC"),
+    ("include/ram_battle.inc", "!BattleRom_WeaponColours  = $D14B00"),
+    ("include/ram_battle.inc", "!BattleRom_PcStatBlock    = $FDA80B"),
+    ("include/constants_battle.inc", "!Battle_CgramBytes        = $0200"),
+    ("include/constants_battle.inc", "!Battle_PaletteCopyBytes  = $0200"),
+    ("include/constants_battle.inc", "!Battle_PcPalette0        = $0A"),
+    ("include/constants_battle.inc", "!Battle_PcOffsetYInit     = $F0"),
+    ("include/constants_battle.inc", "!Battle_Unk1C48Stride     = 5"),
+    ("include/constants_engine.inc", "!ObjPal_SlotKind0 = $05"),
+    ("include/constants_engine.inc", "!ObjPal_SlotKind1 = $06"),
+    ("include/constants_engine.inc", "!ObjPal_SlotKind2 = $07"),
+    ("include/constants_engine.inc", "!ObjPal_AttrMask = $0E"),
+    ("include/constants_engine.inc", "!ObjPal_CopyCount = $0017"),
+    ("data/bankD1.asm", "; $D1:4BC0-$D1:4C7F (192 B), padding"),
+)
+
+
+def battle_code_claims(rom):
+    """The palette upload, the PC palettes, weapon colours and box from the ROM's code bytes."""
+    out = []
+
+    def claim(name, ok, detail=""):
+        out.append((name, bool(ok), detail))
+
+    upload = _body(rom, 0xCFE300, 0xCFE589)
+    claim("$CF:E300 DMAs $200 B from $7E:2200 to CGDATA ($22) from CGADD 0 (TDC; STA.l $002121)",
+          bytes.fromhex("a9228f714300a9008f724300a9228f734300a97e8f744300a9008f754300a9028f764300"
+                        "7b8f212100") in upload)
+    setup = _body(rom, 0xCCE2E4, 0xCCED86)
+    claim("$CC:E2E4 copies $7E:2000-$21FF to $2200 (LDX #$01FF; LDA $2000,X; STA $2200,X)",
+          bytes.fromhex("a2ff01bd00209d0022ca10f7") in setup)
+    claim("$CC:E2E4 gives the PCs palettes $0A, $0C, $0E (LDA #$0A; STA $9888; STA $993C; INC; INC ...)",
+          bytes.fromhex("a90a8d88988d3c991a1a8d89988d3d991a1a8d8a988d3e99") in setup)
+    claim("$CC:E2E4 indexes $CD:6CEC with $1C48,Y and copies 6 B of $D1:4B00 to $23BA + $20k",
+          bytes.fromhex("b9481caabfec6ccd") in setup and bytes.fromhex("a9068580bf004bd199ba23") in setup
+          and bytes.fromhex("69058582") in setup)
+    claim("$CC:E2E4 sets every PC's box in code (offsets 0 and $F0; half width and height 8)",
+          bytes.fromhex("a20200a9f09e08979d1397ca10f7a20200a9089d1e979d2997ca10f5") in setup)
+    fill = _body(rom, 0xFDAEF2, 0xFDAF7F)
+    claim("$FD:AEF2 reads the stat block's +$29 (LDA $0029,X) and stores it at $1C48 + 5k (STA.l $001C48,X)",
+          b"\xbd\x29\x00" in fill and b"\x9f\x48\x1c\x00" in fill)
+    return out
+
+
+def battle_data_claims(rom):
+    """Every weapon id has a colour record, the records are colours, and the sets' weapons are weapons."""
+    n = weapon_count(rom)
+    idx = [u8(rom, WEAPON_COLOUR_IDX + w) for w in range(n)]
+    words = [u16(rom, WEAPON_COLOURS + 2 * j) for j in range(3 * WEAPON_RECORDS)]
+    weapons = [u8(rom, PC_RECORDS + PC_RECORD_BYTES * c + PC_WEAPON) for c in range(SETS)]
+    return [
+        (f"weapon ids 0-{n - 1} index colour records 0-{WEAPON_RECORDS - 1}", max(idx) < WEAPON_RECORDS,
+         f"{len(set(idx))} distinct"),
+        ("the colour records' words are BGR555 (bit 15 clear)", all(w < 0x8000 for w in words)),
+        ("the sets' new-game weapons are weapon ids", all(w < n for w in weapons), " ".join(map(str, weapons))),
+    ]
+
+
 # --- Enemy sprites ($E4:F600) ------------------------------------------------------------------
 #
 # RomE4_EnemySprRec $E4:F600 holds 10 bytes per record. The field's event
@@ -1406,6 +1544,8 @@ def verify_import(rom, project, sets=range(SETS)):
         pal = [int(w, 16) for w in s["palettes"][0]]
         out.append((f"{name}: palette = 0 + the 12 ROM colours + 3 zeros",
                     pal == [0] + palette(rom, c) + [0, 0, 0], str(s["palettes"][0][:3])))
+        out.append((f"{name}: pcBattle = the party palettes, the new-game weapon's colours and the box",
+                    s.get("pcBattle") == pc_battle(rom, c), str((s.get("pcBattle") or {}).get("weapon"))))
         stream = s.get("stream") or {}
         out.append((f"{name}: streamed 8 x 2 cells at VRAM tile 8",
                     (stream.get("columns"), stream.get("rows"), stream.get("baseTile")) == (COLUMNS, ROWS, SLOT_TILE)))
@@ -1560,6 +1700,8 @@ def main():
     claims = asm_claims() + code_claims(rom) + data_claims(rom)
     claims += asm_claims(routines=ENEMY_ASM_CLAIMS, constants=ENEMY_CONSTANT_CLAIMS)
     claims += enemy_code_claims(rom) + enemy_data_claims(rom)
+    claims += asm_claims(routines=BATTLE_ASM_CLAIMS, constants=BATTLE_CONSTANT_CLAIMS)
+    claims += battle_code_claims(rom) + battle_data_claims(rom)
     if args.run:
         claims += run_claims(rom) + enemy_run_claims(rom)
     return report(claims)

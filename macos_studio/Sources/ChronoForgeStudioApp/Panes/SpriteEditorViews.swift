@@ -24,6 +24,7 @@ struct SpriteEditor: View {
     @State private var selectedOBJ: Int?
     @State private var snap = false
     @State private var onion = false
+    @State private var battleColours = false
     @State private var animationID: String?
     @State private var stepIndex = 0
     @State private var playStart: Date?
@@ -31,7 +32,11 @@ struct SpriteEditor: View {
     @State private var colour = 1
     @State private var selectedCell: Int?
 
-    private var options: SpriteScene.Options { SpriteScene.Options() }
+    private var options: SpriteScene.Options {
+        var o = SpriteScene.Options()
+        if battleColours { o.battle = SpriteScene.battleView(sprite) }
+        return o
+    }
     private var sheetPalette: [BGR555] { sheet?.palette ?? [] }
     private var palette: [UInt16] { SpriteScene.palettes(sprite, sheetPalette: sheetPalette)[0] }
     private var animation: SpriteDef.Animation? { sprite.animations.first { $0.id == animationID } }
@@ -74,6 +79,10 @@ struct SpriteEditor: View {
                     in: 0...max(0, sprite.frames.count - 1))
                 .disabled(playStart != nil)
             Toggle("Onion skin", isOn: $onion)
+            if sprite.pcBattle != nil {
+                Toggle("Battle palette", isOn: $battleColours)
+                    .help("Draw as the battle does: OBJ palette 5 with the new-game weapon's colours at 13-15")
+            }
             Picker("", selection: $mode) {
                 ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -88,6 +97,10 @@ struct SpriteEditor: View {
         if let r = sprite.rom { parts.append("set \(r.set) from \(r.frames)") }
         if let f = sprite.field {
             parts.append("field size \(f.size & 3), loaded by \(f.packs.count) event packs at \(f.locations.count) locations")
+        }
+        if let b = sprite.pcBattle {
+            let palettes = b.partyPalettes.map(String.init).joined(separator: "/")
+            parts.append("battle palettes \(palettes), weapon \(b.weapon) colours 13-15 from record \(b.weaponColourRecord)")
         }
         if sheetDirty { parts.append("sheet modified") }
         return parts.joined(separator: " · ")

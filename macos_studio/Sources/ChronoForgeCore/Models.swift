@@ -316,6 +316,8 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
     public var battle: Battle? = nil
     /// ct-npc: the record's size byte and the event packs and locations that load it (read-only).
     public var field: Field? = nil
+    /// ct-pc: what the battle adds to the set in code (read-only; docs/sprites.md, "Battle palettes and weapons").
+    public var pcBattle: PCBattle? = nil
 
     public init(id: String, sheet: String, bpp: Int = 4, frames: [Frame] = [], animations: [Animation] = [],
                 palettes: [[String]]? = nil, stream: Stream? = nil, rom: ROMSource? = nil) {
@@ -406,6 +408,23 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         public var locations: [Int]    // locations whose LocRom .Events is one of those packs
         public init(size: Int, packs: [Int], locations: [Int]) {
             self.size = size; self.packs = packs; self.locations = locations
+        }
+    }
+    /// A playable character's battle palette and box, set by Battle_InitScene's code.
+    public struct PCBattle: Codable, Equatable, Sendable {
+        public var partyPalettes: [Int]     // OBJ palettes of party members 0-2 (field and battle)
+        public var weapon: Int              // the new-game character record's weapon (+$29)
+        public var weaponColourRecord: Int  // BattleRom_WeaponColourIdx[weapon]
+        public var weaponColours: [String]  // its 3 hex BGR555 colours, put at colours 13-15
+        public var screenOffsetX: Int       // the box every PC gets: offsets, half width, height
+        public var screenOffsetY: Int
+        public var halfWidth: Int
+        public var height: Int
+        public init(partyPalettes: [Int], weapon: Int, weaponColourRecord: Int, weaponColours: [String],
+                    screenOffsetX: Int, screenOffsetY: Int, halfWidth: Int, height: Int) {
+            self.partyPalettes = partyPalettes; self.weapon = weapon; self.weaponColourRecord = weaponColourRecord
+            self.weaponColours = weaponColours; self.screenOffsetX = screenOffsetX; self.screenOffsetY = screenOffsetY
+            self.halfWidth = halfWidth; self.height = height
         }
     }
     /// An enemy record's battle fields, as Battle_InitScene reads them

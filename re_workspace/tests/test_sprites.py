@@ -346,3 +346,27 @@ def test_enemy_spans_cover_the_write_back():
         assert cs.pc(cs.u24(image, cs.TILES_PTR + 3 * cs.enemy_record(image, i)["gfx"])) == s.start
         data, _, end = __import__("ct_tilesets").unpack_bytes(image[s.start:s.start + 0x10000])
         assert end == len(s) and len(data) == 32 * (30, 50)[i]
+
+
+# --- Battle palettes and weapon colours ---------------------------------------------------
+
+def test_weapon_colours_follow_the_index_table():
+    # Synthetic: weapon 3 -> colour record 2; set 0's record names weapon 3.
+    image = bytearray(cs.ROM_SIZE)
+    image[cs.pc(cs.WEAPON_COLOUR_IDX) + 3] = 2
+    at = cs.pc(cs.WEAPON_COLOURS) + cs.WEAPON_COLOUR_BYTES * 2
+    image[at:at + 6] = bytes([0x1F, 0x00, 0xE0, 0x03, 0x00, 0x7C])
+    image[cs.pc(cs.PC_RECORDS) + cs.PC_WEAPON] = 3
+    assert cs.weapon_colours(bytes(image), 3) == (2, [0x001F, 0x03E0, 0x7C00])
+    b = cs.pc_battle(bytes(image), 0)
+    assert b["partyPalettes"] == [5, 6, 7] and b["weapon"] == 3 and b["weaponColourRecord"] == 2
+    assert b["weaponColours"] == ["0x001F", "0x03E0", "0x7C00"]
+    assert (b["screenOffsetX"], b["screenOffsetY"], b["halfWidth"], b["height"]) == (0, -16, 8, 8)
+
+
+def test_battle_palette_claims(rom, chronoret):
+    claims = cs.asm_claims(chronoret, routines=cs.BATTLE_ASM_CLAIMS, constants=cs.BATTLE_CONSTANT_CLAIMS)
+    assert len(claims) == len(cs.BATTLE_ASM_CLAIMS) + len(cs.BATTLE_CONSTANT_CLAIMS)
+    claims += cs.battle_code_claims(rom) + cs.battle_data_claims(rom)
+    assert not failed(claims)
+    assert all(cs.pc_battle(rom, c)["weaponColourRecord"] < cs.WEAPON_RECORDS for c in range(cs.SETS))

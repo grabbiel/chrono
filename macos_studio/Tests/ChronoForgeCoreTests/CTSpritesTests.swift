@@ -139,6 +139,42 @@ final class CTSpritesTests: XCTestCase {
         }
     }
 
+    func testBattleViewUsesThePartyPaletteAndTheWeaponColours() throws {
+        var (_, image) = try vectors()
+        // Synthetic: set 0's record names weapon 3, whose colour record is 2.
+        image[CTCharacterROM.recordPC(0) + CTSpriteROM.recordWeapon] = 3
+        image[CTSpriteROM.pc(CTSpriteROM.weaponColourIdx) + 3] = 2
+        let words: [UInt16] = [0x001F, 0x03E0, 0x7C00]
+        for (j, w) in words.enumerated() {
+            let at = CTSpriteROM.pc(CTSpriteROM.weaponColours) + 6 * 2 + 2 * j
+            image[at] = UInt8(w & 0xFF); image[at + 1] = UInt8(w >> 8)
+        }
+        let b = CTSpriteROM.pcBattle(image, set: 0)
+        XCTAssertEqual(b, .init(partyPalettes: [5, 6, 7], weapon: 3, weaponColourRecord: 2,
+                                weaponColours: ["0x001F", "0x03E0", "0x7C00"],
+                                screenOffsetX: 0, screenOffsetY: -16, halfWidth: 8, height: 8))
+        var s = CTSpriteROM.spriteDef(CTSpriteROM.decode(rom: image, set: 0), id: "s0")
+        s.pcBattle = b
+        let back = try JSONDecoder().decode(SpriteDef.self, from: CTProject.jsonEncoder.encode(s))
+        XCTAssertEqual(back, s)
+        XCTAssertEqual(SpriteScene.battleView(s, member: 2)?.palette, 7)
+        XCTAssertNil(SpriteScene.battleView(CTSpriteROM.spriteDef(CTSpriteROM.decode(rom: image, set: 1), id: "s1")))
+
+        let sheet = TileDecoder.decodeIndices(CTSpriteROM.decode(rom: image, set: 0).tiles.flatMap { $0 }, depth: .bpp4).chunked(64)
+        var o = SpriteScene.Options()
+        o.battle = SpriteScene.battleView(s)
+        let scene = SpriteScene.frame(s, frame: 0, sheet: sheet, sheetPalette: [], options: o)
+        let pal = SpriteScene.palettes(s, sheetPalette: [])
+        XCTAssertEqual(Array(scene.cgram[(128 + 80 + 1)...(128 + 80 + 12)]), Array(pal[0][1...12]))
+        XCTAssertEqual(Array(scene.cgram[(128 + 80 + 13)...(128 + 80 + 15)]), words)
+        let objs = s.frames[0].tiles.count
+        XCTAssertTrue((0..<objs).allSatisfy { scene.oam[4 * $0 + 3] >> 1 & 7 == 5 }, "drawn in OBJ palette 5")
+        let plain = SpriteScene.frame(s, frame: 0, sheet: sheet, sheetPalette: [], options: SpriteScene.Options())
+        XCTAssertTrue((0..<objs).allSatisfy { plain.oam[4 * $0 + 3] >> 1 & 7 == 0 })
+        // The write-back never sees it: the sprite still validates as imported.
+        XCTAssertEqual(CTSpritePatch.validate(s), CTSpritePatch.validate(CTSpriteROM.spriteDef(CTSpriteROM.decode(rom: image, set: 0), id: "s0")))
+    }
+
     func testIndexedPNGRoundTrips() throws {
         for depth in [2, 4, 8] {
             let colours = (0..<(1 << min(depth, 4))).map { BGR555(word: UInt16($0 * 0x0421 & 0x7FFF)) }
@@ -261,6 +297,7 @@ final class CTSpritesTests: XCTestCase {
         try project.save()
         let loaded = try CTProject.load(from: dir)
         XCTAssertEqual(loaded.sprites["crono"], project.sprites["crono"])
+        XCTAssertEqual(loaded.sprites["crono"]?.pcBattle?.partyPalettes, [5, 6, 7])
         let issues = Validator.validate(loaded).filter { $0.path.hasPrefix("sprites/") }
         XCTAssertTrue(issues.isEmpty, "\(issues)")
 

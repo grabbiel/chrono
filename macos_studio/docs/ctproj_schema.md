@@ -190,6 +190,16 @@ original fields; files with only those still load and save unchanged.
   frames.
 - `hitbox` and `weapon` are Studio fields about the origin; they are not
   written to the ROM.
+- `pcBattle` (`ct-pc`, read-only) is what the battle adds to the set in code:
+  - `partyPalettes`: the OBJ palettes of party members 0–2;
+  - `weapon`: the new-game character record's weapon;
+  - `weaponColourRecord`;
+  - `weaponColours`: 3 hex BGR555, for colours 13–15;
+  - the box every PC gets: `screenOffsetX`, `screenOffsetY` (signed),
+    `halfWidth` and `height`.
+
+  It is optional, and the write-back ignores it
+  ([Battle palettes](sprites.md#battle-palettes-and-weapons)).
 - `rom` records where the import read the set (see [Sprites](sprites.md)).
   An enemy's battle sprite (`sprites/enemy_NNN.*`) has `rom.family` `ct-enemy`,
   `rom.set` the enemy id, `rom.layout` its frame layout (0–2) and `rom.packed`

@@ -161,6 +161,65 @@ the editor has three parts.
 Every preview is a `PPUFrame` drawn by `SNESPPUView`, so it shows what the
 hardware would: OBJ order, 16×16 tile wrap, per-line limits and palettes.
 
+## Battle palettes and weapons
+
+Party member k (0–2) draws in OBJ palette 5 + k, in the field and in battle.
+The battle adds its weapon's colours over colours 13–15. Nothing else about a
+playable character's sprite changes in battle.
+
+- **Field.** An object's palette handler is chosen by its kind (`Obj_Unk1100`, the
+  party position). Kinds 0–2 are `Obj_PalSlotKind0`–`2`, which give
+  `Obj_PalSlotFixed` slots 5, 6 and 7 (`ObjPal_SlotKind0`–`2`). That routine
+  sets the OAM attribute to slot × 2 (`ObjPal_AttrMask` `$0E`). It copies the
+  set's 12 colours (`ObjPal_CopyCount` `$17`, 24 B) to colours 1–12 of row
+  `Pal_SpriteRows` + slot × `$20`, and again into `Pal_CgramBuf`.
+- **Battle.** `Battle_PaletteSavedLo` and `Battle_PaletteSaved` (`$2000`, `$2100`)
+  are the field's `Pal_Buf` and `Pal_SpriteRows` (`$7E:2000`, `$7E:2100`), so
+  the rows carry over. `Battle_InitScene` does three things:
+  - it copies all `$200` bytes to `Battle_PaletteLiveLo` and `Battle_PaletteLive`;
+  - it sets the PCs' `Battler_Palette` to `$0A`, `$0C` and `$0E`
+    (`Battle_PcPalette0`; attribute bits 1–3, so palettes 5–7);
+  - for each party member k, it copies 6 bytes (3 colours) to
+    `Battle_PaletteLive` + `$BA` + `$20`k.
+- **Which 3 colours.** They are record `BattleRom_WeaponColourIdx[w]` of
+  `BattleRom_WeaponColours` (`$D1:4B00`, 32 records), where w is member k's
+  `Battle_Unk1C48` + 5k byte. `BattleFD_UnkAEF2` fills that byte from the stat
+  block's +`$29`, which is the character record's weapon (`docs/characters.md`).
+  Weapon ids 0–89 (`Menu_ItemCategoryBounds`) all index records 0–31.
+- **Where they land.** `BattleCF_VblankUploads` DMAs the `$200` bytes from
+  `Battle_PaletteLiveLo` to CGDATA from CGADD 0. So `Battle_PaletteLive` is CGRAM 128
+  (OBJ palette 0), and +`$BA` is colour 13 of palette 5.
+
+**No per-frame hitbox or weapon data.** The weapon is drawn in the frames'
+pixels; only its colours vary. `Battle_InitScene` gives every PC the same box in
+code: screen offsets 0 and `$F0` (−16; `Battle_PcOffsetYInit`), half width 8
+and height 8. An enemy's box comes from its record (+5 to +8). No hitbox,
+attachment or weapon-sprite table appears in the PC paths. The frame
+records hold only cells and OBJ offsets
+([Frames](#frames)).
+
+`sprites import` writes this as the read-only `pcBattle` of each `ct-pc`
+sprite:
+- `partyPalettes` [5, 6, 7];
+- the new-game record's `weapon`;
+- its `weaponColourRecord`;
+- the 3 `weaponColours`;
+- the box (`screenOffsetX` 0, `screenOffsetY` −16, `halfWidth` 8, `height` 8).
+
+The Studio's **Battle palette** toggle draws the frame as party member 0:
+- in OBJ palette 5;
+- with colours 1–12 from palette 0;
+- with the weapon's colours at 13–15.
+
+The sheet's PLTE, `palettes` and the OBJs' palette 0 are unchanged, and the
+write-back ignores `pcBattle`.
+
+The evidence is the `BATTLE_*` claims of `ct_sprites.py check`:
+- ChronoRET's lines;
+- the code bytes at `$CC:E2E4`, `$CF:E300` and `$FD:AEF2`;
+- the table data;
+- `verify-import` against the CLI import.
+
 ## Tile layout fix
 
 `TileDecoder` read plane p of row r at byte p × 8 + r, a plane-after-plane
@@ -210,11 +269,14 @@ Impact:
 ## Limitations
 
 - The playable characters' and the enemies' sets (layouts 0–2) are decoded and
-  written back ([Enemy sprites](#enemy-sprites)); NPC sets are not decoded.
-- The weapon colours (13–15) are not imported, and the import uses OBJ palette 0
-  where the battle uses 5–7.
-- `hitbox` and `weapon` are Studio metadata. They are not decoded from the game
-  and not written to it.
+  written back ([Enemy sprites](#enemy-sprites)), and so are the field NPCs' ([NPC sprites](#npc-sprites)).
+- The weapon colours (13–15) and the party palettes (5–7) are imported read-only
+  as `pcBattle`. Only the Studio preview uses them: the sheet and the OBJs keep
+  palette 0. The colours are those of the new-game weapon; equipping another
+  weapon changes them in the game ([Battle palettes and weapons](#battle-palettes-and-weapons)).
+- `hitbox` and `weapon` are Studio metadata. The game has no per-frame hitbox
+  or weapon data to decode: the PCs' box is set in code, and the weapon is
+  drawn in the frames.
 - The write-back keeps each set's size and shape: no new tiles, frames or
   animation rows, and no shorter or longer lists.
 - OBJ priority is per object, not per frame. The field gives an OBJ whose y

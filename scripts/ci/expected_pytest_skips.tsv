@@ -176,3 +176,4 @@ re_workspace/tests/test_npc_sprites.py::test_chronoret_source_claims	local ROM n
 re_workspace/tests/test_npc_sprites.py::test_code_and_data_claims	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_npc_sprites.py::test_usage_counts	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_npc_sprites.py::test_field_routines_run_as_modelled_for_some_records	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_sprites.py::test_battle_palette_claims	local ROM not present (re_workspace/ct_clean.sfc)
