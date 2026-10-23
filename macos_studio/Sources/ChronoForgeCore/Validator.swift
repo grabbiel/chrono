@@ -260,6 +260,19 @@ public enum Validator {
                 guard !song.listing.hasPrefix("/"), !song.listing.split(separator: "/").contains(".."),
                       let text = try? String(contentsOf: p.fileURL(relative: song.listing), encoding: .utf8),
                       let tables = try? CTSongListing.assembleSong(text).tables else { continue }
+                // Drum kits, imported and composed songs (docs/music_tracker.md): pads that play
+                // one of the song's listed samples at a note in range, sample numbers the ROM or
+                // rom.samples has, and a song volume that is not silent.
+                let appended = Set(sampleNumbers.values.filter { $0 > CTSampleTables.rom.count })
+                for n in tables.samples ?? [] where n > CTSampleTables.rom.count && !appended.contains(n) {
+                    err(4, path, "@samples \(n) is neither one of the ROM's \(CTSampleTables.rom.count) samples nor one rom.samples appends")
+                }
+                if let drums = tables.drums, let kit = try? CTDrumKit(bytes: drums) {
+                    for problem in kit.problems(listed: tables.samples?.count) { err(4, path, problem) }
+                }
+                if let echo = tables.echo, echo[1] == 0 {
+                    warn(4, path, "the @echo row's byte 1 (the song volume, Spc_Unk4D) is $00: every song voice is silent")
+                }
                 guard let own = tables.samples, let echo = tables.echo else { continue }
                 var list = own
                 for s in spec.samples where s.songs.contains(song.song) {

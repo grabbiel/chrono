@@ -97,6 +97,38 @@ final class CTDrumKitTests: XCTestCase {
         XCTAssertEqual(notes.map(\.pan), [0x40, 0x10, 0x10, 0x40])
     }
 
+    func testValidatorChecksKitsAndImportedSongs() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ctdrums-\(UUID().uuidString).ctproj")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.copyItem(at: fixtureURL(), to: dir)
+        var project = try CTProject.load(from: dir)
+        let songs = dir.appendingPathComponent("audio/songs")
+        try FileManager.default.createDirectory(at: songs, withIntermediateDirectories: true)
+        // A good kit; an imported MIDI song; a bad kit on 70 (not appended) with the song volume at 0.
+        try Data(try drumListing(kit: try kit(), pads: [(0, 0)]).utf8).write(to: songs.appendingPathComponent("good.ctsong"))
+        let (midi, _) = try CTMIDIImport.convert(try CTMIDIFile(bytes: CTMIDIImportTests.fixture()), options: CTMIDIImportTests.options())
+        try Data(midi.utf8).write(to: songs.appendingPathComponent("midi.ctsong"))
+        var bad = try kit()
+        bad.pads[2] = .init(sample: 0x22, note: 0x30, pan: 0x40)
+        bad.pads[3] = .init(sample: 0x20, note: 0x70, pan: 0x40)
+        let badText = try drumListing(kit: bad, pads: []).replacingOccurrences(of: "@samples 1 2", with: "@samples 1 70")
+            .replacingOccurrences(of: "@echo $00 $FF", with: "@echo $00 $00")
+        try Data(badText.utf8).write(to: songs.appendingPathComponent("bad.ctsong"))
+        var spec = Project.ROMBuild()
+        spec.songs = [.init(song: 2, listing: "audio/songs/good.ctsong"), .init(song: 3, listing: "audio/songs/midi.ctsong"),
+                      .init(song: 4, listing: "audio/songs/bad.ctsong")]
+        project.project.rom = spec
+        let issues: [ValidationIssue] = Validator.validate(project).filter { $0.path.hasPrefix("project.json rom song") }
+        let messages: [String] = issues.map { "\($0.path): \($0.message)" }
+        XCTAssertFalse(messages.contains { $0.contains("song 2:") || $0.contains("song 3:") }, "\(messages)")
+        for e in ["@samples 70 is neither", "drum 2: sample $22 is past the song's 2 listed samples", "drum 3: note $70 is outside",
+                  "byte 1 (the song volume, Spc_Unk4D) is $00"] {
+            XCTAssertTrue(messages.contains { $0.contains("song 4:") && $0.contains(e) }, "\(e) not in \(messages)")
+        }
+        let warnings = issues.filter { $0.severity == .warning }.map(\.message)
+        XCTAssertEqual(warnings.count, 1, "\(warnings)")
+    }
+
     // MARK: The driver (local ROM)
 
     func clean() throws -> [UInt8] { [UInt8](try Repo.romData()) }
