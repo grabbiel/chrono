@@ -281,6 +281,7 @@ default:
       chronoforge story <flags|graph|check|import|annotate> ...  (story flag registry and world graph)
       chronoforge runtime <run|vectors> <rom.sfc> ...            (the embedded event VM and field loop)
       chronoforge ppu demos [--out DIR] [--gpu] ...              (synthetic PPU feature scenes as PNGs)
+      chronoforge ppu frame <battle|title|lavos> --rom <sfc> ...  (a CT frame from its register writes)
       chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render|play|events|edit|verify-model|
                          import|new|budget|sample-check|kit|drum-check|import-midi> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]

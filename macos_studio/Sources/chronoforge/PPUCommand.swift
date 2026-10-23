@@ -8,6 +8,13 @@ usage: chronoforge ppu demos [--out DIR] [--frame N] [--scale K] [--only SLUG] [
          demos: the synthetic PPU feature scenes (docs/ppu.md) as PNGs, one per demo,
                 through the CPU reference renderer (--gpu: the Metal renderer, and
                 a byte-for-byte comparison with the reference)
+       chronoforge ppu frame <battle|title|lavos> --rom <sfc> [--out PNG] [--gpu] [--field 0|1]
+                                [--scale K] [--capture JSON] [--listing]
+         frame: a Chrono Trigger frame built from the register and HDMA writes the
+                ROM's own routines make, run in ChronoRET's interpreter by
+                re_workspace/tools/ct_ppu_frames.py (docs/ppu.md, "CT frames");
+                --capture reads a capture that tool wrote instead. The PNG shows
+                game data: keep it out of the repository.
 """
 
 /// Nearest-neighbour upscale; 512-column pictures keep the 256-pixel aspect.
@@ -26,6 +33,7 @@ func ppuScaled(_ image: PPUImage, scale: Int) -> (width: Int, height: Int, rgba:
 
 @MainActor
 func cmdPPU(_ args: [String]) -> Int32 {
+    if args.first == "frame" { return cmdPPUFrame(Array(args.dropFirst())) }
     guard args.first == "demos" else { print(ppuUsage); return 2 }
     var options: [String: String] = [:]
     var gpu = false
@@ -66,6 +74,67 @@ func cmdPPU(_ args: [String]) -> Int32 {
         return mismatches == 0 ? 0 : 1
     } catch {
         print("ppu demos failed: \(error)")
+        return 1
+    }
+}
+
+/// `ppu frame`: a captured CT frame, rendered by the reference (and with --gpu
+/// by Metal, compared byte for byte), with its register and HDMA listing.
+@MainActor
+func cmdPPUFrame(_ args: [String]) -> Int32 {
+    guard let name = args.first, let kind = CTPPUCapture.Kind(rawValue: name) else { print(ppuUsage); return 2 }
+    var options: [String: String] = [:]
+    var gpu = false, showListing = false
+    var i = 1
+    while i < args.count {
+        if args[i] == "--gpu" { gpu = true; i += 1; continue }
+        if args[i] == "--listing" { showListing = true; i += 1; continue }
+        guard ["--rom", "--out", "--field", "--scale", "--capture"].contains(args[i]), i + 1 < args.count else {
+            print(ppuUsage); return 2
+        }
+        options[args[i]] = args[i + 1]
+        i += 2
+    }
+    let field = Int(options["--field"] ?? "0") == 1 ? 1 : 0
+    let scale = max(1, min(4, Int(options["--scale"] ?? "2") ?? 2))
+    do {
+        let capture: CTPPUCapture
+        if let path = options["--capture"] {
+            capture = try CTPPUCapture.load(from: URL(fileURLWithPath: path))
+        } else if let rom = options["--rom"] {
+            capture = try CTPPUCapture.run(kind, rom: URL(fileURLWithPath: rom))
+        } else {
+            print(ppuUsage); return 2
+        }
+        guard capture.kind == kind else { print("the capture is a \(capture.kind.rawValue) frame"); return 1 }
+        if showListing { print(capture.listing().joined(separator: "\n")) }
+        let replayed = capture.replayLines() == capture.lines
+        print("\(kind.rawValue): \(capture.channels.count) HDMA channels, \(capture.hdma.count) HDMA writes; "
+              + "the lines replayed through the write ports \(replayed ? "match" : "DIFFER from") the capture")
+        if capture.vram.allSatisfy({ $0 == 0 }) {
+            print("note: this capture uploads no graphics (VRAM is empty); the picture is the backdrop")
+        }
+        let f = capture.frame(field: field)
+        let cpu = PPUReferenceRenderer.renderImage(f)
+        var image = cpu
+        var note = "reference"
+        var mismatch = false
+        if gpu {
+            guard let device = MTLCreateSystemDefaultDevice() else { print("no Metal device"); return 1 }
+            image = try PPURenderer(device: device).renderImage(f)
+            mismatch = image != cpu
+            note = mismatch ? "Metal, DIFFERS from the reference" : "Metal, equal to the reference"
+        }
+        if let out = options["--out"] {
+            let big = ppuScaled(image, scale: scale)
+            try PNG.writeRGBA(width: big.width, height: big.height, rgba: big.rgba).write(to: URL(fileURLWithPath: out))
+            print("wrote \(out): \(image.width)x\(image.height), field \(field) (\(note))")
+        } else {
+            print("rendered \(image.width)x\(image.height), field \(field) (\(note))")
+        }
+        return (mismatch || !replayed) ? 1 : 0
+    } catch {
+        print("ppu frame failed: \(error)")
         return 1
     }
 }
