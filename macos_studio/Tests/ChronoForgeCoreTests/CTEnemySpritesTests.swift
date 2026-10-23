@@ -179,7 +179,9 @@ final class CTEnemySpritesTests: XCTestCase {
         let large = try XCTUnwrap(loaded.sprites["enemy_111"])
         XCTAssertEqual(large.frames.count, 1)
         XCTAssertEqual(large.frames[0].cells?.count, 96)
-        XCTAssertEqual(large.frames[0].tiles.map(\.tile), (0..<24).map { 32 * ($0 / 8) + 2 * ($0 % 8) })
+        var wantTiles: [Int] = []
+        for k in 0..<24 { wantTiles.append(32 * (k / 8) + 2 * (k % 8)) }
+        XCTAssertEqual(large.frames[0].tiles.map(\.tile), wantTiles)
         XCTAssertTrue(large.frames[0].tiles.allSatisfy { $0.pal == 1 && $0.priority == 2 && $0.size16 })
         XCTAssertEqual(large.stream, .init(columns: 16, rows: 6, baseTile: 0x40))
         XCTAssertTrue(large.animations.isEmpty)

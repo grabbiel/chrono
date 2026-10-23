@@ -165,8 +165,11 @@ final class CTSpritesTests: XCTestCase {
         o.battle = SpriteScene.battleView(s)
         let scene = SpriteScene.frame(s, frame: 0, sheet: sheet, sheetPalette: [], options: o)
         let pal = SpriteScene.palettes(s, sheetPalette: [])
-        XCTAssertEqual(Array(scene.cgram[(128 + 80 + 1)...(128 + 80 + 12)]), Array(pal[0][1...12]))
-        XCTAssertEqual(Array(scene.cgram[(128 + 80 + 13)...(128 + 80 + 15)]), words)
+        let row5: Int = 128 + 80                      // OBJ palette 5 in CGRAM
+        let partyColours: [UInt16] = Array(scene.cgram[(row5 + 1)...(row5 + 12)])
+        let weaponColours: [UInt16] = Array(scene.cgram[(row5 + 13)...(row5 + 15)])
+        XCTAssertEqual(partyColours, Array(pal[0][1...12]))
+        XCTAssertEqual(weaponColours, words)
         let objs = s.frames[0].tiles.count
         XCTAssertTrue((0..<objs).allSatisfy { scene.oam[4 * $0 + 3] >> 1 & 7 == 5 }, "drawn in OBJ palette 5")
         let plain = SpriteScene.frame(s, frame: 0, sheet: sheet, sheetPalette: [], options: SpriteScene.Options())

@@ -69,8 +69,16 @@ final class CTNPCSpritesTests: XCTestCase {
             XCTAssertEqual(d.rows, want.animations.rows)
             XCTAssertEqual(d.stride, want.animations.stride)
             XCTAssertEqual(CTNPCSpriteROM.slotTile(size: d.fields.size), want.slotTile)
-            XCTAssertEqual(d.frames.map { $0.cells }, want.frameList.map { $0.cells })
-            XCTAssertEqual(d.frames.map { $0.pieces.map { [$0.x, $0.y] } }, want.frameList.map { $0.pieces })
+            XCTAssertEqual(d.frames.map(\.cells), want.frameList.map(\.cells))
+            // Loops: CI's older type checker (Xcode 26.6) is slow on nested closures with array literals.
+            var gotPieces: [[[Int]]] = []
+            for f in d.frames {
+                var ps: [[Int]] = []
+                for p in f.pieces { ps.append([p.x, p.y]) }
+                gotPieces.append(ps)
+            }
+            let wantPieces: [[[Int]]] = want.frameList.map(\.pieces)
+            XCTAssertEqual(gotPieces, wantPieces)
             // Rows built step by step: CI's older type checker (Xcode 26.6) gives up on long literal chains.
             var gotRows: [[Int]] = [], wantRows: [[Int]] = []
             for a in d.animations {

@@ -99,7 +99,7 @@ struct SpriteEditor: View {
             parts.append("field size \(f.size & 3), loaded by \(f.packs.count) event packs at \(f.locations.count) locations")
         }
         if let b = sprite.pcBattle {
-            let palettes = b.partyPalettes.map(String.init).joined(separator: "/")
+            let palettes: String = b.partyPalettes.map { (n: Int) -> String in String(n) }.joined(separator: "/")
             parts.append("battle palettes \(palettes), weapon \(b.weapon) colours 13-15 from record \(b.weaponColourRecord)")
         }
         if sheetDirty { parts.append("sheet modified") }

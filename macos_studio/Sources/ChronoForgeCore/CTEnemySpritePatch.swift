@@ -563,14 +563,19 @@ public enum CTEnemySpritePatch {
                 let missingNPCs = u.others.filter { !listedNPCs.contains($0) }
                 if !missingEnemies.isEmpty || !missingNPCs.isEmpty {
                     var who: [String] = []
-                    if !missingEnemies.isEmpty { who.append("enemy records " + missingEnemies.map(String.init).joined(separator: ", ")) }
-                    if !missingNPCs.isEmpty {
-                        who.append("\(CTSpriteROM.snes(CTSpriteROM.sprRec)) records " +
-                                   missingNPCs.map(String.init).joined(separator: ", ") + " (NPCs)")
+                    // Typed lets: CI's older type checker (Xcode 26.6) is slow on long `+` chains of joined lists.
+                    if !missingEnemies.isEmpty {
+                        let numbers: String = missingEnemies.map { (n: Int) -> String in String(n) }.joined(separator: ", ")
+                        who.append("enemy records \(numbers)")
                     }
-                    throw CTROMBuildError("sprite \(names[0]): \(part.label)'s \(part.name) are also shown by " +
-                                          who.joined(separator: " and ") + "; list every sharer's sprite with the same edit " +
-                                          "(NPC records as ct-npc sprites; layout-3 enemies cannot be listed)")
+                    if !missingNPCs.isEmpty {
+                        let numbers: String = missingNPCs.map { (n: Int) -> String in String(n) }.joined(separator: ", ")
+                        let table: String = CTSpriteROM.snes(CTSpriteROM.sprRec)
+                        who.append("\(table) records \(numbers) (NPCs)")
+                    }
+                    let sharers: String = who.joined(separator: " and ")
+                    let advice: String = "list every sharer's sprite with the same edit (NPC records as ct-npc sprites; layout-3 enemies cannot be listed)"
+                    throw CTROMBuildError("sprite \(names[0]): \(part.label)'s \(part.name) are also shown by \(sharers); \(advice)")
                 }
             }
             for w in p.wants { changedParts[w.owner, default: []].append(part) }

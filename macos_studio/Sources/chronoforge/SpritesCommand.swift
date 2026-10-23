@@ -51,7 +51,7 @@ private func loadSprites(_ path: String) throws -> [LoadedSprite] {
 
 /// "1 2 3 … (40)": the first `n` numbers of a list and its length.
 private func shortList(_ xs: [Int], _ n: Int = 12) -> String {
-    let head = xs.prefix(n).map(String.init).joined(separator: " ")
+    let head: String = xs.prefix(n).map { (x: Int) -> String in String(x) }.joined(separator: " ")
     return xs.count > n ? "\(head) … (\(xs.count))" : head
 }
 
@@ -119,10 +119,10 @@ func cmdSprites(_ args: [String]) -> Int32 {
             if !foes.ids.isEmpty {
                 var layouts = [0, 0, 0, 0]
                 for id in foes.ids { layouts[project.sprites[id]!.rom!.layout ?? 0] += 1 }
-                let counts = layouts.map(String.init).joined(separator: "/")
-                let large = foes.fieldOnly.map(String.init).joined(separator: " ")
-                print("enemies: \(foes.ids.count) sprites (frame layouts 0/1/2/3: \(counts)) -> sprites/enemy_NNN.*" +
-                      (foes.fieldOnly.isEmpty ? "" : "; layout 3 as the field shows it, read-only: " + large))
+                let counts: String = layouts.map { (n: Int) -> String in String(n) }.joined(separator: "/")
+                let large: String = foes.fieldOnly.map { (n: Int) -> String in String(n) }.joined(separator: " ")
+                let tail: String = foes.fieldOnly.isEmpty ? "" : "; layout 3 as the field shows it, read-only: \(large)"
+                print("enemies: \(foes.ids.count) sprites (frame layouts 0/1/2/3: \(counts)) -> sprites/enemy_NNN.*\(tail)")
             }
             if !people.isEmpty {
                 var sizes = [0, 0]
