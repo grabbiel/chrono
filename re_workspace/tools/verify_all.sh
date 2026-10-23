@@ -278,6 +278,11 @@ if [ -f macos_studio/Package.swift ]; then
   if [ -f macos_studio/tools/bundle_app.sh ]; then
     bash macos_studio/tools/bundle_app.sh >/tmp/verify_bundle.log 2>&1; note "bundle_app.sh" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   fi
+  # Enemy sprites written back (identical rebuild, in-place and relocated packs, a shared pack,
+  # PC/enemy warnings, ct_rom_check, Decomp_ToWram and the frame decoder on the built ROM, damage, refusals).
+  $PY macos_studio/tools/verify_enemy_sprite_build.py >/tmp/verify_enemy_sprite_build.log 2>&1
+  RC=$?
+  note "Enemy sprite write-back ($(grep -oE '[0-9]+ of [0-9]+ runs' /tmp/verify_enemy_sprite_build.log | tail -1) of the frame decoder on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
 else
   note "swift package present" "FAIL"
 fi

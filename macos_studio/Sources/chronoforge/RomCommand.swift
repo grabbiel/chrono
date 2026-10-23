@@ -80,6 +80,16 @@ func cmdRom(_ args: [String]) -> Int32 {
                       (t.changedTiles.isEmpty ? "" : " (\(t.changedTiles.count) tiles)") +
                       (t.sharedWith.map { "; also shown by " + $0.joined(separator: "; ") } ?? ""))
             }
+            if let foes = report.enemySprites {
+                let edited = foes.filter { !$0.changed.isEmpty }
+                print("enemy sprites: \(foes.count) listed, \(edited.count) changed")
+                for t in edited {
+                    let pack = t.pack.map { p in "; pack \(p.packedBytes) of \(p.budget) B at \(p.address) (\(p.placement))" } ?? ""
+                    print("enemy sprite \(t.id): record \(t.set), \(t.changed.joined(separator: ", "))" + pack +
+                          (t.sharedWith.map { "; also shown by " + $0.joined(separator: "; ") } ?? ""))
+                }
+            }
+            for w in report.spriteWarnings ?? [] { print("warning: \(w)") }
             for r in report.relocations ?? [] {
                 print("moved \(r.what): \(r.from ?? "new") -> \(r.to), \(r.bytes) bytes")
             }

@@ -30,7 +30,8 @@ a base. The output is game data: keep it local.
 }
 ```
 
-`sprites` names `sprites/<id>.sprite.json` files imported from the ROM
+`sprites` names `sprites/<id>.sprite.json` files (playable characters' `ct-pc`
+sets and enemies' `ct-enemy` battle sprites) imported from the ROM
 (`rom.family` `ct-pc`). Each set is written in place: its frame records, the
 sheet tiles that changed, its animation rows and colours 1–12. See
 [sprites](sprites.md#writing-back).
@@ -136,8 +137,18 @@ ranges, the bit rules, the tileset a map names against its location record).
 9. With `rom.sprites`, writes each playable character's set in place: the
    40-byte frame records, each changed tile (re-encoded from the sheet), the
    frame-id and duration rows and colours 1–12, after the checks and the
-   re-decode in [sprites](sprites.md#writing-back). Pointer tables and sprite
-   records are never written.
+   re-decode in [sprites](sprites.md#writing-back). Then each listed enemy
+   sprite, over that result ([enemy write-back](sprites.md#write-back)):
+   - frame records, animation rows and colours 1–12 in place;
+   - record bytes +4 to +9 (kept bits as they were);
+   - the PC tile blocks of records `$F8`–`$FF` in place;
+   - packed tiles re-packed with `LZSS.compress`, in place when no longer than
+     the old stream, else into free space with the `$E4:2000` pointer
+     rewritten.
+
+   An edit to a part another record shows needs that record listed with the
+   same edit (a PC set's part needs the PC set). The PC sets' pointer tables
+   are never written.
 10. With `rom.samples`, after the songs:
     - places each sample's bytes in place or in free space;
     - writes its table row; appending moves the four tables, one entry longer,
@@ -234,6 +245,17 @@ sprite records (`$E4:F000`, `$E4:F600`) that name a changed part and so show
 the edit too. Each changed record, tile or row is one write, such as
 `sprite crono frame 12`, `sprite crono tile 37`, `sprite crono frame ids
 r03.left` or `sprite crono durations r03`.
+
+Enemy sprites add `enemySprites`: per listed sprite its record and layout, the
+graphics, tiles' hash and changed tiles, the `pack` (address, `packedBytes`,
+`budget`, unpacked size and hash, `placement` `original` or `free` and `from`),
+the frames, animations, palette and record fields after the build, and
+`sharedWith`. Writes are named like `sprite enemy_059 graphics 90 pack` and
+`sprite enemy_209 $E4:2000[205]`; a moved pack is also in `relocations`.
+`spriteWarnings` lists enemy records, not in `rom.sprites`, that show a part
+the PC write-back changed (records `$F8`–`$FE` show the PC sets). Their
+project files keep the old content. The CLI prints a line per changed enemy
+sprite (its pack, budget, placement and sharers) and a `warning:` line for each.
 
 ## The packer
 
@@ -372,7 +394,7 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
 - Only event packs, message tables, song sequences (with their per-song table
   rows), the playable characters' records and growth rows, the tech tables'
   writable fields, the item tables' writable fields, and the maps and tilesets
-  of existing locations, enemies' stats, rewards and names, and the playable characters' sprite sets in place, and song samples, are written. New locations, overworld maps, other sprites, sound effects, new items or item ids, new
+  of existing locations, enemies' stats, rewards and names, and the playable characters' sprite sets in place, the enemies' battle sprites (layouts 0–2; packs may move to free space), and song samples, are written. New locations, overworld maps, other sprites, sound effects, new items or item ids, new
   techs or tech names, sound-effect samples and drum kits, enemy AI scripts, attack and tech records, ExpToLevel and other tables are not.
   Enemies are written as their stat and reward records and names only.
 - Lowered packs cover the Studio statements in `event_bytecode.md`; cross-map calls
