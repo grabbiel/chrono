@@ -282,6 +282,7 @@ default:
       chronoforge music <list|disasm|asm|verify-rom|spc-info|driver-check|song-load|render|spc-render|play|events|edit|verify-model> ...
       chronoforge scene <compile|decompile|preview> <input> [--out file] [--project path]
       chronoforge scene <raise|graph|timeline> <rom.sfc> <location> ...   (a location's event pack as a scene)
+      chronoforge scene vm <rom.sfc> <location> ...              (its timeline as CTEventVM runs it, frame by frame)
                         [--entry 0] [--flag symbol] [--steps 1000]
       chronoforge render-tileset <ctproj|rom> --out out.png [--tileset id]
       chronoforge decode-sample <brrfile> --out out.wav
