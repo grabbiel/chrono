@@ -275,7 +275,7 @@ default:
       chronoforge enemies <import|show|verify> ...               (enemy stats, rewards, names, AI scripts)
       chronoforge sprites <import|show> ...                      (playable-character sprites)
       chronoforge tilesets <import|show|verify> ...              (location tilesets and palettes)
-      chronoforge maps <import|show|render|verify> ...           (location maps: layers, collision, exits)
+      chronoforge maps <import|show|render|verify|chest|new-location|rom-list> ... (location maps, chests, new locations)
       chronoforge items <import|show> ...                        (item, gear and consumable tables)
       chronoforge sfx <encode|synth|info|render> ...             (BRR samples: WAV import, synth, S-DSP render)
       chronoforge story <flags|graph|check|import|annotate> ...  (story flag registry and world graph)

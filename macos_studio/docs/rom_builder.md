@@ -170,11 +170,19 @@ the spans they free are known before the event packs are placed:
   space, never across a bank; then the builder writes the `Map_PropsPtrs`
   pointer and the 14-byte LocRom record. The `ExitRom` block (513 offset words
   and the records) is rebuilt for all 512 locations at once and grows only into
-  the confirmed padding that follows it at `$E5:1A44`. Treasure records are
-  written in place: a chest's flag is its record's position in `TreasureRom`,
-  so a change in the number of records is refused, as are two maps sharing one
-  treasure list with different chests and a first record on tile 0,0 (the
-  redirect marker).
+  the confirmed padding that follows it at `$E5:1A44`. `TreasureRom` (513
+  offset words and every list's records) is rebuilt as a whole. A chest's flag
+  is its record's place, so adding or removing a chest renumbers the later ones
+  (no event or other code names a flag: [Chests](maps.md#chests)). The block
+  stays in place while it fits, grows into free space after it, or moves within
+  bank $F5. With no room there, the smallest bank-$F5 MapProps pack that this
+  build does not write moves out byte for byte (its `Map_PropsPtrs` entries
+  repointed) and the records take its span. It refuses more than 512 records
+  (`Treasure_Flags`), more than 128 in one list, two maps sharing one list with
+  different chests, an edit to location 0's dummy and a record on tile 0,0 (the
+  redirect marker). A created location ([New locations](maps.md#new-locations))
+  must be one of the eight numbers the game never loads, and an exit to one of
+  them that this build does not create is refused.
 - **Tilesets** (`CTTilesetPatch`). Palette sets (210 bytes) and cycle lists
   (`FieldAnimListB`) are written in place; a list that grows, or that is shared
   with a palette set not in the build, is refused. Palette frames stay in their
@@ -221,7 +229,11 @@ tech span, such as `tech $02 target` or `TechTpCost`, and per changed item span,
 such as `item $5C record B`, `ItemBoosts` or `item descriptions`), and the free space left.
 With maps or tilesets the report adds `maps` (each listed map's location,
 `MapProps` entry, whether it is a new entry, address, sizes, unpacked SHA-256,
-placement, LocRom record, exits and treasure), `tilesets` (each listed set's
+placement, LocRom record, exits and treasure, plus `flags` and `createdFrom`
+when TreasureRom was rewritten or the location created), `treasureRom` (when
+rewritten: address, placement `original`/`grown`/`moved`, records, bytes,
+flags left, chests renumbered, and the MapProps packs moved out under
+`evicted`), `tilesets` (each listed set's
 kind, the parts written, the packed blocks placed and a Tileset12's pack list
 after the build) and `relocations` (each block or table that moved or took a
 new slot: what, from, to, size). The CLI prints one line per changed map,
@@ -342,7 +354,21 @@ agree on synthetic inputs too (window edges, partial groups, 64 KiB).
     tables and packs (including the fork), both animation list loaders and
     `PalAnim_TickAll` (12 claims).
 
-  Nine damaged copies are rejected and ten bad edits are refused.
+  Nine damaged copies are rejected and thirteen bad edits are refused
+  (including a record on tile 0,0, an exit to a location the game never loads,
+  a created location at another number and more than 512 chest flags).
+- **Chests and new locations** (`CTTreasureTests`, the same verifier): two
+  chests added to location 26 grow TreasureRom past its span, so MapProps
+  entry 193 moves out of bank $F5 and the records move into its span. Location
+  13's chest is removed, and location 448 is created from 29 with an entrance
+  on 28 and a chest of its own. The `maps rom-list --base` dry run matches the
+  build, and `ct_rom_check.py` checks the block, the moved pack and its
+  pointers, the flags, the renumbered count and the created location. On the
+  built ROM, the ROM's `Field_CheckTileInFront` opens each added chest (its
+  flag set, its gold or item given), finds no chest where the removed one
+  stood, and sets a later chest's moved flag. `LocLoad_UnkA33B` loads 448 as
+  the decode says and as 29 loads, and location 28's exit tile (46, 9) leads to
+  448.
 
 - **Enemies** (`CTEnemiesTests`, `macos_studio/tools/verify_enemy_build.py`):
   importing all 255 enemies and building gives the clean ROM with no write. An

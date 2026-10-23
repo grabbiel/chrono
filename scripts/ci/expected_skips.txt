@@ -116,3 +116,4 @@ ChronoForgeCoreTests.CTDrumKitTests/testAnEditedKitBuildsAndPlays               
 ChronoForgeCoreTests.CTMIDIImportTests/testAnImportedSongPlaysOnTheDriver                   skip      # local ROM
 ChronoForgeCoreTests.CTProjectAuditionTests/testTheRackAuditionDecodesTheProjectSample      skip      # local ROM
 ChronoForgeCoreTests.CTProjectAuditionTests/testADrumPadAuditionPlaysTheProjectSample       skip      # local ROM
+ChronoForgeCoreTests.CTTreasureTests/testAGrownTreasureRomAndANewLocationBuild                  skip      # local ROM

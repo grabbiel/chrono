@@ -23,8 +23,19 @@ ROM's own LocLoad_UnkA33B (with Decomp_ToWram, Map_UnpackTilePlanes and
 Map_LoadExitTiles inside), Map_LoadTreasureTiles, Decomp_ToWram on the new
 metatile tables and packs, FieldFD_LoadAnimSetA/B and PalAnim_TickAll run in
 ChronoRET's interpreter on the built ROM must agree with the decode. The
-checker must reject damaged copies and the CLI must refuse bad edits. Needs
-the user's ROM, the venv and refs/ChronoRET.
+checker must reject damaged copies and the CLI must refuse bad edits.
+
+Chests and new locations (from a copy of the pristine import): `maps chest
+add` puts a gold and an item chest in location 26 (TreasureRom outgrows its
+span, so a bank-$F5 MapProps pack moves out and the records take its span),
+`maps chest remove` takes location 13's chest away, and `maps new-location`
+makes location 448 from 29 with an entrance on 28 and a chest of its own.
+The `maps rom-list --base` dry run must match the build; ct_rom_check.py
+checks it; Field_CheckTileInFront on the built ROM opens the added chests
+(their flag set, their item or gold given), finds no chest where the removed
+one stood, and sets the new flag of a later chest; LocLoad_UnkA33B loads 448
+as the decode says and as 29 is, and location 28's exit tiles lead to it.
+Needs the user's ROM, the venv and refs/ChronoRET.
 """
 import json
 import shutil
@@ -40,6 +51,7 @@ python = workspace / '.venv/bin/python'
 rom = workspace / 'ct_clean.sfc'
 fixture = package / 'Tests/ChronoForgeCoreTests/Resources/MyGame.ctproj'
 sys.path.insert(0, str(workspace / 'tools'))
+import ct_chests as cch  # noqa: E402
 import ct_event_packs as packs  # noqa: E402
 import ct_maps as cm  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
@@ -112,6 +124,8 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-maps-') as directory:
         fail('the unmodified import does not build to the clean ROM')
     print(run(python, workspace / 'tools/ct_rom_check.py', out, report), end='')
     print(f'maps/tilesets: import then build of {len(map_ids)} maps and {len(tileset_ids)} tilesets is byte-identical')
+    pristine = directory / 'pristine.ctproj'
+    shutil.copytree(project, pristine)
 
     # --- Map edits ---------------------------------------------------------------------------
     def map_path(i):
@@ -206,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-maps-') as directory:
         return next(m['entry'] for m in r['maps'] if m['location'] == loc)
     print(run(python, workspace / 'tools/ct_rom_check.py', out, report), end='')
     written = {w['what'] for w in r['writes']}
-    want = {f'LocRom[{exit_loc}]', 'ExitRom', f'TreasureRom[{treasure_loc}]', 'pal_00 palette',
+    want = {f'LocRom[{exit_loc}]', 'ExitRom', 'TreasureRom', 'pal_00 palette',
             f'pal_{cycle_pal:02d} cycle list', 't12_02 metatiles',
             f't12_{anim_t:02d} tile animations', f't12_{alone_t:02d} pack {alone[0]}', 't3_00 pack 0',
             f't12_{fork_t:02d} pack list', f'LocRom[{lone_edit}]', f'MapProps entry {by_entry(pair[0])}'}
@@ -321,7 +335,11 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-maps-') as directory:
 
     unknown = next(k for k in range(cts.WINDOW) if not any(s['firstTile'] <= k < s['firstTile'] + s['tiles']
                                                           for s in alone_d['vram']['known']))
-    refusals = ((tp, lambda m: m['treasure'].pop(), 'renumbers every later chest'),
+    def created_elsewhere(m):
+        m['rom']['createdFrom'] = 29
+    refusals = ((tp, lambda m: m['treasure'].append({'x': 0, 'y': 0, 'contents': 1}), 'tile 0,0'),
+                (mp, lambda m: m['exits'].append({'x': 1, 'y': 1, 'map': 'loc_452', 'toX': 0, 'toY': 0}), 'the game never'),
+                (mp, created_elsewhere, 'is not one the game never loads'),
                 (mp, bad_hibits, 'starts a run'),
                 (mp, lambda m: m['layers'][0].update(width=20), 'each side is 16, 32, 48 or 64'),
                 (mp, bad_bit8, 'disagree'),
@@ -334,5 +352,72 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-maps-') as directory:
                 (f'tilesets/t12_{anim_t:02d}.tileset.json', lambda d: d['tileAnimations'].pop(), 'tile animations instead of'))
     for path, change, message, *png in refusals:
         refused(path, change, message, png[0] if png else None)
-    print(f'maps/tilesets: {len(refusals)} bad edits refused')
+
+    def too_many(p):                                   # 3 x 128 more chests: past the 512 flags
+        for i in (26, 30, 31):
+            m = load(p / 'maps' / f'loc_{i:03d}.map.json')
+            m['treasure'] = [{'x': 1 + k % 15, 'y': 1 + k // 15, 'contents': 1} for k in range(128)]
+            save(p / 'maps' / f'loc_{i:03d}.map.json', m)
+    refused(tp, None, 'Treasure_Flags has 512 flags', too_many)
+    print(f'maps/tilesets: {len(refusals) + 1} bad edits refused')
+
+    # --- Chests added and removed, and a new location ---------------------------------------
+    before = cch.treasure_numbers(clean)
+    assert cm.treasure_list(clean, 13)[1] and cm.treasure_list(clean, 13)[0] == 13
+    run(cli, 'maps', 'chest', 'add', pristine, 'loc_026', '--at', '20,20', '--gold', '200', '--index', '1')
+    run(cli, 'maps', 'chest', 'add', pristine, 'loc_026', '--at', '21,20', '--item', '$A5')
+    run(cli, 'maps', 'chest', 'remove', pristine, 'loc_013', '0')
+    print(run(cli, 'maps', 'new-location', pristine, '--from', 'loc_029', '--number', '448', '--entrance', 'loc_028',
+              '--at', '46,9', '--to', '6,6', '--facing', '11').splitlines()[0])
+    run(cli, 'maps', 'chest', 'add', pristine, 'loc_448', '--at', '7,8', '--item', '$C4')
+    print(run(cli, 'maps', 'chest', 'list', pristine).splitlines()[-1])
+    dry = run(cli, 'maps', 'rom-list', pristine, '--base', rom)
+    out3, report3 = directory / 'chests.sfc', directory / 'chests.json'
+    run(cli, 'rom', 'build', pristine, '--base', rom, '--out', out3, '--report', report3)
+    r3, b3 = load(report3), out3.read_bytes()
+    t = r3.get('treasureRom') or {}
+    if t.get('placement') != 'moved' or not t.get('evicted') or t.get('records') != 251:
+        fail(f'TreasureRom: {t}')
+    if f'leave {r3["freeBytesLeft"]} bytes' not in dry or f'{t["records"]} records' not in dry:
+        fail(f'the dry run is not the build: {dry}')
+    print(run(python, workspace / 'tools/ct_rom_check.py', out3, report3), end='')
+    numbers = cch.treasure_numbers(b3)
+    runner = cm.MapRunner(b3)
+    opened = []
+    for loc in (26, 448):
+        for k in range(len(numbers[loc])):
+            o = cch.open_chest(runner, b3, loc, k)
+            if not cch.expect_open(o) or o['flagsSet'] != [numbers[loc][k]]:
+                fail(f'location {loc} chest {k}: {o}')
+            opened.append(o)
+    if not any(o['gold'] == 200 for o in opened) or not any(o['items'] == [(0xA5, 1)] for o in opened) \
+            or not any(o['items'] == [(0xC4, 1)] for o in opened):
+        fail('the added chests do not give their gold and items')
+    gone = cm.treasure_list(clean, 13)[1][0][1]
+    mem = runner.load_map(13, treasure=0)
+    if cm.treasure_list(b3, 13)[1] or mem.get(0x7E70C0 + gone) != cm.TREASURE_NONE:
+        fail('the removed chest is still loaded')
+    later = next(i for i in range(449, cm.LOC_COUNT) if numbers[i] and cm.treasure_list(b3, i)[0] == i)
+    o = cch.open_chest(runner, b3, later, 0)
+    if not cch.expect_open(o) or o['flag'] == before[later][0] or o['flagsSet'] != [numbers[later][0]]:
+        fail(f'location {later} chest 0: flag {before[later][0]} -> {o}')
+    claims = cm.run_claims(b3, locations=[13, 26, 28, 29, 448])
+    bad = [(name, detail) for name, ok, *detail in claims if not ok]
+    if bad:
+        fail(f'the ROM routines on the chest build disagree with the decode: {bad}')
+    d448, d29 = cm.decode(b3, 448), cm.decode(clean, 29)
+    if any(d448[k] != d29[k] for k in ('planes', 'hiBits', 'attrA', 'attrB', 'sizes', 'ppu')) \
+            or d448['props']['entry'] == d29['props']['entry']:
+        fail('location 448 is not location 29 on a MapProps slot of its own')
+    exits28 = cm.decode(b3, 28)['exits']
+    mem = runner.load_map(28, treasure=0)
+    lead = [(c, row) for row in range(64) for c in range(64)
+            if mem.get(0x7E7080 + (row << 8 | c), cm.EXIT_NONE) != cm.EXIT_NONE
+            and exits28[mem[0x7E7080 + (row << 8 | c)]]['dest'] == 448]
+    if lead != [(46, 9)]:
+        fail(f'location 28 tiles leading to 448: {lead}')
+    print(f'maps/chests: {t["records"]} records at {t["address"]} (moved from {t["from"]}, MapProps entry '
+          f'{t["evicted"][0]["entries"]} moved out), {t["renumbered"]} renumbered; {len(opened) + 1} chests opened on the built '
+          f'ROM, the removed one gone, location {later} chest 0 flag {before[later][0]} -> {o["flag"]}; '
+          f'{len(claims)} of {len(claims)} run claims on 13, 26, 28, 29 and 448; loc 28 tile (46,9) leads to 448')
 print('maps/tilesets: CLI import, identical rebuild, edits, the ROM\'s own loaders and damage checked independently')

@@ -50,7 +50,16 @@ entry only in a slot no record names whose pointer was 0), the spans of the
 MapProps packs no unreported location still uses, ExitRom and the reported
 treasure lists may change; each reported location decodes to the report's
 record, MapProps hash and size (one bank, inside a write zone), exits and
-treasure; every other location decodes as in the clean ROM. Tilesets
+treasure; every other location decodes as in the clean ROM. With a rebuilt
+TreasureRom (treasureRom): the offset words and the records' span may change,
+and a MapProps pack of bank $F5 moved out for room (its bytes as they were,
+every entry naming it repointed); the words run in order inside bank $F5 with
+at most 512 records and 128 a list, the five redirects and location 0's dummy
+are kept, every unreported list holds what it held, the reported flags are
+the records' places, and the records overlap no MapProps pack in use. A
+created location (createdFrom) is one the game never loads
+(tools/ct_chests.py) and its Events entry is an event pack; no exit of the built
+ROM leads to such a location unless it is built. Tilesets
 (tools/ct_tilesets.py), when reported: only the reported palette sets, cycle
 lists and frames, metatile and pack pointers, LocGfx_Lists rows, the packs'
 and tables' old spans and the tile-animation lists may change; each reported
@@ -114,6 +123,7 @@ sys.path.insert(0, str(WS / "tools"))
 sys.path.insert(0, str(WS / "refs" / "ChronoRET" / "tools"))
 import c3pack  # noqa: E402
 import ct_characters as cc  # noqa: E402
+import ct_chests as cch  # noqa: E402
 import ct_enemies as ce  # noqa: E402
 import ct_event_packs as packs  # noqa: E402
 import ct_items as ci  # noqa: E402
@@ -741,11 +751,125 @@ def check_layout_tables(clean, regions):
     check(not any(r.start < t_end and lpc(cm.TREASURE_OFS) < r.stop for r in regions), "TreasureRom overlaps a free region")
 
 
-def map_content(rom, i):
-    """ct_maps.decode without the addresses a rewritten ExitRom moves."""
+def map_content(rom, i, moved=()):
+    """ct_maps.decode without the addresses a rewritten ExitRom or TreasureRom moves; `moved`: the MapProps
+    entries moved out for TreasureRom, whose bytes check_treasure compares."""
     d = cm.decode(rom, i)
+    if d["props"]["entry"] in moved:
+        d["props"] = {k: v for k, v in d["props"].items() if k != "at"}
     d["exits"] = [{k: v for k, v in e.items() if k != "at"} for e in d["exits"]]
+    d["treasure"]["records"] = [{k: v for k, v in t.items() if k != "at"} for t in d["treasure"]["records"]]
     return d
+
+
+def treasure_lists(rom):
+    """Each location's own records [(tile, contents)] as the offset words split them."""
+    out = []
+    for i in range(cm.LOC_COUNT):
+        first, end = cts.u16(rom, cm.TREASURE_OFS + 2 * i), cts.u16(rom, cm.TREASURE_OFS + 2 * i + 2)
+        out.append([(cts.u16(rom, cm.TREASURE_BANK + o), cts.u16(rom, cm.TREASURE_BANK + o + 2))
+                    for o in range(first, end, cm.TREASURE_BYTES)])
+    return out
+
+
+def treasure_zones(clean, report):
+    t = report.get("treasureRom")
+    if not t:
+        return []
+    words = lpc(cm.TREASURE_OFS)
+    zones = [range(words, words + 2 * (cm.LOC_COUNT + 1)), range(t["pc"], t["pc"] + t["bytes"])]
+    if t["placement"] == "moved":
+        old = lpc(cm.TREASURE_BANK + cts.u16(clean, cm.TREASURE_OFS))
+        zones.append(range(old, lpc(cm.TREASURE_BANK + cts.u16(clean, cm.TREASURE_OFS + 2 * cm.LOC_COUNT))))
+        if old < t["pc"] + t["bytes"] and t["pc"] < old:
+            check(False, "TreasureRom moved over its own old span")
+    for e in t.get("evicted") or []:
+        for entry in e["entries"]:
+            zones.append(range(lpc(cm.MAP_PROPS_PTRS) + 3 * entry, lpc(cm.MAP_PROPS_PTRS) + 3 * entry + 3))
+        old = layout.pc(e["from"])
+        zones.append(range(old, old + e["bytes"]))
+    return zones
+
+
+def check_treasure(clean, built, report, inside):
+    """A rebuilt TreasureRom (report treasureRom): see the module docstring."""
+    t = report.get("treasureRom")
+    before, after = treasure_lists(clean), treasure_lists(built)
+    if not t:
+        check(after == before and all(cts.u16(built, cm.TREASURE_OFS + 2 * i) == cts.u16(clean, cm.TREASURE_OFS + 2 * i)
+                                      for i in range(cm.LOC_COUNT + 1)), "TreasureRom changed but the report has no treasureRom")
+        return
+    words = [cts.u16(built, cm.TREASURE_OFS + 2 * i) for i in range(cm.LOC_COUNT + 1)]
+    check(all(a <= b for a, b in zip(words, words[1:])), "TreasureRom's offset words do not run in order")
+    total = (words[-1] - words[0]) // cm.TREASURE_BYTES
+    check(lpc(cm.TREASURE_BANK + words[0]) == t["pc"] and words[-1] - words[0] == t["bytes"] == cm.TREASURE_BYTES * t["records"]
+          and (words[-1] - words[0]) % cm.TREASURE_BYTES == 0, "TreasureRom is not the reported block")
+    check(t["records"] <= cch.FLAG_COUNT and t["flagsLeft"] == cch.FLAG_COUNT - t["records"],
+          f"TreasureRom holds {t['records']} records; Treasure_Flags has {cch.FLAG_COUNT}")
+    check(all(len(lst) <= cch.LIST_MAX for lst in after), f"a treasure list has more than {cch.LIST_MAX} records")
+    check(inside(range(t["pc"], t["pc"] + t["bytes"])), "TreasureRom outside its span, free space or a moved pack's span")
+    if t["placement"] == "original":
+        check(words[0] == cts.u16(clean, cm.TREASURE_OFS), "TreasureRom moved but the report says original")
+    lists_of = {m["treasureList"] for m in report.get("maps") or []}
+    for i in range(cm.LOC_COUNT):
+        redirect = bool(before[i]) and before[i][0][0] == 0
+        if redirect or i == 0:
+            check(after[i] == before[i], f"location {i}'s {'redirect' if redirect else 'dummy'} record changed")
+        elif i not in lists_of:
+            check(after[i] == before[i], f"location {i}'s treasure list changed but is not reported")
+        check(not after[i] or after[i][0][0] != 0 or redirect, f"location {i}: a new first record on tile 0,0 (a redirect)")
+    numbers = cch.treasure_numbers(built)
+    for m in report.get("maps") or []:
+        check(m.get("flags") == numbers[m["treasureList"]], f"map {m['id']}: flags are not the records' places")
+    old_numbers = cch.treasure_numbers(clean)
+    moved = 0                                   # chests kept (location, tile, contents) whose flag changed
+    for i in range(cm.LOC_COUNT):
+        if (before[i] and before[i][0][0] == 0) or (after[i] and after[i][0][0] == 0):
+            continue
+        left = {}
+        for r, n in zip(before[i], old_numbers[i]):
+            left.setdefault(r, []).append(n)
+        for r, n in zip(after[i], numbers[i]):
+            if left.get(r):
+                moved += left[r].pop(0) != n
+    check(moved == t["renumbered"], f"{moved} chests renumbered, the report says {t['renumbered']}")
+    span = range(t["pc"], t["pc"] + t["bytes"])
+    for e in t.get("evicted") or []:
+        old, new = layout.pc(e["from"]), layout.pc(e["to"])
+        check(new == e["pc"] and built[new:new + e["bytes"]] == clean[old:old + e["bytes"]]
+              and len(packed_span(clean, cts.u24(clean, cm.MAP_PROPS_PTRS + 3 * e["entries"][0]))[1]) == e["bytes"],
+              f"MapProps entry {e['entries']}: the moved pack is not the old one")
+        named = [k for k in range(cm.MAP_PROPS_COUNT) if cts.u24(clean, cm.MAP_PROPS_PTRS + 3 * k) == cts.u24(clean, cm.MAP_PROPS_PTRS + 3 * e["entries"][0])]
+        check(named == e["entries"] and all(lpc(cts.u24(built, cm.MAP_PROPS_PTRS + 3 * k)) == new for k in named),
+              f"MapProps entry {e['entries']}: not every entry naming the pack was repointed")
+        check(inside(range(new, new + e["bytes"])) and new >> 16 == (new + e["bytes"] - 1) >> 16,
+              f"MapProps entry {e['entries']}: moved outside free space")
+    in_use = {cm.header(built, i)["mapProps"] for i in range(cm.LOC_COUNT)}
+    for entry in sorted(in_use):
+        pack = packed_span(built, cm.props_pointer(built, entry), f"MapProps entry {entry}")[1]
+        check(pack.stop <= span.start or span.stop <= pack.start, f"TreasureRom overlaps MapProps entry {entry}")
+
+
+def check_created(clean, built, report):
+    """Created locations (createdFrom) and the exits that lead to the locations the game never loads."""
+    unused, _ = cch.unused_locations(clean)
+    not_packs = {d["entry"] for d in json.loads(layout.MANIFEST.read_text())["eventPacks"]["notPacks"]}
+    created = set()
+    for m in report.get("maps") or []:
+        src = m.get("createdFrom")
+        if src is None:
+            check(m["location"] not in unused or map_content(built, m["location"]) == map_content(clean, m["location"]),
+                  f"map {m['id']}: location {m['location']} is never loaded; it changed without being created")
+            continue
+        created.add(m["location"])
+        check(m["location"] in unused, f"map {m['id']}: location {m['location']} is not one the game never loads")
+        check(0 <= src < cm.DEST_WORLD and src not in unused, f"map {m['id']}: source {src} is not a location the game loads")
+        check(cm.header(built, m["location"])["events"] not in not_packs,
+              f"map {m['id']}: its Events entry does not point at an event pack")
+    for i in range(cm.LOC_COUNT):
+        for _, raw in cm.exit_records(built, i):
+            dest = cm.decode_exit(raw)["dest"]
+            check(dest not in unused or dest in created, f"location {i}: an exit leads to location {dest}, which the build leaves out")
 
 
 def map_zones(clean, report, regions):
@@ -774,6 +898,7 @@ def map_zones(clean, report, regions):
 
 def check_maps(clean, built, report, inside):
     maps = report.get("maps")
+    moved = {e for x in (report.get("treasureRom") or {}).get("evicted") or [] for e in x["entries"]}
     if maps is None:
         for i in range(cm.LOC_COUNT):
             check(bytes(built[lpc(cm.LOC_ROM) + cm.LOC_BYTES * i:lpc(cm.LOC_ROM) + cm.LOC_BYTES * (i + 1)])
@@ -806,7 +931,8 @@ def check_maps(clean, built, report, inside):
                 check(False, f"{name}: MapProps overlaps another")
             spans[span.start] = span
         else:
-            check(at == cm.props_pointer(clean, cm.header(clean, loc)["mapProps"]), f"{name}: unchanged MapProps moved")
+            check(at == cm.props_pointer(clean, cm.header(clean, loc)["mapProps"]) or m["entry"] in moved,
+                  f"{name}: unchanged MapProps moved")   # moved: out of bank $F5 for TreasureRom (check_treasure)
         try:
             cm.parse_props(data)
         except Exception as e:  # noqa: BLE001
@@ -817,17 +943,16 @@ def check_maps(clean, built, report, inside):
         tloc, tlist = cm.treasure_list(built, loc)
         check(tloc == m["treasureList"] and [[t & 0xFF, t >> 8, c] for _, t, c in tlist] == m["treasure"],
               f"{name}: treasure is not the reported list")
-        check(len(tlist) == len(cm.treasure_list(clean, loc)[1]), f"{name}: the treasure count changed (flag numbers)")
+        if not report.get("treasureRom"):
+            check(len(tlist) == len(cm.treasure_list(clean, loc)[1]), f"{name}: the treasure count changed (flag numbers)")
     ordered = sorted(spans.values(), key=lambda r: r.start)
     for a, b in zip(ordered, ordered[1:]):
         check(a.stop <= b.start, f"MapProps at ${a.start:06X} and ${b.start:06X} overlap")
-    check(cts.u16(built, cm.TREASURE_OFS) == cts.u16(clean, cm.TREASURE_OFS)
-          and all(cts.u16(built, cm.TREASURE_OFS + 2 * i) == cts.u16(clean, cm.TREASURE_OFS + 2 * i)
-                  for i in range(cm.LOC_COUNT + 1)), "TreasureRom's offset words changed")
-    check(cm.treasure_list(built, 0) == cm.treasure_list(clean, 0), "location 0's dummy treasure changed")
+    check_treasure(clean, built, report, inside)
+    check_created(clean, built, report)
     for i in range(cm.LOC_COUNT):
         if i not in reported:
-            check(map_content(built, i) == map_content(clean, i), f"location {i} changed but is not reported")
+            check(map_content(built, i, moved) == map_content(clean, i, moved), f"location {i} changed but is not reported")
 
 
 def pack_users(rom):
@@ -1041,6 +1166,7 @@ def main():
     if report.get("maps") is not None or report.get("tilesets") is not None:
         check_layout_tables(clean, zones[:len(rom_layout["freeRegions"])])
     zones += map_zones(clean, report, zones[:len(rom_layout["freeRegions"])])
+    zones += treasure_zones(clean, report)
     zones += tileset_zones(clean, report)
     zones += enemy_zones(report)
     zones += script_zones(clean, report)
