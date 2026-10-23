@@ -263,6 +263,19 @@ if [ -f macos_studio/Package.swift ]; then
     && grep -q "^ok   enemies: frames, cells" /tmp/verify_sprite_import.log
   RC=$?
   note "Enemy sprites ($(grep -oE '[0-9]+ frames of [0-9]+ distinct' /tmp/verify_sprite_claims.log | tail -1) enemy sprites through the ROM's frame decoder; import checked)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # Field NPC sprites: source, code and data claims; the field's loader ($C0:4590), frame builders,
+  # frame lookup and tick run in ChronoRET's interpreter for every record the event packs load; then
+  # a CLI import (--family npc) into a fixture copy checked by ct_npc_sprites.py.
+  $PY re_workspace/tools/ct_npc_sprites.py check --run >/tmp/verify_npc_sprite_claims.log 2>&1
+  RC=$?
+  note "NPC sprite evidence ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_npc_sprite_claims.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  NPC_DIR=$(mktemp -d)
+  cp -R macos_studio/Tests/ChronoForgeCoreTests/Resources/MyGame.ctproj "$NPC_DIR/p.ctproj" \
+    && macos_studio/.build/debug/chronoforge sprites import re_workspace/ct_clean.sfc --project "$NPC_DIR/p.ctproj" --family npc >/tmp/verify_npc_sprite_import.log 2>&1 \
+    && $PY re_workspace/tools/ct_npc_sprites.py verify-import "$NPC_DIR/p.ctproj" >>/tmp/verify_npc_sprite_import.log 2>&1
+  RC=$?
+  note "NPC sprite import ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_npc_sprite_import.log | tail -1) checks: CLI = ct_npc_sprites.py decode)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  rm -rf "$NPC_DIR"
   # Audio: project samples and a composed song written back (identical rebuild, replaced and
   # appended samples, the ROM's song load and the S-SMP driver on the built ROM, damage, budgets).
   $PY macos_studio/tools/verify_audio_build.py >/tmp/verify_audio_build.log 2>&1

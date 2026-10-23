@@ -86,6 +86,9 @@ struct SpriteEditor: View {
         var parts = ["\(sprite.frames.count) frames", "\(sprite.animations.count) animations", sprite.sheet]
         if let st = sprite.stream { parts.append("streams \(st.columns)x\(st.rows) cells at OBJ tile \(st.baseTile)") }
         if let r = sprite.rom { parts.append("set \(r.set) from \(r.frames)") }
+        if let f = sprite.field {
+            parts.append("field size \(f.size & 3), loaded by \(f.packs.count) event packs at \(f.locations.count) locations")
+        }
         if sheetDirty { parts.append("sheet modified") }
         return parts.joined(separator: " · ")
     }
@@ -179,7 +182,7 @@ struct SpriteEditor: View {
         }
         let step: Int
         if let start = playStart {
-            step = SpriteEditing.step(a, at: Int(date.timeIntervalSince(start) * 60))
+            step = CTNPCSpriteROM.playStep(sprite, a, at: Int(date.timeIntervalSince(start) * 60))
         } else if mode == .timeline {
             step = min(stepIndex, a.frames.count - 1)
         } else {
@@ -488,7 +491,7 @@ struct SpriteEditor: View {
         HStack {
             Button(playStart == nil ? "Play" : "Pause") {
                 if let start = playStart {
-                    stepIndex = SpriteEditing.step(a, at: Int(Date().timeIntervalSince(start) * 60))
+                    stepIndex = CTNPCSpriteROM.playStep(sprite, a, at: Int(Date().timeIntervalSince(start) * 60))
                     playStart = nil
                 } else {
                     playStart = Date()
@@ -525,6 +528,11 @@ struct SpriteEditor: View {
         var text = "\(a.frames.count) steps, \(total) ticks (\(String(format: "%.2f", Double(total) / 60)) s at 60 Hz)"
         if let row = a.row { text += " · row \(row)" }
         if let f = a.facing, (0..<4).contains(f) { text += " · facing \(CTSpriteROM.facings[f])" }
+        if sprite.rom?.family == CTNPCSpriteROM.family {
+            // Obj_AnimTickAndQueue: the first tick steps on; the $FF marker shows step 0 again for its duration.
+            let marker = a.markerDuration ?? 0
+            text += marker > 0 ? " · field clock, $FF marker \(marker) ticks" : " · field clock"
+        }
         return text
     }
 

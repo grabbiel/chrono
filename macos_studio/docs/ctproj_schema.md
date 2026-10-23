@@ -197,6 +197,15 @@ original fields; files with only those still load and save unchanged.
   `moveSpeed` (0–7) and `moveDelay` (0–15); absent, the record is kept. Both
   are optional, and older files load unchanged.
   ([Enemy sprites](sprites.md#enemy-sprites)).
+- A field NPC's sprite (`sprites/npc_NNN.*`) has `rom.family` `ct-npc`,
+  `rom.set` the sprite record (7–255), `rom.layout` the size class (0 or 1),
+  `rom.packed` true and `rom.packedBytes`; its `stream` is 8 × 2 at baseTile
+  392 or 16 × 2 at 192. `rom.stride` is the facing stride in frame ids where
+  it is not 4 × `rows`. `field` holds `size` (the record's size byte), `packs`
+  (the `Evt_PackPtrs` entries that load it with opcode `$82`) and `locations`
+  (the locations whose events are one of those packs). An animation's
+  `markerDuration` is the duration of a `$FF` entry that ends it. All three are
+  optional ([NPC sprites](sprites.md#npc-sprites)).
 
 ## `tilesets/<id>.tileset.json`
 ```json

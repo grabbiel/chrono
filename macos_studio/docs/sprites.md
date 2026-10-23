@@ -507,7 +507,7 @@ checked by decoding the built bytes and by the reader ranges above.
 - for an enemy, the battle record's fields: steppers, and toggles for the
   `$04`, `$08`, `$20` and `$80` flags.
 
-The sprite list has an All / PC / Enemy / Other filter. `--select <id>` and
+The sprite list has an All / PC / Enemy / NPC / Other filter. `--select <id>` and
 `--family <name>` choose them at launch.
 
 ### Limitations
@@ -532,3 +532,124 @@ The sprite list has an All / PC / Enemy / Other filter. `--select <id>` and
 - A relocated pack's old span is not reclaimed.
 - No emulator run: the evidence is the ROM's code, data and its own unpacker and
   frame decoder executed.
+
+## NPC sprites
+
+A field NPC is a sprite record of `RomE4_NpcSprRec` (`$E4:F000`, 5 bytes per
+record, the same table the PCs use from record 0). Event opcode `$82`
+(`Evt_Op82_InitWramSprite`, `$C0:4590`) loads record 7 + n
+(`SprRec_FirstNpc` = 7). `$81` loads records 0–6 with the PC graphics read from
+the ROM, and the event packs use it only for those seven. `$83` loads the
+enemy records ([Enemy sprites](#enemy-sprites)).
+
+| Byte | Field | What `$82` does with it |
+|---|---|---|
+| +0 | graphics: `$E4:2000` pointer index | `Evt_FindOrAddUnk0920` looks the index up among the packs unpacked so far. A new one is unpacked by `Decomp_ToWramVec` (`JSL $C30002`) to `$7F:ObjQ_Unk71` (from `$8000`), and objects with the same index share it |
+| +1 | frame set (`$E4:2300`) | `Obj_FrameOfs` / `Obj_FrameBank` |
+| +2 | palette (`$E4:0000` + 24 × p, 12 colours) | `Obj_PalSrc` |
+| +3 | animation set (`$E4:2600/2800`) | `Obj_AnimFrameTbl`, `Obj_AnimTimeTbl`, and the facing stride `(AnimFrames[a+1] − AnimFrames[a]) / 4` |
+| +4 | size class (bits 0–1) | `Obj_SprSize`: every reader masks it with `AND #3` |
+
+**The field's frame assembly.** Size class 0 is built by `Obj_BuildFrame4`
+(40-byte records: 8 × 2 cell words, then 4 (x, y) pairs). Class 1 is built by
+`Obj_BuildFrame8` (80-byte records: 16 × 2 cells and 8 pairs), in two passes
+(`$C0:D28A` and `$C0:D30D`). The cells go to a `$200`-byte SprBuf chunk
+(`$7F:3800` + `$200` × chunk), and the VRAM queue sends the chunk's two rows to
+tiles T and T + 16, where T is the object's tile slot. OBJ n is a 16×16 at tile
+T + 2n, with the attribute `Obj_OamAttr | VramTileHi | priority`.
+`Obj_TileSlotAllocKind` (`$C0:6FBA`) hands class 0 the first free slot from
+`$19` down, and classes 1–3 an even/odd pair from `$0C`. Slot n is OBJ tile
+`(n & $FE) × 16 + (n & 1) × 8`. On an empty field that is `$188` for class 0
+and `$C0` for class 1. That is where the import streams the cells.
+
+**Palettes.** NPC objects (kinds 3 and 4) take an OBJ palette of 0–4 from
+`Obj_PalSlotAny` (`$C0:721C`). An object whose `Obj_PalSrc` is already in a
+slot shares that slot. The 12 colours go to colours 1–12. The party's objects
+(kinds 0–2) use the fixed palettes 5–7.
+
+**Timing.** `Obj_AnimTickAndQueue` (`$C0:C98A`) counts the timer down once a
+frame. At 0 the column steps on and the new entry's duration becomes the timer.
+A zero duration restarts the row at column 0 with the first entry's duration.
+In mode 2 (counted loops), from 3 up the count drops by 2 and the row restarts.
+At 2 the count drops to 1 and at 1 the last frame holds. `Obj_AnimFrameLookup`
+(`$C0:CB3A`) shows the row's first frame for a `$FF` entry and sets the column
+to `$FF`, so the next step is column 0. A load starts at column 0 with the
+timer at 0, so the first tick already steps on. Animation sets 74 and 76 (NPC
+records only) have facing strides of 5 and 11 entries rather than 4 × rows.
+The import reads every set with the field's stride.
+
+### Evidence
+
+`re_workspace/tools/ct_npc_sprites.py check` holds 40 claims:
+
+- **ChronoRET's source, line by line:** `Evt_Op82_InitWramSprite`,
+  `Evt_InitWramSprite`, `Evt_LoadSpriteRec`, `Obj_TileSlotAllocKind`,
+  `Obj_BuildFrame8Pass0/1`, `Spr_PrepareTiles`, `Obj_PalSlotAny`,
+  `Obj_AnimTickAndQueue` and `Obj_AnimFrameLookup`, plus 11 constants.
+- **The ROM's code bytes:** at `$C0:4590`, `$C0:4476`, `$C0:6FBA`,
+  `$C0:D28A–$D4F6` and `$C0:721C`.
+- **Data claims:**
+  - `$81` loads records 0–6 only.
+  - `$82` loads 191 records (7–238) from 351 event packs (1190 record–pack
+    pairs).
+  - Those records are of size classes 0 and 1 only (183 and 8). Record 213's
+    size byte is 5, and bit 2 has no reader.
+  - Their 139 graphics packs unpack to whole 4bpp tiles, and none is a PC set.
+    Tile 0 is not blank in packs 134, 200 and 223.
+  - Every record has frames, and its cells name tiles of its graphics.
+  - Records 10, 120, 171, 195, 202, 214 and 238 have animations naming frames
+    past the frame set. The import leaves those animations out.
+  - Strides of sets 74 and 76.
+  - Every one of the 191 records is loaded by a location's pack
+    (`LocRom` .Events).
+  - The 58 other nonzero records decode the same way.
+
+A frame set's count follows the PC rule: records up to the next frame block in
+the bank. A bank's last block has no next pointer, so it ends at its first
+record that is not a frame of the graphics. Record 218's set is such a block.
+
+`check --run` runs the field's own routines in ChronoRET's 65816 interpreter
+and compares each with the model (44 claims):
+
+- **Loader:** `$C0:4590` for all 191 records. The object's fields and the
+  graphics unpacked to `$7F:8000` equal the decode.
+- **Frame builders:** `Obj_BuildFrame4` / `Obj_BuildFrame8` on 2497 frames,
+  plus the two-pass build of 8 class-1 animations. The SprBuf chunk, the VRAM
+  queue and the OBJ records equal the model.
+- **Lookup:** `Obj_AnimFrameLookup` at 7061 list steps.
+- **Tick:** `Obj_AnimTickAndQueue` over 764 lists, plain and with counted
+  loops, against the `Clock` model, which `CTNPCSpriteROM.FieldClock` twins
+  (Swift vectors `npc_sprite_vectors.json`, synthetic).
+
+`ct_npc_sprites.py usage` lists each record's packs and locations, and
+`sharing` lists, for each part, the NPC, enemy and PC records that name the
+same graphics, frame set, palette or animation set.
+
+### Import
+
+`chronoforge sprites import <rom> --project <p> --family npc` (or `--npc N` for
+some records; the Studio's **Import Sprites from ROM…** imports them with the
+PCs and enemies) writes `sprites/npc_NNN.sprite.json` and `.png` for the 191
+records:
+
+- `rom.family` is `ct-npc`, `rom.set` the record, `rom.layout` the size class,
+  `rom.packed` true and `rom.packedBytes` the pack's stream length. `rom.stride`
+  is set only where the facing stride is not 4 × rows (sets 74 and 76).
+- `stream` is 8 × 2 at OBJ tile `$188` (class 0) or 16 × 2 at `$C0` (class 1).
+  OBJ n is a 16×16 at tile 2n, palette 0, priority 2.
+- The palette is colour 0, the 12 ROM colours, then three zeros. The sheet holds
+  the pack's tiles, 16 per row.
+- `field` holds the size byte, the event packs (`Evt_PackPtrs` entries) that
+  load the record and the locations whose `LocRom` .Events names one of them.
+- An animation ended by `$FF` keeps that entry's duration as
+  `markerDuration`. No list the event packs load uses one.
+
+`ct_npc_sprites.py verify-import <project>` checks an import against the decode
+(7 checks over the 191 records).
+
+**Studio.** The sprite list's filter has an **NPC** entry (`--family NPC` at
+launch). The header shows the size class and how many packs and locations
+load the record. An NPC sprite's animations play with the field's clock
+(`CTNPCSpriteROM.fieldStep`): the first tick steps on, a `$FF` marker shows
+step 0 again for its duration, and the list repeats. Other sprites keep
+`SpriteEditing.step`.

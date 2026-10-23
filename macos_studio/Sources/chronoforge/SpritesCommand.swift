@@ -2,11 +2,13 @@ import Foundation
 import ChronoForgeCore
 
 private let spritesUsage = """
-usage: chronoforge sprites import <rom.sfc> --project <project.ctproj> [--set N ...] [--enemy N ...]
-         (no --set or --enemy: the 7 playable characters and every enemy; with either, only those)
+usage: chronoforge sprites import <rom.sfc> --project <project.ctproj> [--set N ...] [--enemy N ...] [--npc N ...]
+                                  [--family pc|enemy|npc ...]
+         (no selector: the 7 playable characters and every enemy; --family npc: every NPC record the
+          event packs load; with --set, --enemy, --npc or --family, only those)
        chronoforge sprites show <project.ctproj | rom.sfc> [sprite] [--frame N] [--onion N]
                                 [--png out.png] [--scale K]
-         <sprite>: a project sprite id; from a ROM a name (crono ... magus), 0-6 or enemy_NNN
+         <sprite>: a project sprite id; from a ROM a name (crono ... magus), 0-6, enemy_NNN or npc_NNN
 """
 
 /// A sprite with its sheet tiles and palette, from a project or decoded from a ROM.
@@ -38,7 +40,19 @@ private func loadSprites(_ path: String) throws -> [LoadedSprite] {
         out.append(LoadedSprite(sprite: CTEnemySpriteROM.spriteDef(d, id: CTEnemySpriteROM.id(i)),
                                 sheet: SpriteSheet.tiles(sheet), palette: sheet.palette))
     }
+    for (r, field) in try CTNPCSpriteROM.usage(rom: rom).sorted(by: { $0.key < $1.key }) {
+        let d = try CTNPCSpriteROM.decode(rom: rom, record: r)
+        let sheet = CTNPCSpriteROM.sheet(d)
+        out.append(LoadedSprite(sprite: CTNPCSpriteROM.spriteDef(d, id: CTNPCSpriteROM.id(r), field: field),
+                                sheet: SpriteSheet.tiles(sheet), palette: sheet.palette))
+    }
     return out
+}
+
+/// "1 2 3 … (40)": the first `n` numbers of a list and its length.
+private func shortList(_ xs: [Int], _ n: Int = 12) -> String {
+    let head = xs.prefix(n).map(String.init).joined(separator: " ")
+    return xs.count > n ? "\(head) … (\(xs.count))" : head
 }
 
 func cmdSprites(_ args: [String]) -> Int32 {
@@ -46,11 +60,18 @@ func cmdSprites(_ args: [String]) -> Int32 {
         print(spritesUsage); return 2
     }
     var positional: [String] = [], options: [String: String] = [:], sets: [Int] = [], enemies: [Int] = []
+    var npcs: [Int] = [], families: Set<String> = []
     var i = 1
     while i < args.count {
-        if ["--project", "--frame", "--onion", "--png", "--scale", "--set", "--enemy"].contains(args[i]) {
+        if ["--project", "--frame", "--onion", "--png", "--scale", "--set", "--enemy", "--npc", "--family"].contains(args[i]) {
             guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
-            if args[i] == "--enemy" {
+            if args[i] == "--npc" {
+                guard let n = Int(args[i + 1]) else { print("--npc takes a record 7-255"); return 2 }
+                npcs.append(n)
+            } else if args[i] == "--family" {
+                guard ["pc", "enemy", "npc"].contains(args[i + 1]) else { print("--family takes pc, enemy or npc"); return 2 }
+                families.insert(args[i + 1])
+            } else if args[i] == "--enemy" {
                 guard let n = Int(args[i + 1]) else { print("--enemy takes 0-254"); return 2 }
                 enemies.append(n)
             } else if args[i] == "--set" {
@@ -72,16 +93,22 @@ func cmdSprites(_ args: [String]) -> Int32 {
             guard positional.count == 1, let path = options["--project"] else { print(spritesUsage); return 2 }
             var project = try CTProject.load(from: URL(fileURLWithPath: path))
             let rom = try readROM(positional[0])
-            let all = sets.isEmpty && enemies.isEmpty
+            let all = sets.isEmpty && enemies.isEmpty && npcs.isEmpty && families.isEmpty
             var ids: [String] = []
+            if families.contains("pc") && sets.isEmpty { sets = Array(0..<CTSpriteROM.sets) }
             if all || !sets.isEmpty {
                 let wanted: [Int] = all ? Array(0..<CTSpriteROM.sets) : sets
                 ids = try CTSpriteROM.importSprites(rom: rom, into: &project, sets: wanted)
             }
             var foes: (ids: [String], skipped: [Int]) = ([], [])
-            if all || !enemies.isEmpty {
-                let wanted: [Int]? = all ? nil : enemies
+            if all || !enemies.isEmpty || families.contains("enemy") {
+                let wanted: [Int]? = all || (families.contains("enemy") && enemies.isEmpty) ? nil : enemies
                 foes = try CTEnemySpriteROM.importSprites(rom: rom, into: &project, ids: wanted)
+            }
+            var people: [String] = []
+            if !npcs.isEmpty || families.contains("npc") {
+                let wanted: [Int]? = npcs.isEmpty ? nil : npcs
+                people = try CTNPCSpriteROM.importSprites(rom: rom, into: &project, records: wanted)
             }
             try project.save()
             for id in ids {
@@ -96,6 +123,18 @@ func cmdSprites(_ args: [String]) -> Int32 {
                       " -> sprites/enemy_NNN.*" + (foes.skipped.isEmpty ? "" :
                         "; left out (layout 3, no OBJ assembly): " + foes.skipped.map(String.init).joined(separator: " ")))
             }
+            if !people.isEmpty {
+                var sizes = [0, 0]
+                var packs = Set<Int>(), locations = Set<Int>()
+                for id in people {
+                    let s = project.sprites[id]!
+                    sizes[s.rom!.layout ?? 0] += 1
+                    packs.formUnion(s.field?.packs ?? [])
+                    locations.formUnion(s.field?.locations ?? [])
+                }
+                print("npcs: \(people.count) sprites (size classes 0/1: \(sizes[0])/\(sizes[1])), loaded by " +
+                      "\(packs.count) event packs at \(locations.count) locations -> sprites/npc_NNN.*")
+            }
             let linked = project.characters.values.filter { c in c.sprite.map((ids + foes.ids).contains) ?? false }.map(\.id).sorted()
             if !linked.isEmpty { print("characters with these sprites: \(linked.joined(separator: " "))") }
         default:
@@ -106,7 +145,8 @@ func cmdSprites(_ args: [String]) -> Int32 {
                     let s = l.sprite
                     let stream = s.stream.map { ", streams \($0.columns) x \($0.rows) cells at OBJ tile \($0.baseTile)" } ?? ""
                     let source = s.rom.map { ", from set \($0.set) (\($0.frames))" } ?? ""
-                    print("\(s.id): \(s.frames.count) frames, \(s.animations.count) animations, \(l.sheet.count) sheet tiles\(stream)\(source)")
+                    let used = s.field.map { ", loaded by \($0.packs.count) packs at \($0.locations.count) locations" } ?? ""
+                    print("\(s.id): \(s.frames.count) frames, \(s.animations.count) animations, \(l.sheet.count) sheet tiles\(stream)\(source)\(used)")
                 }
                 return 0
             }
@@ -123,6 +163,9 @@ func cmdSprites(_ args: [String]) -> Int32 {
                 o.onionFrame = n
             }
             print("\(s.id) frame \(f) of \(s.frames.count)")
+            if let field = s.field {
+                print("  field size byte \(field.size); event packs \(shortList(field.packs)); locations \(shortList(field.locations))")
+            }
             for (n, t) in s.frames[f].tiles.enumerated() {
                 print(String(format: "  OBJ %d: x %4d y %4d tile %3d %@ pal %d prio %d%@%@", n, t.x, t.y,
                              SpriteScene.objTile(s, t), t.size16 ? "16x16" : "8x8  ", t.pal, t.priority ?? CTSpriteROM.priority,
