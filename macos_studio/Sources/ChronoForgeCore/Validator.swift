@@ -315,6 +315,16 @@ public enum Validator {
             if spec.techs {
                 if let system = p.techSystem {
                     do { try CTTechROM.check(system) } catch { err(4, "tech_system.json", "\(error)") }
+                    // Names that fit the menu's 11 tiles, descriptions that compile (CTTechText).
+                    if let codec = p.textProfile.flatMap({ try? CTTextCodec(profile: $0) }) {
+                        for problem in CTTechText.check(system, codec: codec) { err(4, "tech_system.json", problem) }
+                    }
+                    for c in system.combos {
+                        for k in c.requirements.indices where system.techs.indices.contains(c.first + k)
+                            && system.techs[c.first + k].needsUnlock {
+                            warn(4, "tech_system.json", String(format: "tech $%02X needs the unlock: BattleSys_LearnComboTechs never learns it", c.first + k))
+                        }
+                    }
                     // +$2D is the next single's cost when the new game starts (the ROM's own records agree).
                     for id in spec.characters {
                         guard let r = p.characters[id]?.pc, system.learned.counts.indices.contains(r.charId),
