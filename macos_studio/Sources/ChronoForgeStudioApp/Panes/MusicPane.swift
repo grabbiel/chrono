@@ -206,11 +206,17 @@ private struct MIDIImportSheet: View {
     private var options: CTMIDIImport.Options {
         var o = CTMIDIImport.Options()
         // Every program the file plays maps to what its stepper shows (sample 1 until changed).
-        o.programs = Dictionary(uniqueKeysWithValues: used.programs.map { ($0, programs[$0] ?? 1) })
+        // Typed closures keep these cheap for CI's older type checker (Xcode 26.6).
+        let pairs: [(Int, Int)] = used.programs.map { (p: Int) -> (Int, Int) in (p, programs[p] ?? 1) }
+        o.programs = Dictionary(uniqueKeysWithValues: pairs)
         o.grid = grid
         o.transpose = transpose
         o.loop = loop
-        if drums { o.drums = used.keys.prefix(CTDrumKit.padCount).map { .init(key: $0, sample: drumKeys[$0] ?? 1) } }
+        if drums {
+            o.drums = used.keys.prefix(CTDrumKit.padCount).map { (k: Int) -> CTMIDIImport.DrumPad in
+                CTMIDIImport.DrumPad(key: k, sample: drumKeys[k] ?? 1)
+            }
+        }
         return o
     }
 

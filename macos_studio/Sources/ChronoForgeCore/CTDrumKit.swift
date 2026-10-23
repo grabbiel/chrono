@@ -103,7 +103,7 @@ extension CTSongDocument {
         var at = items.firstIndex(where: isKitLine)
         items.removeAll(where: isKitLine)
         for name in ["@echo", "@samples", "@notrack"] where at == nil {
-            at = items.firstIndex { isLine($0, name) }.map { $0 + 1 }
+            at = items.firstIndex { isLine($0, name) }.map { (i: Int) -> Int in i + 1 }
         }
         items.insert(contentsOf: kit.listingLines.map { Item.text($0) }, at: at ?? 0)
     }

@@ -270,8 +270,10 @@ public enum CTMIDIImport {
         let channels = byChannel.keys.sorted()
         guard !channels.isEmpty else { throw CTSongError("the file has no notes") }
         guard channels.count <= 8 else {
-            throw CTSongError("the driver plays 8 song voices; this file has notes on \(channels.count) channels: "
-                              + channels.map { String($0 + 1) }.joined(separator: ", "))
+            // Built in steps for CI's older type checker (Xcode 26.6).
+            let numbers: [String] = channels.map { (c: Int) -> String in String(c + 1) }
+            let list: String = numbers.joined(separator: ", ")
+            throw CTSongError("the driver plays 8 song voices; this file has notes on \(channels.count) channels: \(list)")
         }
 
         // One note at a time per voice: the highest of notes that start together, each cut at the next's start.
