@@ -167,7 +167,9 @@ final class SNESPPUFeatureTests: XCTestCase {
         }
         f.storeTiles(FeatureScene.solid(0) + FeatureScene.solid(1), bpp: 4, atWord: FeatureScene.objChars)
         func entry(_ n: Int, _ p: Int) -> UInt16 {
-            let palette = bpps[n] == 8 ? 0 : (bpps[n] == 2 ? 2 + p : n * 2 + p)
+            // Typed and split for CI's older type checker (Xcode 26.6).
+            let twoBpp: Int = 2 + p, fourBpp: Int = n * 2 + p
+            let palette: Int = bpps[n] == 8 ? 0 : (bpps[n] == 2 ? twoBpp : fourBpp)
             return PPUFrame.tilemapEntry(tile: p == 0 ? 2 : 4, palette: palette, priority: p == 1)
         }
         func color(_ s: Slot) -> UInt16 {
