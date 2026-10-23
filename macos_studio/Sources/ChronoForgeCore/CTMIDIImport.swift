@@ -171,6 +171,8 @@ public enum CTMIDIImport {
         /// Channel-10 keys to drum pads (at most 12): the channel then plays in drum mode. Empty: it is a melodic channel.
         public var drums: [DrumPad] = []
         public var volume = 0x60, edl = 0
+        /// The @echo row's byte 1, the song volume (!Spc_Unk4D; 0 is silent).
+        public var songVolume = 0xFF
         /// The tracks jump back to their start at the end (else they end).
         public var loop = true
         public init() {}
@@ -355,7 +357,7 @@ public enum CTMIDIImport {
         func hex(_ v: Int) -> String { String(format: "$%02X", v & 0xFF) }
         var lines = ["; \(title)", "; ct-song/1 — imported from a MIDI file; see macos_studio/docs/music_tracker.md",
                      "@origin $2000", "@notrack $FFFF",
-                     "@samples " + samples.map(String.init).joined(separator: " "), "@echo \(hex(o.edl)) $00"]
+                     "@samples " + samples.map(String.init).joined(separator: " "), "@echo \(hex(o.edl)) \(hex(o.songVolume))"]
         lines += (kit ?? .empty).listingLines
         for i in 0..<16 { lines.append("@track \(i < 8 ? "A" : "B") \(i % 8) " + (i < voices.count ? "TRACK\(i)" : "-")) }
         for (i, v) in voices.enumerated() {

@@ -788,3 +788,15 @@ struct FreeSpace {
         if used.upperBound < range.upperBound { ranges.insert((used.upperBound..<range.upperBound, reclaimed), at: i) }
     }
 }
+
+// MARK: Audio auditions (in memory)
+
+extension CTROMBuilder {
+    /// The project's `rom.samples` and one song, built into a copy of `base`
+    /// in memory: the ROM an audition loads, so a project sample sounds before
+    /// the project is built. Nothing else of the project is written, and no file.
+    public static func audioScratch(base: [UInt8], project: CTProject, song: SongRequest) throws -> (rom: [UInt8], report: Report) {
+        let samples = try (project.project.rom?.samples ?? []).map { try sampleRequest($0, project: project) }
+        return try build(base: base, requests: [], songs: [song], samples: samples, textProfile: nil)
+    }
+}
