@@ -52,8 +52,16 @@ private struct TechMatrixEditor: View {
     @Binding var system: TechSystemDef
     let store: ProjectStore
     let project: CTProject
-    @State private var page: Page = .character(0)
-    @State private var selected = 1
+    @State private var page: Page = TechMatrixEditor.launchTech.map(TechMatrixEditor.page(of:)) ?? .character(0)
+    @State private var selected = TechMatrixEditor.launchTech ?? 1
+
+    /// `--module Characters --tech 63` opens the matrix on tech $63 (a window-level check).
+    nonisolated static let launchTech: Int? = LaunchArguments.value("--tech").flatMap { Int($0, radix: 16) }
+        .flatMap { (1..<CTTechROM.count).contains($0) ? $0 : nil }
+
+    nonisolated static func page(of id: Int) -> Page {
+        id < CTTechROM.firstDouble ? .character((id - 1) / 8) : id < CTTechROM.firstTriple ? .doubles : .triples
+    }
 
     var body: some View {
         HSplitView {
@@ -68,6 +76,7 @@ private struct TechMatrixEditor: View {
                 Section("Rule") { Text("Tech points").tag(Page.points) }
             }
             .frame(minWidth: 150, idealWidth: 170, maxWidth: 220)
+            ScrollViewReader { scroll in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     header
@@ -83,15 +92,23 @@ private struct TechMatrixEditor: View {
                     }
                     if page != .points && system.techs.indices.contains(selected) {
                         TechEditor(system: $system, id: selected)
-                        TechHelpLine(id: selected, romPath: store.sceneROMPath,
+                        TechHelpLine(system: $system, id: selected, romPath: store.sceneROMPath,
                                      names: CTDialogueSettings.projectNames(project))
+                            .id("help line")
                     }
                 }
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .onAppear {
+                // --tech: show the tech's editor (its combination and help line), not the matrix.
+                if TechMatrixEditor.launchTech != nil {
+                    DispatchQueue.main.async { scroll.scrollTo("help line", anchor: .bottom) }
+                }
+            }
+            }
         }
-        .onAppear { select(page) }
+        .onAppear { if TechMatrixEditor.launchTech == nil { select(page) } }
         .onChange(of: page) { _, new in select(new) }
     }
 
@@ -381,12 +398,18 @@ private struct TechEditor: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text(String(format: "$%02X %@", id, t.name)).font(.headline)
+                    Text(String(format: "$%02X", id)).font(.headline).monospacedDigit()
+                    TextField("Name", text: $system.techs[id].name).font(.headline).frame(width: 160)
+                        .help("TechNames: the menu draws 11 tiles (10 after the magic icon); written when it differs from the ROM's")
+                    nameFit(t)
                     Text("\(t.kind) · " + system.users(of: id).map(charName).joined(separator: " + ")).foregroundStyle(.secondary)
                 }
                 HStack(alignment: .top, spacing: 24) {
                     fields(t)
                     TargetZonePreview(system: system, id: id)
+                }
+                if system.combo(of: id) != nil || id >= CTTechCombos.firstRock {
+                    ComboBuilder(system: $system, id: id)
                 }
                 ForEach(0..<3, id: \.self) { k in
                     if t.parts[k] & 0x80 == 0 { PartEditor(system: $system, part: t.parts[k] & 0x7F, user: k) }
@@ -456,6 +479,15 @@ private struct TechEditor: View {
                     Text("frames"); TextField("", value: $system.techs[id].anim.frames, format: .number).frame(width: 48)
                 }
             }
+        }
+    }
+
+    @ViewBuilder private func nameFit(_ t: TechSystemDef.Tech) -> some View {
+        if let w = CTTechText.nameWidth(t.name, icon: t.icon) {
+            Text("\(w.used)/\(w.room) tiles " + (w.used <= w.room ? "fits" : "overflows"))
+                .font(.caption).foregroundStyle(w.used <= w.room ? Color.secondary : Color.orange)
+        } else {
+            Label("a character has no glyph", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
         }
     }
 
@@ -723,30 +755,33 @@ private struct TechPointsSimulator: View {
 }
 
 /// The tech's description in the menu's help line (Menu_TechDescText, BG3 rows
-/// 21-22), from the ROM; a draft text previews live. Tech descriptions are
-/// not part of the project yet, so a draft is not saved.
+/// 21-22), live as it is typed, with fits / overflows; saved in
+/// tech_system.json and repacked by the builder (CTTechText).
 private struct TechHelpLine: View {
+    @Binding var system: TechSystemDef
     let id: Int
     let romPath: String?
     let names: [Int: String]
-    @State private var drafts: [Int: String] = [:]
 
     var body: some View {
         GroupBox("Help line") {
             VStack(alignment: .leading, spacing: 6) {
-                if id < CTHelpLineROM.techCount {
+                if id < CTTechROM.count {
                     HStack {
-                        TextField("Draft a description (preview only)", text: Binding(
-                            get: { drafts[id] ?? romText ?? "" }, set: { drafts[id] = $0 }))
+                        TextField("Description", text: Binding(
+                            get: { system.techs[id].description ?? romText ?? "" },
+                            set: { system.techs[id].description = $0 }))
                             .frame(maxWidth: 420)
-                        if drafts[id] != nil { Button("Revert") { drafts[id] = nil } }
+                        if let rom = romText, system.techs[id].description != rom {
+                            Button("Revert") { system.techs[id].description = rom }
+                        }
                     }
-                    HelpLinePreviewView(source: drafts[id].map { .text($0) } ?? .rom(id), place: .tech,
+                    HelpLinePreviewView(source: system.techs[id].description.map { .text($0) } ?? .rom(id), place: .tech,
                                         romPath: romPath, names: names, scale: 1.5)
-                    Text("Tech descriptions are not saved in the project yet: a draft only previews.")
+                    Text("Saved with the project; Build ROM repacks the description table in its own span.")
                         .font(.caption2).foregroundStyle(.secondary)
                 } else {
-                    Text(String(format: "Tech $%02X has no description (the table covers $00-$75)", id))
+                    Text(String(format: "Tech $%02X has no description (the table covers $00-$74)", id))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -758,5 +793,92 @@ private struct TechHelpLine: View {
         guard let romPath, let assets = DialogueAssets.load(romPath), let codec = assets.codec else { return nil }
         let bytes = CTHelpLine.description(CTDialogueMemory(rom: assets.rom), place: .tech, index: id)
         return try? codec.decode(bytes)
+    }
+}
+
+// MARK: - Combination builder
+
+/// A dual or triple tech's record: its members (repurposing the record:
+/// CTTechCombos.repurpose), each member's battle part and MP and the field
+/// menu's MP index, and why there is no room for a new combination. The rock
+/// triples ($70-$74) are shown read-only.
+private struct ComboBuilder: View {
+    @Binding var system: TechSystemDef
+    let id: Int
+    @State private var error: String?
+
+    var body: some View {
+        GroupBox("Combination") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let (index, k) = system.combo(of: id) {
+                    membersRow(index)
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
+                        GridRow {
+                            ForEach(["Member", "Needs singles", "Battle part", "MP", "Menu MP index", "Menu MP"], id: \.self) {
+                                Text($0).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        ForEach(Array(CTTechCombos.members(of: id, in: system).enumerated()), id: \.offset) { p, m in
+                            GridRow {
+                                Text(charName(m.char))
+                                Stepper(value: $system.combos[index].requirements[k][p], in: 1...8) {
+                                    Text("\(system.combos[index].requirements[k][p])").monospacedDigit()
+                                }
+                                TextField("", value: Binding(get: { (m.part ?? 0) & 0x7F }, set: { n in
+                                    error = attempt { try CTTechCombos.setPart(&system, tech: id, member: m.char, part: n) }
+                                }), format: .number).frame(width: 44)
+                                Text(m.mp.map(String.init) ?? "—").monospacedDigit()
+                                TextField("", value: Binding(get: { m.menuIndex ?? 0 }, set: { n in
+                                    error = attempt { try CTTechCombos.setMenuCost(&system, tech: id, member: m.char, index: n) }
+                                }), format: .number).frame(width: 44).disabled(m.menuIndex == nil)
+                                HStack(spacing: 4) {
+                                    Text(m.menuMP.map(String.init) ?? "—").monospacedDigit()
+                                    if m.menuMP != nil, m.menuMP != m.mp {
+                                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                                            .help("The field menu shows another MP than the battle charges")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Text("A part's MP is MpCost[part]; parts are shared, so changing one part's MP changes every tech that runs it.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else if let rocks = system.rocks, (0..<rocks.count).contains(id - CTTechCombos.firstRock) {
+                    let r = rocks[id - CTTechCombos.firstRock]
+                    Text(String(format: "Rock combination: learnt by wearing accessory $%02X with ", CTTechCombos.rockAccessory + id - CTTechCombos.firstRock)
+                         + CTTechROM.members(r.mask).map(charName).joined(separator: " + ") + " in the party (read-only).")
+                    Text("Needs singles: " + r.needs.map { n in "\(charName((n - 1) / 8)) \((n - 1) % 8 + 1)" }.joined(separator: ", "))
+                        .font(.caption)
+                }
+                if let error { Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
+                Text("New combinations: none. " + CTTechCombos.capacity.prefix(1).uppercased() + CTTechCombos.capacity.dropFirst() + ".")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private func membersRow(_ index: Int) -> some View {
+        let who = system.combos[index].members
+        HStack {
+            Text("Members").foregroundStyle(.secondary)
+            ForEach(who.indices, id: \.self) { p in
+                Picker("", selection: Binding(get: { who[p] }, set: { c in
+                    var next = who
+                    next[p] = c
+                    error = attempt { try CTTechCombos.repurpose(&system, record: index, members: next) }
+                })) {
+                    ForEach(0..<CTCharacterROM.count, id: \.self) { Text(charName($0)).tag($0) }
+                }
+                .labelsHidden().frame(width: 100)
+            }
+            Text(String(format: "record %d · state byte %d · ids $%02X-$%02X", index, index, system.combos[index].first,
+                        system.combos[index].first + system.combos[index].requirements.count - 1))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func attempt(_ body: () throws -> Void) -> String? {
+        do { try body(); return nil } catch { return "\(error)" }
     }
 }

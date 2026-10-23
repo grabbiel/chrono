@@ -113,7 +113,8 @@ final class CTTechsTests: XCTestCase {
         for i in 0..<56 { put(CTTechROM.tpCostPC + 2 * i, [g.next(256), g.next(256)]) }
         for s in 0..<CTTechROM.userSetCount { put(CTTechROM.userSetsPC + 3 * s, [g.next(7), g.next(7), 0xFF]) }
         let pairs = (0..<7).flatMap { a in ((a + 1)..<7).map { [a, $0] } }
-        let trios = (0..<7).flatMap { a in ((a + 1)..<7).flatMap { b in ((b + 1)..<7).map { [a, b, $0] } } }
+        var trios: [[Int]] = []
+        for a in 0..<7 { for b in (a + 1)..<7 { for c in (b + 1)..<7 { trios.append([a, b, c]) } } }
         var req = 0x27FA, rec = CTTechROM.combosPC
         for (i, who) in (Array(pairs.prefix(15)) + Array(trios.prefix(10))).enumerated() {
             let count = i < 15 ? 3 : 1, first = i < 15 ? 0x39 + 3 * i : 0x66 + i - 15
