@@ -214,7 +214,9 @@ extension CTEventVM {
             } else {
                 wram[move + 1] = v >> 4; wram[move] = 0
             }
-            wram[acc] = v & 0x0F == 0 ? 0 : v & 0x80 != 0 ? v | 0xF0 : v & 0x0F
+            let rest: UInt8
+            if v & 0x0F == 0 { rest = 0 } else if v & 0x80 != 0 { rest = v | 0xF0 } else { rest = v & 0x0F }
+            wram[acc] = rest
         }
         let timer = wram[WRAM.mapDriftTimer]
         if timer != 0 {
@@ -264,9 +266,10 @@ extension CTEventVM {
     func scroll1(axis: Int, rising: Bool) {
         let count = wram[WRAM.mapMove1XNeg + 2 * axis + (rising ? 1 : 0)]
         guard count != 0 else { return }
-        let word = axis == 0 ? WRAM.mapScroll1X : WRAM.mapScroll1Y, fine = axis == 0 ? WRAM.mapFine1X : WRAM.mapFine1Y
-        let origin = axis == 0 ? WRAM.mapTileOriginX : WRAM.mapTileOriginY, bound = axis == 0 ? WRAM.mapUnk1D0C : WRAM.mapUnk1D10
-        let edge = axis == 0 ? (rising ? WRAM.mapEdgeColXInc : WRAM.mapEdgeColXDec) : (rising ? WRAM.mapEdgeRowYInc : WRAM.mapEdgeRowYDec)
+        let word: Int = axis == 0 ? WRAM.mapScroll1X : WRAM.mapScroll1Y, fine: Int = axis == 0 ? WRAM.mapFine1X : WRAM.mapFine1Y
+        let origin: Int = axis == 0 ? WRAM.mapTileOriginX : WRAM.mapTileOriginY, bound: Int = axis == 0 ? WRAM.mapUnk1D0C : WRAM.mapUnk1D10
+        let xEdge: Int = rising ? WRAM.mapEdgeColXInc : WRAM.mapEdgeColXDec, yEdge: Int = rising ? WRAM.mapEdgeRowYInc : WRAM.mapEdgeRowYDec
+        let edge: Int = axis == 0 ? xEdge : yEdge
         var n = count
         repeat {
             wram.setWord(word, (wram.word(word) + (rising ? 1 : 0xFFFF)) & 0xFFFF)

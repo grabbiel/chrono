@@ -271,10 +271,14 @@ extension CTEventVM {
     /// PalAnimRom + .Unk6/.Unk7 + frame x (.Unk2 x 2 & $FF) to Pal_CgramBuf from colour .Unk1.
     func copyRomFrame(_ r: Int, frame: Int) {
         var dest = Int(wram[animB(r, 1)]) * 2 + (WRAM.palCgramBuf & 0xFFFF)
-        var x = (wram.word(animB(r, 6)) + frame * Int(wram[animB(r, 2)] &* 2)) & 0xFFFF
+        let stride: Int = Int(wram[animB(r, 2)] &* 2)
+        var x: Int = (wram.word(animB(r, 6)) + frame * stride) & 0xFFFF
         for _ in 0..<Self.loops(wram[animB(r, 2)]) {
-            let v = Int(read(Self.palAnimRom + x)) | Int(read(Self.palAnimRom + x + 1)) << 8
-            wram[0x7E0000 | dest] = UInt8(v & 0xFF); wram[0x7E0000 | ((dest + 1) & 0xFFFF)] = UInt8(v >> 8)
+            // Typed lets: CI's older type checker (Xcode 26.6) is slow on Int(...) mixed with | and <<.
+            let lo: Int = Int(read(Self.palAnimRom + x)), hi: Int = Int(read(Self.palAnimRom + x + 1))
+            let v: Int = lo | hi << 8
+            let next: Int = (dest + 1) & 0xFFFF
+            wram[0x7E0000 | dest] = UInt8(v & 0xFF); wram[0x7E0000 | next] = UInt8(v >> 8)
             if (0x2200..<0x2400).contains(dest) { paletteWrites.insert((dest - 0x2200) >> 1) }
             dest = (dest + 2) & 0xFFFF; x = (x + 2) & 0xFFFF
         }
@@ -285,9 +289,11 @@ extension CTEventVM {
     /// is .Unk2 x 2 in 8 bits, and the loop tests after its step (a span of 0
     /// goes round all 64 KiB, as the ROM's does).
     func rotate(_ r: Int, up: Bool) {
-        let first = Int(wram[animB(r, 1)]) * 2, last = (first + Int(wram[animB(r, 2)] &* 2)) & 0xFFFF
-        var x = up ? last : first
-        let end = up ? first : last, step = up ? -2 : 2
+        let first: Int = Int(wram[animB(r, 1)]) * 2
+        let span: Int = Int(wram[animB(r, 2)] &* 2)
+        let last: Int = (first + span) & 0xFFFF
+        var x: Int = up ? last : first
+        let end: Int = up ? first : last, step: Int = up ? -2 : 2
         let saveBuf = palBufWord(x), saveCgram = wram.word(WRAM.palCgramBuf + x)
         func put(_ base: Int, _ at: Int, _ v: Int) {
             wram[base + at] = UInt8(v & 0xFF); wram[base + at + 1] = UInt8(v >> 8)

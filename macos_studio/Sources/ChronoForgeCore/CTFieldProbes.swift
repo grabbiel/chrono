@@ -194,11 +194,14 @@ extension CTEventVM {
         if wram[WRAM.fieldSceneFlags] & 0x80 == 0 {
             wide = true
             let ty = wram[WRAM.mapProbeTileY], tx = wram[WRAM.mapProbeTileX]
-            let i = Int(ty & wram[WRAM.mapRowMask1]) << 8 | Int(tx & wram[WRAM.mapColMask1])
+            let row: Int = Int(ty & wram[WRAM.mapRowMask1]), col: Int = Int(tx & wram[WRAM.mapColMask1])
+            let i: Int = row << 8 | col
             let idx = wram[WRAM.mapTileExitIdx + i]
             if idx & 0x80 == 0, let rec = exitRecord(Int(idx)) { exitTest(rec, tx: tx, ty: ty) }
         }
-        var i = Int(wram[WRAM.mapNextRowTileY] & wram[WRAM.mapRowMask1]) << 8 | Int(wram[WRAM.mapDestTileX] & wram[WRAM.mapColMask1])
+        let row: Int = Int(wram[WRAM.mapNextRowTileY] & wram[WRAM.mapRowMask1])
+        let col: Int = Int(wram[WRAM.mapDestTileX] & wram[WRAM.mapColMask1])
+        var i: Int = row << 8 | col
         if !wide { i &= 0xFF }                                          // 8-bit X after a pending warp (quirk)
         if wram[WRAM.mapTileAttrA + i] & 0x10 != 0 {
             wram[WRAM.fieldTileAnimX] = UInt8(i & 0xFF)
@@ -282,6 +285,13 @@ extension CTEventVM {
 
     // MARK: Map_Unk8A6D
 
+    /// A step's direction: 0, or -1 when bit 7 is set, else 1. (A helper: CI's older type
+    /// checker, Xcode 26.6, is slow on a tuple of nested ternaries.)
+    static func direction(_ v: UInt8) -> Int {
+        if v == 0 { return 0 }
+        return v & 0x80 != 0 ? -1 : 1
+    }
+
     /// Map_Unk8A6D: the frame's steps (Map_Unk1D2E X, Map_Unk1D30 Y) kept,
     /// cut or turned into a slide by the leader's box (X ±$70, Y up to
     /// -$70) against objects and tiles; a kept step is committed by
@@ -289,7 +299,7 @@ extension CTEventVM {
     public func leaderProbes() {
         var wide = false
         let sx = wram[WRAM.mapUnk1D2E], sy = wram[WRAM.mapUnk1D30]
-        switch (sx == 0 ? 0 : sx & 0x80 != 0 ? -1 : 1, sy == 0 ? 0 : sy & 0x80 != 0 ? -1 : 1) {
+        switch (Self.direction(sx), Self.direction(sy)) {
         case (0, 0): return
         case (1, 0): right(&wide)
         case (-1, 0): left(&wide)

@@ -271,7 +271,8 @@ public final class CTFieldRuntime {
     /// ExitRom offset (the records themselves are the map's: `exitRecords`).
     func loadMap(_ w: inout WRAMModel) throws {
         let ptr = 0x250000 + 2 * (location & 0x1FF)
-        w.setWord(WRAM.mapExitRec0, Int(rom[ptr]) | Int(rom[ptr + 1]) << 8)
+        let lo: Int = Int(rom[ptr]), hi: Int = Int(rom[ptr + 1])
+        w.setWord(WRAM.mapExitRec0, lo | hi << 8)
         let (col, row) = map.masks[0]
         w[WRAM.mapColMask1] = UInt8(col); w[WRAM.mapRowMask1] = UInt8(row)
         w[WRAM.mapLimitLeft] = UInt8(map.limits.left & 0xFF); w[WRAM.mapLimitTop] = UInt8(map.limits.top & 0xFF)

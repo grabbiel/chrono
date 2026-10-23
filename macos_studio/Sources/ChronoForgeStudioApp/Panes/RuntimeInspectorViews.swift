@@ -192,6 +192,13 @@ struct RuntimeStateView: View {
     private static let animKinds = ["none", "ROM frames", "rotate", "rotate up", "fade white", "fade",
                                     "pulse white", "pulse"]
 
+    // A loop: CI's older type checker (Xcode 26.6) is slow on a String(format:) map inside a view builder.
+    private static func animBytes(_ wram: WRAMModel, _ at: Int) -> String {
+        var parts: [String] = []
+        for i in 0..<WRAM.fieldAnimBSize { parts.append(String(format: "%02X", wram[at + i])) }
+        return parts.joined(separator: " ")
+    }
+
     var body: some View {
         let _ = session.revision
         let field = session.field, vm = field.vm
@@ -228,16 +235,16 @@ struct RuntimeStateView: View {
                 }
             }
             Section("Palette animation") {
-                ForEach(0..<WRAM.fieldAnimBCount, id: \.self) { k in
-                    let at = WRAM.fieldAnimB + k * WRAM.fieldAnimBSize
-                    let kind = Int(vm.wram[at] >> 4)
+                ForEach(0..<WRAM.fieldAnimBCount, id: \.self) { (k: Int) in
+                    let at: Int = WRAM.fieldAnimB + k * WRAM.fieldAnimBSize
+                    let kind: Int = Int(vm.wram[at] >> 4)
                     if kind != 0 {
                         HStack {
                             Text("record \(k)").frame(width: 70, alignment: .leading)
                             Text(kind < Self.animKinds.count ? Self.animKinds[kind] : "frame list").frame(width: 90, alignment: .leading)
                             Text("frame \(vm.wram[at + 3]), tick \(vm.wram[at + 4])/\(vm.wram[at + 5])")
                             Spacer()
-                            Text((0..<WRAM.fieldAnimBSize).map { String(format: "%02X", vm.wram[at + $0]) }.joined(separator: " "))
+                            Text(Self.animBytes(vm.wram, at))
                                 .foregroundStyle(.secondary)
                         }
                         .font(.caption.monospaced())
