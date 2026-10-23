@@ -2,8 +2,9 @@
 // synthetic packs and WRAM: items and gold ($C7-$CE, $D7) through
 // BankC1_RunService's services, and party membership ($CF-$D4, $D6) through
 // Menu_RunCommand's party commands, the party walks ($D9, $DA), the map
-// region copies ($E4, $E5), and the palettes ($2E, $33, $88) with
-// PalAnim_TickAll and the palette slots. The ROM handlers themselves are compared
+// region copies ($E4, $E5), the palettes ($2E, $33, $88) with
+// PalAnim_TickAll and the palette slots, and the timed and variable steps
+// ($7A, $97-$9A, $9D-$9F, $A1). The ROM handlers themselves are compared
 // by re_workspace/tools/ct_event_vm.py check.
 import XCTest
 @testable import ChronoForgeCore
@@ -216,6 +217,46 @@ final class CTEventVMOpcodesTests: XCTestCase {
         XCTAssertEqual(v.wram[WRAM.objPalSlot], 0x80)                     // free again
         v.wram[WRAM.fieldUnk54] = 0x80
         XCTAssertNil(v.claimPaletteSlot())                                // Field_Unk54 bit 7: no slots
+    }
+
+    func testStepsFromEventWordsAndTimedSteps() throws {
+        let v = try vm([0x9D, 0x01, 0x02, 0x98, 0x40, 0x06])
+        v.wram[WRAM.eventWord(1)] = 0x40; v.wram[WRAM.eventWord(2)] = 5
+        XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x21, carry: false))
+        XCTAssertEqual(v.wram.word(WRAM.dpField + 0xEE), 0x40)          // Obj_Direction from event word 1
+        XCTAssertEqual(v.wram[WRAM.objMoveFrames], 5)
+        XCTAssertEqual(v.wram[WRAM.objUnk1A80], 1)
+        XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x21, carry: false))   // still moving
+        v.wram[WRAM.objMoveFrames] = 0
+        XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x24, carry: true))
+        XCTAssertEqual(v.wram[WRAM.objUnk1A80], 0)
+        v.wram[WRAM.objUnk1100 + 0x40] = 0x80                            // the target is not there: done
+        XCTAssertEqual(v.execute(at: 0x24), .go(x: 0x27, carry: true))
+    }
+
+    func testAnArcLandsWhereItStarted() throws {
+        let v = try vm([0x7A, 0x05, 0x05, 0x04])
+        // no ROM here: no sine or angle table, so no step and g frames
+        XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x21, carry: false))
+        XCTAssertEqual(v.wram[WRAM.objMoveFrames], 4)
+        XCTAssertEqual(v.wram[WRAM.objArcGravity], 4)
+        XCTAssertEqual(v.wram.word(WRAM.objVelY), 0xFFF8)                // 4 x 4 / 2 up
+        XCTAssertEqual([v.wram[WRAM.objUnk1A80], v.wram[WRAM.objArcMode]], [1, 1])
+        v.wram[WRAM.objMoveFrames] = 0
+        XCTAssertEqual(v.execute(at: 0x21), .go(x: 0x25, carry: true))
+        XCTAssertEqual([v.wram[WRAM.objUnk1A80], v.wram[WRAM.objArcMode]], [0, 0])
+        XCTAssertEqual(CTEventVM.quotientLow(10 << 8, 4), 0x80)          // 640 frames keep their low byte
+        XCTAssertEqual(CTEventVM.quotientLow(10 << 8, 0), 0xFF)
+    }
+
+    func testTheStepOntoAnObjectReadsYAfterItsXStep() throws {
+        let v = try vm([])
+        v.wram.setWord(WRAM.objPosX, 0x0480); v.wram.setWord(WRAM.objPosY, 0x0080)
+        // slot $80 (an empty party place) reads its X from $7E1880, slot 0's Y ($0080, left of
+        // $0480), and its Y from $7E1900-01, Obj_VelX of slots 0 and 1: $0000 before the X step, $00F0 after
+        XCTAssertTrue(v.stepOntoObject(0x80))
+        XCTAssertEqual(v.wram[WRAM.objVelX], 0xF0)
+        XCTAssertEqual(v.wram[WRAM.objVelY], 0x10)                        // $F0 > $80: down, as the ROM reads it
     }
 }
 

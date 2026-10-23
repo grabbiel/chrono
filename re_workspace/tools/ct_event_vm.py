@@ -102,10 +102,11 @@ EVIDENCE = {
     "objects": {"opcodes": 22, "verified": 22, "operandSets": 218, "cases": 1083, "agree": 1083, "disagree": 0},
     "palettes": {"opcodes": 3, "verified": 3, "operandSets": 56, "cases": 144, "agree": 144, "disagree": 0},
     "party": {"opcodes": 2, "verified": 2, "operandSets": 2, "cases": 96, "agree": 96, "disagree": 0},
+    "steps": {"opcodes": 9, "verified": 9, "operandSets": 75, "cases": 434, "agree": 434, "disagree": 0},
     "sound": {"opcodes": 4, "verified": 4, "operandSets": 96, "cases": 192, "agree": 192, "disagree": 0},
     "warps": {"opcodes": 5, "verified": 5, "operandSets": 61, "cases": 246, "agree": 246, "disagree": 0},
 }
-EVIDENCE_UNMODELLED = {"opcodes": 26, "instructions": 2307, "instructionsInPacks": 142702}
+EVIDENCE_UNMODELLED = {"opcodes": 17, "instructions": 2002, "instructionsInPacks": 142702}
 # The last `routines` (2026-10-23, default --cases 200): cases and agreements per routine.
 EVIDENCE_ROUTINES = {"palAnimTick": (200, 200), "palClaim": (200, 200), "palRelease": (200, 200)}
 
@@ -269,8 +270,10 @@ def operand_sets(loaded, wanted, per_op, rng):
 
 class Concrete:
     """absint.Machine with every WRAM byte known (zero unless given) and the
-    multiplier modelled; loops are not widened (a concrete state that comes
-    back is a loop with no end)."""
+    multiplier and divider modelled (whichever was started last answers at
+    $4216/$4217; the quotient at $4214/$4215, $FFFF for a divisor of 0);
+    loops are not widened (a concrete state that comes back is a loop with no
+    end)."""
 
     def __init__(self, interp, absint):
         machine = interp.machine
@@ -286,12 +289,16 @@ class Concrete:
                 bank, low = a >> 16, a & 0xFFFF
                 if bank in (0x7E, 0x7F):
                     return 0
-                if (bank < 0x40 or 0x80 <= bank < 0xC0) and low in (0x4216, 0x4217):
-                    f = [v for k, v in s.mem.items() if k & 0xFFFF in (0x4202, 0x4203) and (k >> 16) not in (0x7E, 0x7F)]
+                if (bank < 0x40 or 0x80 <= bank < 0xC0) and low in (0x4214, 0x4215, 0x4216, 0x4217):
                     m = {k & 0xFFFF: v for k, v in s.mem.items() if (k >> 16) not in (0x7E, 0x7F)}
-                    if len(f) >= 2 and None not in (m.get(0x4202), m.get(0x4203)) and 0x4206 not in m:
+                    if self.arith == "mul" and low >= 0x4216 and None not in (m.get(0x4202), m.get(0x4203)):
                         p = m[0x4202] * m[0x4203]
                         return p & 0xFF if low == 0x4216 else p >> 8
+                    if self.arith == "div" and None not in (m.get(0x4204), m.get(0x4205), m.get(0x4206)):
+                        n, d = m[0x4204] | m[0x4205] << 8, m[0x4206]
+                        q, r = (n // d, n % d) if d else (0xFFFF, n)
+                        v = q if low < 0x4216 else r
+                        return v & 0xFF if low in (0x4214, 0x4216) else v >> 8
                     return None
                 return base.read8(self, s, addr)
 
@@ -302,6 +309,8 @@ class Concrete:
                     if (bank < 0x40 or 0x80 <= bank < 0xC0) and 0x2180 <= low <= 0x2183:
                         self.wram_port(s, low, v)
                         return
+                    if (bank < 0x40 or 0x80 <= bank < 0xC0) and low in (0x4203, 0x4206):
+                        self.arith = "mul" if low == 0x4203 else "div"     # writing it starts the unit
                 self.writes += 1
                 base.write8(self, s, addr, v)
 
@@ -335,7 +344,7 @@ class Concrete:
         reached again with the same registers and no write since (a halt)."""
         m, absint = self.machine, self.absint
         m.known, m.reads, m.control, m.opaque = known, set(), set(), set()
-        m.writes, m.wmadd = 0, 0
+        m.writes, m.wmadd, m.arith = 0, 0, None
         s.frames = []
         base, seen = len(s.sp), set()
         for steps in range(1, STEP_LIMIT + 1):

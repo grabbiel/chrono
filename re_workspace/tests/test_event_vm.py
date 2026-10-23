@@ -100,10 +100,10 @@ def test_recorded_evidence_matches_the_swift_families():
         assert f["disagree"] == 0
         assert f["agree"] <= f["cases"]
     modelled = sum(f["opcodes"] for f in vm.EVIDENCE.values())
-    assert modelled == len({op for ops in families.values() for op in ops}) == 197
-    assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 194
-    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 9545
-    assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 9546
+    assert modelled == len({op for ops in families.values() for op in ops}) == 206
+    assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 203
+    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 9979
+    assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 9980
     assert vm.EVIDENCE_UNMODELLED["instructions"] < vm.EVIDENCE_UNMODELLED["instructionsInPacks"] // 10
 
 
@@ -134,6 +134,16 @@ def test_items_and_membership_agree_with_the_rom(rom_path, chronoret, require, t
         assert families[name]["disagree"] == 0
         assert families[name]["agree"] == families[name]["cases"]
 
+
+def test_steps_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "check", "--cli", str(cli),
+                        "--ops", "7A,97,98,99,9A,9D,9E,9F,A1", "--per-op", "3", "--states", "2", "--jobs", "2",
+                        "--json", str(out)], capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    steps = json.loads(out.read_text())["families"]["steps"]
+    assert steps["opcodesVerified"] == 9 and steps["disagree"] == 0 and steps["agree"] == steps["cases"]
 
 def test_routine_states_stay_in_the_routines_bounds():
     rng = random.Random(3)

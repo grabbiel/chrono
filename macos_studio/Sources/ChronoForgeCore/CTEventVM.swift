@@ -286,6 +286,7 @@ public final class CTEventVM {
         "characters": [0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83],
         "sound": [0xE8, 0xEA, 0xEB, 0xEC],
         "movement": [0x8F, 0x92, 0x94, 0x95, 0x96, 0x9C, 0xA0, 0xA8, 0xA9, 0xB5, 0xB6],
+        "steps": [0x7A, 0x97, 0x98, 0x99, 0x9A, 0x9D, 0x9E, 0x9F, 0xA1],
         "party": [0xAF, 0xB0],
         "membership": [0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6],
         "items": [0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7],
@@ -583,6 +584,25 @@ public final class CTEventVM {
         case 0x81: return initSprite(y)
         case 0x92, 0x9C: return walkDirection(y, animate: op == 0x92)
         case 0x96, 0xA0: return walkToTile(y, animate: op == 0x96)
+        case 0x97, 0xA1:
+            if wram[WRAM.objMoveFrames + objCur] != 0 { return .go(x: y, carry: false) }
+            return walkToTile(y, animate: op == 0x97, tile: (eventByte(data(y + 1)), eventByte(data(y + 2))))
+        case 0x9D: return moveDirectionVar(y)
+        case 0x9A: return walkTowardTile(y)
+        case 0x98, 0x99:
+            let c = objCur
+            if wram[WRAM.objUnk1A80 + c] != 0 {
+                if wram[WRAM.objMoveFrames + c] != 0 { return .go(x: y, carry: false) }
+                wram[WRAM.objUnk1A80 + c] = 0
+                return .go(x: y + 3, carry: true)
+            }
+            let t = op == 0x98 ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
+            return walkTowardObject(y, target: t)
+        case 0x9E, 0x9F:
+            if wram[WRAM.objMoveFrames + objCur] != 0 { return .go(x: y, carry: false) }
+            let t = op == 0x9E ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
+            return moveToObject(y, target: t)
+        case 0x7A: return arcToTile(y)
         case 0x94, 0x95:
             if wram[WRAM.objMoveFrames + objCur] != 0 { return .go(x: y, carry: false) }
             let t = op == 0x94 ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
