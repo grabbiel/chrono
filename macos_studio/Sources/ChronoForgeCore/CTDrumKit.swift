@@ -11,6 +11,7 @@ import Foundation
 
 public struct CTDrumKit: Equatable, Codable, Sendable {
     public static let padCount = 12, size = 36
+    static func isBlank(_ c: Character) -> Bool { c == " " || c == "\t" }
     /// The first directory entry a song load fills: `sample $20 + n` plays its n-th listed sample.
     public static let firstEntry = 0x20
     /// Driver notes the kit editor offers at transpose $0A (the template's): C0-B7.
@@ -33,7 +34,11 @@ public struct CTDrumKit: Equatable, Codable, Sendable {
         /// The driver's note number on a track with this transpose byte (Spc_TrackStep: + transpose - 10).
         public func number(transpose: Int = 0x0A) -> Int { (note + transpose - 10) & 0xFF }
         /// !Spc_TrackF280's high byte after the pad (pan x 2), nil when the track keeps its pan.
-        public var panRegister: Int? { keepsPan ? nil : pan << 1 & 0xFF }
+        public var panRegister: Int? {
+            if keepsPan { return nil }
+            let doubled: Int = pan << 1
+            return doubled & 0xFF
+        }
     }
 
     public var pads: [Pad]
@@ -48,14 +53,23 @@ public struct CTDrumKit: Equatable, Codable, Sendable {
 
     public init(bytes: [UInt8]) throws {
         guard bytes.count == Self.size else { throw CTSongError("the drum kit is \(Self.size) bytes") }
-        pads = (0..<Self.padCount).map { k in
-            Pad(sample: Int(bytes[3 * k]), note: Int(bytes[3 * k + 1]), pan: Int(bytes[3 * k + 2]))
+        // A loop with typed lets: CI's older type checker (Xcode 26.6) gave up on this as one closure.
+        var read: [Pad] = []
+        for k in 0..<Self.padCount {
+            let at: Int = 3 * k
+            let sample: Int = Int(bytes[at]), note: Int = Int(bytes[at + 1]), pan: Int = Int(bytes[at + 2])
+            read.append(Pad(sample: sample, note: note, pan: pan))
         }
+        pads = read
     }
 
     public static let empty = try! CTDrumKit(bytes: [UInt8](repeating: 0, count: size))
 
-    public var bytes: [UInt8] { pads.flatMap { [UInt8($0.sample), UInt8($0.note), UInt8($0.pan)] } }
+    public var bytes: [UInt8] {
+        var out: [UInt8] = []
+        for p in pads { out += [UInt8(p.sample), UInt8(p.note), UInt8(p.pan)] }
+        return out
+    }
     public var isEmpty: Bool { pads.allSatisfy(\.isEmpty) }
 
     /// The listing's lines for the kit: `@drums none`, or 12 `@drum` lines.
@@ -93,12 +107,12 @@ extension CTSongDocument {
     public mutating func setDrumKit(_ kit: CTDrumKit) {
         func isKitLine(_ item: Item) -> Bool {
             guard case .text(let l) = item else { return false }
-            let head = l.split(whereSeparator: { $0 == " " || $0 == "\t" }).first
+            let head = l.split(whereSeparator: CTDrumKit.isBlank).first
             return head == "@drums" || head == "@drum"
         }
         func isLine(_ item: Item, _ name: String) -> Bool {
             guard case .text(let l) = item else { return false }
-            return l.split(whereSeparator: { $0 == " " || $0 == "\t" }).first == Substring(name)
+            return l.split(whereSeparator: CTDrumKit.isBlank).first == Substring(name)
         }
         var at = items.firstIndex(where: isKitLine)
         items.removeAll(where: isKitLine)
@@ -192,9 +206,12 @@ public enum CTDrumKitTrace {
                 let pan = kit.pads.indices.contains(n.semitone) ? kit.pads[n.semitone].panRegister : nil
                 if k.sample == n.sample, k.number == n.number, pan == nil || pan == k.pan { matched += 1 }
                 else {
+                    // Arguments as typed lets for CI's older type checker (Xcode 26.6).
+                    let modelSample: Int = n.sample ?? -1
+                    let panText: String = pan.map { (v: Int) -> String in String(format: "$%02X", v) } ?? "-"
                     mismatches.append(String(format: "voice %d step %d: driver SRCN $%02X note %d pan $%02X, model $%02X %d %@",
-                                             track.index, n.start, k.sample, k.number, k.pan, n.sample ?? -1, n.number,
-                                             pan.map { String(format: "$%02X", $0) } ?? "-"))
+                                             track.index, n.start, k.sample, k.number, k.pan, modelSample, n.number,
+                                             panText))
                 }
             }
         }

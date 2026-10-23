@@ -37,9 +37,14 @@ public struct CTMIDIFile: Equatable, Sendable {
             case .noteOn: return 2
             }
         }
-        self.events = events.enumerated().sorted {
-            ($0.element.tick, rank($0.element.kind), $0.offset) < ($1.element.tick, rank($1.element.kind), $1.offset)
-        }.map(\.element)
+        // Compared field by field: CI's older type checker (Xcode 26.6) struggles with tuple comparisons in closures.
+        func before(_ a: (offset: Int, element: Event), _ b: (offset: Int, element: Event)) -> Bool {
+            if a.element.tick != b.element.tick { return a.element.tick < b.element.tick }
+            let ra: Int = rank(a.element.kind), rb: Int = rank(b.element.kind)
+            if ra != rb { return ra < rb }
+            return a.offset < b.offset
+        }
+        self.events = events.enumerated().sorted(by: before).map(\.element)
     }
 
     /// Read an SMF (format 0 or 1, ticks per quarter). Note-on with
@@ -47,9 +52,14 @@ public struct CTMIDIFile: Equatable, Sendable {
     public init(bytes: [UInt8]) throws {
         func fail(_ m: String) -> CTSongError { CTSongError("MIDI: \(m)") }
         var p = 0
-        func u32(_ at: Int) -> Int { Int(bytes[at]) << 24 | Int(bytes[at + 1]) << 16 | Int(bytes[at + 2]) << 8 | Int(bytes[at + 3]) }
+        func u32(_ at: Int) -> Int {
+            var value = 0
+            for k in 0..<4 { value = value << 8 | Int(bytes[at + k]) }
+            return value
+        }
         func u16(_ at: Int) -> Int { Int(bytes[at]) << 8 | Int(bytes[at + 1]) }
-        guard bytes.count >= 14, Array(bytes[0..<4]) == Array("MThd".utf8), u32(4) >= 6 else { throw fail("not a Standard MIDI File") }
+        let magic: [UInt8] = Array("MThd".utf8)
+        guard bytes.count >= 14, Array(bytes[0..<4]) == magic, u32(4) >= 6 else { throw fail("not a Standard MIDI File") }
         let format = u16(8), count = u16(10), division = u16(12)
         guard format <= 1 else { throw fail("format \(format) files are not read (0 and 1 are)") }
         guard division & 0x8000 == 0, division > 0 else { throw fail("SMPTE time division is not read (ticks per quarter is)") }
@@ -119,7 +129,14 @@ public struct CTMIDIFile: Equatable, Sendable {
     /// A format 1 file with one track per entry (tempo events go where they
     /// are given). The tests' and the verifier's synthetic files are written so.
     public static func write(division: Int, tracks: [[Event]]) -> [UInt8] {
-        func be(_ v: Int, _ n: Int) -> [UInt8] { (0..<n).reversed().map { UInt8(v >> (8 * $0) & 0xFF) } }
+        func be(_ v: Int, _ n: Int) -> [UInt8] {
+            var out: [UInt8] = []
+            for i in (0..<n).reversed() {
+                let shifted: Int = v >> (8 * i)
+                out.append(UInt8(shifted & 0xFF))
+            }
+            return out
+        }
         func varlen(_ v: Int) -> [UInt8] {
             var out = [UInt8(v & 0x7F)], x = v >> 7
             while x > 0 { out.insert(UInt8(x & 0x7F | 0x80), at: 0); x >>= 7 }
@@ -222,7 +239,7 @@ public enum CTMIDIImport {
     /// tempo to an 8-bit accumulator and the song steps on its carry
     /// (Spc_StepTracks), so steps per second = tempo / 256 / 0.00525.
     public static func tempoByte(bpm: Double) -> (byte: Int, tempo: Int, bpm: Double) {
-        let want = bpm * Double(stepsPerQuarter) / 60 * 256 * CTSongTempoMap.secondsPerPass
+        let want: Double = bpm * Double(stepsPerQuarter) / 60 * 256 * CTSongTempoMap.secondsPerPass
         var best = (byte: 1, tempo: 1)
         for t in 1...0xFF {
             let tempo = (t + t * 0x14 / 256) & 0xFF
@@ -328,17 +345,24 @@ public enum CTMIDIImport {
             throw CTSongError("the song uses \(samples.count) samples (\(samples.map(String.init).joined(separator: ", "))); "
                               + "a song lists at most 16, numbered 1-\(CTSongISA.sampleNumberMax)")
         }
-        let kit: CTDrumKit? = drumMode ? try CTDrumKit(pads: (0..<CTDrumKit.padCount).map { k -> CTDrumKit.Pad in
-            guard o.drums.indices.contains(k) else { return .init() }
-            let d = o.drums[k]
-            return .init(sample: CTDrumKit.firstEntry + slot(d.sample), note: d.note, pan: d.pan)
-        }) : nil
+        var kit: CTDrumKit? = nil
+        if drumMode {
+            var pads: [CTDrumKit.Pad] = []
+            for k in 0..<CTDrumKit.padCount {
+                guard o.drums.indices.contains(k) else { pads.append(CTDrumKit.Pad()); continue }
+                let d: DrumPad = o.drums[k]
+                let sample: Int = CTDrumKit.firstEntry + slot(d.sample)
+                pads.append(CTDrumKit.Pad(sample: sample, note: d.note, pan: d.pan))
+            }
+            kit = try CTDrumKit(pads: pads)
+        }
         if let kit, !kit.problems(listed: samples.count).isEmpty {
             throw CTSongError(kit.problems(listed: samples.count).joined(separator: "; "))
         }
 
         // The length: every track ends at the same step, a whole number of 96-step bars.
-        let lastEnd = voices.flatMap { $0.notes.map(\.end) }.max() ?? 0
+        var lastEnd = 0
+        for v in voices { for n in v.notes { lastEnd = max(lastEnd, n.end) } }
         let total = max(96, (lastEnd + 95) / 96 * 96)
 
         // Tempo: the first at step 0 (120 BPM when the file gives none there); none after the end.
@@ -379,7 +403,9 @@ public enum CTMIDIImport {
             // Rests, notes and ties up to `to`, with tempo changes inside them split out.
             func fill(_ first: CTSongStatement, from: Int, to: Int) throws {
                 var at = from, head = first
-                let cuts = tempoAt.keys.filter { $0 > from && $0 < to }.sorted() + [to]
+                let inside: [Int] = tempoAt.keys.filter { (k: Int) -> Bool in k > from && k < to }
+                var cuts: [Int] = inside.sorted()
+                cuts.append(to)
                 for cut in cuts {
                     lines += try CTSongDocument.run(head, steps: cut - at).map(\.text)
                     if cut < to, let t = tempoAt[cut] { lines.append("    tempo \(hex(t.byte))") }
@@ -417,21 +443,34 @@ public enum CTMIDIImport {
         for v in voices { for n in v.notes { errors += [abs(Double(n.start) - n.exactStart), abs(Double(n.snappedEnd) - n.exactEnd)] } }
         let maxError = errors.max() ?? 0
         let first = tempoRows.first!
+        // The report's parts as typed lets: one initializer with these closures inline was too much
+        // for CI's older type checker (Xcode 26.6).
+        var voiceRows: [Report.Voice] = []
+        var noteCount = 0
+        for (i, v) in voices.enumerated() {
+            let keys: [Int] = v.notes.map(\.key)
+            let drums: Bool = drumMode && v.channel == percussionChannel
+            voiceRows.append(Report.Voice(voice: i, channel: v.channel + 1, notes: v.notes.count, drums: drums,
+                                          droppedFromChords: v.dropped, shortened: v.shortened,
+                                          lowest: keys.min(), highest: keys.max()))
+            noteCount += v.notes.count
+        }
+        var programList: [Report.Program] = []
+        for p in programRows.keys.sorted() {
+            guard let row = programRows[p], let at = samples.firstIndex(of: row.sample) else { continue }
+            programList.append(Report.Program(program: p, sample: row.sample, slot: at, channels: row.channels.sorted()))
+        }
+        var kitBytes: [Int]? = nil
+        if let kit { kitBytes = kit.bytes.map { (b: UInt8) -> Int in Int(b) } }
+        var errorSum: Double = 0
+        for e in errors { errorSum += e }
+        let meanError: Double = errors.isEmpty ? 0 : errorSum / Double(errors.count)
+        let scaled: Double = maxError * 60_000
+        let maxMilliseconds: Double = scaled / first.playedBPM / Double(stepsPerQuarter)
         let report = Report(
-            division: file.division, grid: o.grid,
-            voices: voices.enumerated().map { i, v in
-                let keys = v.notes.map(\.key)
-                return .init(voice: i, channel: v.channel + 1, notes: v.notes.count, drums: drumMode && v.channel == percussionChannel,
-                             droppedFromChords: v.dropped, shortened: v.shortened, lowest: keys.min(), highest: keys.max())
-            },
-            programs: programRows.keys.sorted().map { p in
-                let row = programRows[p]!
-                return .init(program: p, sample: row.sample, slot: samples.firstIndex(of: row.sample)!, channels: row.channels.sorted())
-            },
-            drumKit: kit.map { $0.bytes.map(Int.init) }, tempo: tempoRows, samples: samples,
-            notes: voices.map(\.notes.count).reduce(0, +), maxErrorSteps: maxError,
-            meanErrorSteps: errors.isEmpty ? 0 : errors.reduce(0, +) / Double(errors.count),
-            maxErrorMilliseconds: maxError * 60_000 / first.playedBPM / Double(stepsPerQuarter),
+            division: file.division, grid: o.grid, voices: voiceRows, programs: programList,
+            drumKit: kitBytes, tempo: tempoRows, samples: samples, notes: noteCount, maxErrorSteps: maxError,
+            meanErrorSteps: meanError, maxErrorMilliseconds: maxMilliseconds,
             steps: total, sequenceBytes: data.count)
         return (text, report)
     }
@@ -454,14 +493,21 @@ extension CTMIDIImport {
 
     /// `KEY:SAMPLE[:NOTE[:PAN]],...`: channel-10 key to a pad, in pad order.
     public static func drumTable(_ text: String) throws -> [DrumPad] {
-        try text.split(separator: ",").map { part in
-            let f = part.split(separator: ":").map { number(String($0)) }
-            guard (2...4).contains(f.count), !f.contains(nil), (0...127).contains(f[0]!),
-                  (1...CTSongISA.sampleNumberMax).contains(f[1]!), f.dropFirst(2).allSatisfy({ (0...0xFF).contains($0!) }) else {
+        // A loop with typed lets for CI's older type checker (Xcode 26.6).
+        var pads: [DrumPad] = []
+        for part in text.split(separator: ",") {
+            let fields: [Int?] = part.split(separator: ":").map { (s: Substring) -> Int? in number(String(s)) }
+            let f: [Int] = fields.compactMap { $0 }
+            let bytesOK: Bool = f.dropFirst(2).allSatisfy { (v: Int) -> Bool in (0...0xFF).contains(v) }
+            guard (2...4).contains(fields.count), f.count == fields.count, (0...127).contains(f[0]),
+                  (1...CTSongISA.sampleNumberMax).contains(f[1]), bytesOK else {
                 throw CTSongError("drum pads are KEY:SAMPLE[:NOTE[:PAN]] (key 0-127, sample 1-\(CTSongISA.sampleNumberMax), bytes), not \(part)")
             }
-            return DrumPad(key: f[0]!, sample: f[1]!, note: f.count > 2 ? f[2]! : CTSampleTuning.defaultRoot, pan: f.count > 3 ? f[3]! : 0x80)
+            let note: Int = f.count > 2 ? f[2] : CTSampleTuning.defaultRoot
+            let pan: Int = f.count > 3 ? f[3] : 0x80
+            pads.append(DrumPad(key: f[0], sample: f[1], note: note, pan: pan))
         }
+        return pads
     }
 
     static func number(_ s: String) -> Int? { s.hasPrefix("$") ? Int(s.dropFirst(), radix: 16) : Int(s) }

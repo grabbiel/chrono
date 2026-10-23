@@ -594,9 +594,12 @@ private func cmdMusicKitMIDI(_ args: [String]) -> Int32 {
             for (k, p) in kit.pads.enumerated() {
                 if p.isEmpty { print(String(format: "pad %2d  -", k)); continue }
                 let listed = p.slot.flatMap { s in samples.flatMap { $0.indices.contains(s) ? $0[s] : nil } }
+                // Arguments as typed lets for CI's older type checker (Xcode 26.6).
+                let listedText: String = listed.map { (n: Int) -> String in " (sample \(n))" } ?? ""
+                let panText: String = p.keepsPan ? "track's" : String(format: "$%02X", p.pan)
+                let noteName: String = CTSongTimeline.noteName(p.number())
                 print(String(format: "pad %2d  sample $%02X%@  note $%02X (%@)  pan %@", k, p.sample,
-                             listed.map { " (sample \($0))" } ?? "", p.note, CTSongTimeline.noteName(p.number()),
-                             p.keepsPan ? "track's" : String(format: "$%02X", p.pan)))
+                             listedText, p.note, noteName, panText))
             }
             let problems = kit.problems(listed: samples?.count)
             for p in problems { print("problem: \(p)") }

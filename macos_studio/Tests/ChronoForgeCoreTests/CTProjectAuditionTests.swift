@@ -6,6 +6,13 @@ import XCTest
 @testable import ChronoForgeCore
 
 final class CTProjectAuditionTests: XCTestCase {
+    /// The largest |sample|: a loop, for CI's older type checker (Xcode 26.6).
+    static func peak(_ pcm: [Int16]) -> Int {
+        var top = 0
+        for s in pcm { top = max(top, abs(Int(s))) }
+        return top
+    }
+
     /// A project whose rom.samples appends a looping 32 kHz tone as sample 63.
     func project() throws -> (CTProject, URL, [UInt8]) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ctaudition-\(UUID().uuidString).ctproj")
@@ -53,11 +60,11 @@ final class CTProjectAuditionTests: XCTestCase {
         let at = probe.aram
         XCTAssertEqual(Array(stream.bus.ram[at..<(at + brr.count)]), brr)
         let pcm = try stream.render(frames: 8000)
-        XCTAssertGreaterThan(pcm.map { abs(Int($0)) }.max() ?? 0, 1000)
+        XCTAssertGreaterThan(Self.peak(pcm), 1000)
         // The @echo row's byte 1 is the song volume (!Spc_Unk4D): at 0 the same audition is silent.
         let quiet = CTSongInstrument.audition(slot: 1, number: 60, tables: CTSongTables(samples: [7, 63], echo: [0, 0]))
         let silent = try CTProjectAudition.stream(base: rom, project: project, listing: quiet, song: 2).render(frames: 8000)
-        XCTAssertEqual(silent.map { abs(Int($0)) }.max(), 0)
+        XCTAssertEqual(Self.peak(silent), 0)
         XCTAssertEqual(files(dir), before, "an audition writes no file")
     }
 

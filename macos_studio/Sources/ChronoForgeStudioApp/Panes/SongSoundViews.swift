@@ -19,7 +19,14 @@ struct InstrumentRackView: View {
     private var samples: [Int] { model.tables?.samples ?? [] }
 
     var body: some View {
-        ScrollView(.vertical) {
+        ScrollView(.vertical) { content }
+            .onAppear(perform: reload)
+            .onChange(of: samples) { _, _ in reload() }
+            .onChange(of: model.text) { _, _ in budget = store.songBudget(target, listing: model.text) }
+    }
+
+    // The rack's column, apart from body: CI's older type checker (Xcode 26.6) is slow on deep view builders.
+    private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Instruments: @samples loads these into directory entries $20–$2F").font(.headline)
@@ -87,10 +94,6 @@ struct InstrumentRackView: View {
             overrides
         }
         .padding()
-        }
-        .onAppear(perform: reload)
-        .onChange(of: samples) { _, _ in reload() }
-        .onChange(of: model.text) { _, _ in budget = store.songBudget(target, listing: model.text) }
     }
 
     /// The ROM's samples and the ones rom.samples appends.
@@ -185,14 +188,19 @@ struct DrumKitView: View {
     }
 
     private func uses(_ k: Int) -> Int {
-        (model.timeline?.tracks ?? []).flatMap(\.notes).filter { $0.drum && $0.semitone == k }.count
+        let tracks: [CTSongTimeline.Track] = model.timeline?.tracks ?? []
+        var count = 0
+        for t in tracks { for n in t.notes where n.drum && n.semitone == k { count += 1 } }
+        return count
     }
 
     private func name(_ slot: Int) -> String {
         guard samples.indices.contains(slot) else { return String(format: "$%02X (not listed)", CTDrumKit.firstEntry + slot) }
         let n = samples[slot]
         let id = placed.first { $0.number == n }?.id
-        return String(format: "$%02X: sample %d", CTDrumKit.firstEntry + slot, n) + (id.map { " (\($0))" } ?? "")
+        let label: String = String(format: "$%02X: sample %d", CTDrumKit.firstEntry + slot, n)
+        guard let id else { return label }
+        return label + " (\(id))"
     }
 
     @ViewBuilder private func pad(_ k: Int, _ kit: CTDrumKit) -> some View {

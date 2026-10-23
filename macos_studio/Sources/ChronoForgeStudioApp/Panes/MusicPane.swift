@@ -203,6 +203,13 @@ private struct MIDIImportSheet: View {
         return (programs.sorted(), keys.sorted(), channels)
     }
 
+    /// "1 (12 notes), 10 (4 notes)": its own function for CI's older type checker (Xcode 26.6).
+    private func channelList(_ channels: [Int: Int]) -> String {
+        var parts: [String] = []
+        for c in channels.keys.sorted() { parts.append("\(c) (\(channels[c] ?? 0) notes)") }
+        return parts.joined(separator: ", ")
+    }
+
     private var options: CTMIDIImport.Options {
         var o = CTMIDIImport.Options()
         // Every program the file plays maps to what its stepper shows (sample 1 until changed).
@@ -227,7 +234,7 @@ private struct MIDIImportSheet: View {
             Section(url.lastPathComponent) {
                 switch file {
                 case .success(let f)?:
-                    Text("format \(f.format), \(f.division) ticks a quarter; channels " + u.channels.keys.sorted().map { "\($0) (\(u.channels[$0]!) notes)" }.joined(separator: ", "))
+                    Text("format \(f.format), \(f.division) ticks a quarter; channels \(channelList(u.channels))")
                         .font(.caption)
                 case .failure(let e)?: Text("\(e)").foregroundStyle(.red)
                 case nil: ProgressView()
@@ -292,13 +299,20 @@ private struct MIDIImportSheet: View {
     }
 
     private func summary(_ r: CTMIDIImport.Report) -> String {
-        var lines = r.voices.map { v in
-            "voice \(v.voice): channel \(v.channel)\(v.drums ? " (drum kit)" : ""), \(v.notes) notes"
-                + (v.droppedFromChords > 0 ? ", \(v.droppedFromChords) chord notes dropped" : "")
+        // Built line by line for CI's older type checker (Xcode 26.6).
+        var lines: [String] = []
+        for v in r.voices {
+            let kit: String = v.drums ? " (drum kit)" : ""
+            var line: String = "voice \(v.voice): channel \(v.channel)\(kit), \(v.notes) notes"
+            if v.droppedFromChords > 0 { line += ", \(v.droppedFromChords) chord notes dropped" }
+            lines.append(line)
         }
-        lines += r.tempo.map { String(format: "step %d: %.1f BPM → tempo $%02X (plays %.1f)", $0.step, $0.bpm, $0.byte, $0.playedBPM) }
+        for t in r.tempo {
+            lines.append(String(format: "step %d: %.1f BPM → tempo $%02X (plays %.1f)", t.step, t.bpm, t.byte, t.playedBPM))
+        }
+        let sampleList: String = r.samples.map { (n: Int) -> String in String(n) }.joined(separator: " ")
         lines.append(String(format: "@samples %@; %d steps, %d bytes; rounding ≤ %.2f steps (%.1f ms)",
-                            r.samples.map(String.init).joined(separator: " "), r.steps, r.sequenceBytes, r.maxErrorSteps, r.maxErrorMilliseconds))
+                            sampleList, r.steps, r.sequenceBytes, r.maxErrorSteps, r.maxErrorMilliseconds))
         return lines.joined(separator: "\n")
     }
 }
