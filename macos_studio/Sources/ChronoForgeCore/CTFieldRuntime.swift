@@ -192,6 +192,7 @@ public final class CTFieldRuntime {
         var w = vm.wram
         w.setWord(WRAM.locId, location)
         initLoadState(&w)
+        audioSetup(&w)                                              // LoadLocation's sound step
         for a in WRAM.mapPage..<(WRAM.mapPage + 0x100) { w[a] = 0 }  // LocLoad_ClearPage1D00
         try loadMap(&w)
         vm.wram = w
@@ -240,6 +241,28 @@ public final class CTFieldRuntime {
         }
         w.setWord(WRAM.padUnk00F6Latch, 0)
         for s in [WRAM.partyObjSlot, WRAM.partyObjSlot1, WRAM.partyObjSlot2] { w[s] = 0x80 }
+    }
+
+    /// LocLoad_AudioSetup: with Audio_Unk7F01ED set, Audio_CmdPlayMusic with
+    /// Menu_Config1E; else Audio_CmdUnk81 (0, $FF, $FF), then the location's
+    /// music (LocRom.Music, bit 7: no change), kept in Menu_Config1E and
+    /// played. The commands join `audio` at the load's frame.
+    func audioSetup(_ w: inout WRAMModel) {
+        func send(_ id: UInt8) {
+            w[0x7E1E00] = id                                        // Audio_CmdId
+            audio.append((frameCount, CTEventVM.AudioCommand(id: id, arg0: w[0x7E1E01], arg1: w[0x7E1E02], arg2: w[0x7E1E03])))
+        }
+        var track = w[0x7E29AE]                                     // Menu_Config1E
+        if w[0x7F01ED] == 0 {                                       // Audio_Unk7F01ED
+            w[0x7E1E01] = 0; w[0x7E1E02] = 0xFF; w[0x7E1E03] = 0xFF
+            send(0x81)                                              // Audio_CmdUnk81
+            let music = UInt8(map.header.music & 0xFF)
+            if music & 0x80 != 0 { return }
+            w[0x7E29AE] = music
+            track = music
+        }
+        w[0x7E1E01] = track
+        send(0x10)                                                  // Audio_CmdPlayMusic
     }
 
     /// Map_InitMasksAndLimits and the tile planes: Map_TileHiBits/AttrA/AttrB
@@ -753,6 +776,8 @@ public final class CTFieldRuntime {
     public struct Summary: Codable, Equatable, Sendable {
         public var location: Int, frames: Int, objects: [ObjectState], messages: [Message], warps: [Warp]
         public var audio: Int, leader: Int?, level: Int
+        /// The track the last Audio_CmdPlayMusic asked for (nil: none yet).
+        public var music: Int?
         /// Menu_PartyOrder (9 places, nil empty), the gold, and the opcodes' party / item / gold changes.
         public var partyOrder: [Int?], gold: Int, changes: [String]
         public var limitations: [String]
@@ -796,6 +821,12 @@ public final class CTFieldRuntime {
         }
     }
 
+    /// The track the last Audio_CmdPlayMusic asked for (LocLoad_AudioSetup
+    /// or `$EA`), nil before one.
+    public var music: Int? {
+        audio.last { $0.command.id == 0x10 }.map { Int($0.command.arg0) }
+    }
+
     /// The 24-bit gold (Battle_Gold).
     public var gold: Int { Int(vm.wram[WRAM.goldHi]) << 16 | vm.wram.word(WRAM.gold) }
 
@@ -811,7 +842,7 @@ public final class CTFieldRuntime {
         let leader = Int(vm.wram[WRAM.partyObjSlot])
         return Summary(location: location, frames: frameCount, objects: (0..<vm.pack.objectCount).map(objectState),
                        messages: messages, warps: warps, audio: audio.count, leader: leader & 0x80 == 0 ? leader / 2 : nil,
-                       level: Int(vm.wram[WRAM.fieldUnk55]), partyOrder: partyOrder, gold: gold,
+                       level: Int(vm.wram[WRAM.fieldUnk55]), music: music, partyOrder: partyOrder, gold: gold,
                        changes: changes.map { c in
                            String(format: "frame %d obj %d $%04X %02X: %@", c.frame, c.change.slot / 2, c.change.offset,
                                   Int(c.change.opcode), c.change.what)

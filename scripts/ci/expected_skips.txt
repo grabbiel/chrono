@@ -120,3 +120,4 @@ ChronoForgeCoreTests.CTTreasureTests/testAGrownTreasureRomAndANewLocationBuild  
 ChronoForgeCoreTests.CTFieldRuntimeTests/testARedrawCopyChangesTheMapsPicture                  skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testThePaletteOpcodesChangeTheColours                skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testTheCameraComesBackToTheLeaderAfterAScrollTo      skip      # local ROM
+ChronoForgeCoreTests.CTFieldRuntimeTests/testTheLoadAsksForTheLocationsMusic      skip      # local ROM

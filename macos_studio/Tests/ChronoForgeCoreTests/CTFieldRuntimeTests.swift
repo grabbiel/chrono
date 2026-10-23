@@ -141,6 +141,23 @@ final class CTFieldRuntimeTests: XCTestCase {
         XCTAssertEqual(field.vm.wram.word(WRAM.locReturnId), 74)
     }
 
+    func testTheLoadAsksForTheLocationsMusic() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 7)
+        try field.start()                                                   // LocLoad_AudioSetup: $81, then the music
+        let music = field.map.header.music
+        XCTAssertLessThan(music, 0x80)
+        XCTAssertEqual(field.audio.map { Int($0.command.id) }, [0x81, 0x10])
+        XCTAssertEqual(field.audio[0].command, CTEventVM.AudioCommand(id: 0x81, arg0: 0, arg1: 0xFF, arg2: 0xFF))
+        XCTAssertEqual(field.audio[1].command.arg0, UInt8(music))
+        XCTAssertEqual(field.music, music)
+        XCTAssertEqual(field.vm.wram[0x7E29AE], UInt8(music))              // Menu_Config1E keeps it
+        let again = try CTFieldRuntime(rom: try rom(), location: 7)
+        again.vm.wram[0x7F01ED] = 1; again.vm.wram[0x7E29AE] = 0x22        // Audio_Unk7F01ED: Menu_Config1E's track
+        try again.start()
+        XCTAssertEqual(again.audio.map { Int($0.command.id) }, [0x10])
+        XCTAssertEqual(again.music, 0x22)
+    }
+
     func testDebuggerLogsFlagChangesAndStopsOnBreakpoints() throws {
         let field = try CTFieldRuntime(rom: try rom(), location: 29)
         let dbg = CTFieldDebugger(field: field)

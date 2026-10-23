@@ -1,7 +1,8 @@
 // RuntimeWindow.swift — Module 9's Play window: a ROM location running in
 // the embedded runtime (CTFieldRuntime under CTFieldDebugger) on a Metal
 // SNESPPUView, with the dialogue box over it, keyboard control, pause and
-// step, and the inspector (RuntimeInspectorViews.swift). Opened by "Play" in
+// step, the location's music with a mute toggle, and the inspector
+// (RuntimeInspectorViews.swift). Opened by "Play" in
 // the Maps, Scenes and Story panes, or `--play N` at launch.
 import SwiftUI
 import AppKit
@@ -41,9 +42,10 @@ struct RuntimeWindow: View {
                     }
                     VStack(alignment: .leading) {
                         Picker("Inspector", selection: $tab) {
-                            ForEach(["Objects", "Flags", "Breakpoints", "Changes"], id: \.self) { Text($0) }
+                            ForEach(["Objects", "State", "Flags", "Breakpoints", "Changes"], id: \.self) { Text($0) }
                         }.pickerStyle(.segmented).labelsHidden()
                         switch tab {
+                        case "State": RuntimeStateView(session: session)
                         case "Flags": RuntimeFlagsView(session: session)
                         case "Breakpoints": RuntimeBreakpointsView(session: session)
                         case "Changes": RuntimeChangesView(session: session)
@@ -61,7 +63,11 @@ struct RuntimeWindow: View {
         .frame(minWidth: 1000, minHeight: 560)
         .navigationTitle(String(format: "Play loc_%03d", session?.location ?? location))
         .onAppear { load(); installKeys() }
-        .onDisappear { if let m = keyMonitor { NSEvent.removeMonitor(m) }; keyMonitor = nil }
+        .onDisappear {
+            if let m = keyMonitor { NSEvent.removeMonitor(m) }
+            keyMonitor = nil
+            session?.stopMusic()
+        }
     }
 
     private var controls: some View {
@@ -84,9 +90,27 @@ struct RuntimeWindow: View {
                 }
                 Text("frame \(session.field.frameCount)").font(.caption.monospaced()).foregroundStyle(.secondary)
                     .id(session.revision)
+                Divider().frame(height: 18)
+                Toggle(isOn: Binding(get: { session.musicOn }, set: { session.musicOn = $0 })) {
+                    Label("Music", systemImage: session.musicOn ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                }
+                .toggleStyle(.button)
+                .help("The song the location and its $EA commands ask for, through the Studio's audio engine")
+                Text(musicStatus(session)).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                    .id(session.revision)
             }
             Spacer()
         }
+    }
+
+    /// The field's song and what the audio engine is doing with it.
+    private func musicStatus(_ session: RuntimeSession) -> String {
+        guard let song = session.field.music else { return "no song" }
+        let asked = String(format: "song $%02X", song)
+        guard session.musicOn else { return asked + " (muted)" }
+        if store.audio.isLoading { return asked + ": loading…" }
+        if let error = store.audio.error { return asked + ": \(error)" }
+        return store.audio.nowPlaying.map { "playing \($0)" } ?? asked
     }
 
     private func load() {

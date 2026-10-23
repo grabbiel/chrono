@@ -1,9 +1,11 @@
 // ProjectStore+Runtime.swift — the Play window's session: a CTFieldRuntime
 // for one ROM location under a CTFieldDebugger, the project's map picture
-// for it, the keys held, and the flags to start with (docs/runtime.md).
+// for it, the keys held, the flags to start with, and the field's music
+// through the Studio's AKAOAudioEngine (docs/runtime.md).
 import Foundation
 import AppKit
 import ChronoForgeCore
+import ChronoForgeAudio
 
 @MainActor
 @Observable
@@ -23,6 +25,11 @@ final class RuntimeSession {
     /// Story bytes to set before Evt_InitObjects runs (address -> value).
     var startFlags: [Int: UInt8] = [:]
     var party: [UInt8] = [0, 0x80, 0x80]
+    /// Play the song the field asks for (Audio_CmdPlayMusic); off stops it.
+    var musicOn = LaunchArguments.value("--play-music") != "off" { didSet { syncMusic() } }
+    /// The song this session started, while it plays, and every title it gave the engine.
+    private(set) var playing: Int?
+    private var titles: Set<String> = []
     private var baseKey: (x: Int, y: Int, revision: Int)?
     private var baseFrame: PPUFrame?
     private var boxKey: Int?
@@ -53,6 +60,30 @@ final class RuntimeSession {
         status = "loc_\(String(format: "%03d", location)) loaded: \(f.vm.pack.objectCount) objects"
         boxKey = nil; box = nil
         revision += 1
+        syncMusic()
+    }
+
+    /// Starts the field's song when it changes (one asked for again keeps
+    /// playing, not restarted), or stops ours when the music is off.
+    func syncMusic() {
+        guard musicOn, let song = field.music else { return stopMusic() }
+        guard song != playing else { return }
+        playing = song
+        let rom = rom, title = String(format: "loc_%03d: song $%02X", location, song)
+        titles.insert(title)
+        Task { [weak self] in
+            guard let self, self.musicOn, self.playing == song else { return }   // muted or changed meanwhile
+            await self.store.audio.play(title) { try SPCStream.ctSong(rom: rom, song: song) }
+        }
+    }
+
+    /// Stops our song, or our load still in flight (not a song another pane
+    /// started since): `stop()` also discards a pending load.
+    func stopMusic() {
+        guard playing != nil else { return }
+        playing = nil
+        let ours = store.audio.nowPlaying.map { titles.contains($0) } ?? true
+        if ours || store.audio.isLoading { store.audio.stop() }
     }
 
     private func loadPicture() {
@@ -71,6 +102,7 @@ final class RuntimeSession {
                     + String(format: "$%04X (op $%02X)", hit.offset, hit.opcode)
             }
             if field.location != before { location = field.location; loadPicture() }
+            syncMusic()
         } catch {
             running = false
             status = "stopped: \(error)"

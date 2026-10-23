@@ -80,15 +80,16 @@ MAP_OPS = (0xE4, 0xE5)
 PAL_OPS = (0x2E, 0x33, 0x88)
 SLOW_OPS = (0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83)   # sprite loads, unpacking
 
-# The last full `check` (2026-10-22, default --per-op 24 --states 2): per family the opcodes
-# modelled and verified, the operand sets the packs use, and the cases (agree, disagree).
-# $3B, $3C and $5D are modelled but no pack uses them. One $83 case (EvtPack_284 $08B6) is
-# unverifiable: the ROM handler runs past the interpreter's step limit. test_event_vm.py checks
+# The last full `check` (2026-10-23, default --per-op 24 --states 2, 8 jobs: 922 s): per family
+# the opcodes modelled and verified, the operand sets the packs use, and the cases (agree,
+# disagree). $3B, $3C and $5D are modelled but no pack uses them. Both $83 states of EvtPack_284
+# $08B6 are unverifiable: the ROM handler runs past the interpreter's step limit (one RNG draws
+# the states in opcode order, so opcodes added below $83 change them). test_event_vm.py checks
 # these against CTEventVM.families.
 EVIDENCE = {
     "animation": {"opcodes": 7, "verified": 7, "operandSets": 99, "cases": 336, "agree": 336, "disagree": 0},
     "calls": {"opcodes": 6, "verified": 6, "operandSets": 144, "cases": 288, "agree": 288, "disagree": 0},
-    "characters": {"opcodes": 11, "verified": 11, "operandSets": 69, "cases": 530, "agree": 529, "disagree": 0},
+    "characters": {"opcodes": 11, "verified": 11, "operandSets": 69, "cases": 530, "agree": 528, "disagree": 0},
     "conditions": {"opcodes": 26, "verified": 24, "operandSets": 233, "cases": 1161, "agree": 1161, "disagree": 0},
     "field": {"opcodes": 9, "verified": 9, "operandSets": 126, "cases": 432, "agree": 432, "disagree": 0},
     "flow": {"opcodes": 18, "verified": 18, "operandSets": 177, "cases": 864, "agree": 864, "disagree": 0},
@@ -853,6 +854,8 @@ def routines(args):
         print(f"{name:<15} {row['agree']:5d} of {row['cases']:5d} cases agree  {row['disagree']} disagree")
         for m in row["failures"][:3]:
             print(f"  {m}")
+    clean = sum(1 for row in report.values() if row["agree"] == row["cases"])
+    print(f"{clean} of {len(report)} routines agree with the ROM in every case")
     return 1 if any(row["disagree"] for row in report.values()) else 0
 
 

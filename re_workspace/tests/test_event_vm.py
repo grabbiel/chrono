@@ -102,7 +102,7 @@ def test_recorded_evidence_matches_the_swift_families():
     modelled = sum(f["opcodes"] for f in vm.EVIDENCE.values())
     assert modelled == len({op for ops in families.values() for op in ops}) == 206
     assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 203
-    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 9979
+    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 9978
     assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 9980
     assert vm.EVIDENCE_UNMODELLED["instructions"] < vm.EVIDENCE_UNMODELLED["instructionsInPacks"] // 10
 

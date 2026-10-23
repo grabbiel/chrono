@@ -1,5 +1,6 @@
 // RuntimeInspectorViews.swift — the Play window's inspector: each object's
-// function, call level, position, wait state and call stack; the story
+// function, call level, position, wait state and call stack; the party,
+// gold, items, palette animation and stopped objects (State); the story
 // flags by registry symbol, highlighted when they change, with the
 // instruction that changed them, editable as the flags a run starts with;
 // breakpoints on a flag or an instruction; and the change log.
@@ -178,5 +179,101 @@ struct RuntimeChangesView: View {
             }
             .font(.caption.monospaced())
         }
+    }
+}
+
+/// The state the opcodes change: the party (Menu_PartyOrder), gold and
+/// items with the logged changes, the palette animator's records and the
+/// colours the palette opcodes wrote, and the objects stopped (unmodelled
+/// opcodes and the like) with why.
+struct RuntimeStateView: View {
+    let session: RuntimeSession
+
+    private static let animKinds = ["none", "ROM frames", "rotate", "rotate up", "fade white", "fade",
+                                    "pulse white", "pulse"]
+
+    var body: some View {
+        let _ = session.revision
+        let field = session.field, vm = field.vm
+        List {
+            Section("Party") {
+                let order = field.partyOrder
+                HStack(spacing: 14) {
+                    ForEach(0..<9, id: \.self) { k in
+                        VStack(spacing: 2) {
+                            Text(order[k].map { "PC \($0)" } ?? "—").monospaced()
+                            Text(k < 3 ? "active" : "reserve").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            Section("Gold and items") {
+                Text("gold \(field.gold)").monospaced()
+                let items = field.inventory
+                Text(items.isEmpty ? "no items" : items.prefix(40).map { String(format: "$%02X×%d", $0.item, $0.count) }
+                        .joined(separator: "  "))
+                    .font(.caption.monospaced()).textSelection(.enabled)
+                if field.changes.isEmpty {
+                    Text("No party, item or gold changes yet.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(Array(field.changes.suffix(100).enumerated().reversed()), id: \.offset) { _, c in
+                    HStack {
+                        Text("frame \(c.frame)").frame(width: 80, alignment: .leading)
+                        Text(c.change.what)
+                        Spacer()
+                        Text(String(format: "obj %d $%04X op $%02X", c.change.slot / 2, c.change.offset, c.change.opcode))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption.monospaced())
+                }
+            }
+            Section("Palette animation") {
+                ForEach(0..<WRAM.fieldAnimBCount, id: \.self) { k in
+                    let at = WRAM.fieldAnimB + k * WRAM.fieldAnimBSize
+                    let kind = Int(vm.wram[at] >> 4)
+                    if kind != 0 {
+                        HStack {
+                            Text("record \(k)").frame(width: 70, alignment: .leading)
+                            Text(kind < Self.animKinds.count ? Self.animKinds[kind] : "frame list").frame(width: 90, alignment: .leading)
+                            Text("frame \(vm.wram[at + 3]), tick \(vm.wram[at + 4])/\(vm.wram[at + 5])")
+                            Spacer()
+                            Text((0..<WRAM.fieldAnimBSize).map { String(format: "%02X", vm.wram[at + $0]) }.joined(separator: " "))
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.caption.monospaced())
+                    }
+                }
+                let written = vm.paletteWrites.sorted()
+                Text(written.isEmpty ? "The palette opcodes wrote no colours yet."
+                                     : "\(written.count) colours written by the palette opcodes and their records:")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !written.isEmpty {
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(14), spacing: 2), count: 16), spacing: 2) {
+                        ForEach(written.prefix(256), id: \.self) { c in
+                            Self.colour(vm.wram.word(WRAM.palCgramBuf + 2 * c))
+                                .frame(width: 14, height: 14)
+                                .help(String(format: "colour %d: $%04X", c, vm.wram.word(WRAM.palCgramBuf + 2 * c)))
+                        }
+                    }
+                }
+            }
+            Section("Stopped objects") {
+                if vm.stopped.isEmpty {
+                    Text("None: every object runs modelled code.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(vm.stopped.keys.sorted(), id: \.self) { slot in
+                    HStack(alignment: .top) {
+                        Text("obj \(slot / 2)").frame(width: 52, alignment: .leading)
+                        Text(vm.stopped[slot] ?? "").foregroundStyle(.red)
+                    }
+                    .font(.caption.monospaced())
+                }
+            }
+        }
+    }
+
+    /// A BGR555 colour.
+    static func colour(_ v: Int) -> Color {
+        Color(red: Double(v & 0x1F) / 31, green: Double(v >> 5 & 0x1F) / 31, blue: Double(v >> 10 & 0x1F) / 31)
     }
 }

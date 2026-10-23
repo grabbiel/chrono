@@ -274,6 +274,11 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_event_vm.py check >/tmp/verify_event_vm.log 2>&1
   RC=$?
   note "event VM vs ROM handlers ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_event_vm.log | tail -1) pack instructions modelled)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  # The field's routines (the palette animator, the camera, the leader's probes) in the interpreter
+  # against CTEventVM on seeded map pages, objects and tile planes.
+  $PY re_workspace/tools/ct_event_vm.py routines >/tmp/verify_event_vm_routines.log 2>&1
+  RC=$?
+  note "field routines vs ROM ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_event_vm_routines.log | tail -1) routines agree in every case)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   { macos_studio/.build/debug/chronoforge runtime run re_workspace/ct_clean.sfc 7 --frames 45 --input "0-19 up; 20 a"
     macos_studio/.build/debug/chronoforge runtime run re_workspace/ct_clean.sfc 74 --frames 60 --input "0-59 up"; } >/tmp/verify_runtime.log 2>&1
   RC=$?
