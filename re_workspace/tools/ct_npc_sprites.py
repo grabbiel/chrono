@@ -53,6 +53,7 @@ No ROM bytes are kept here: everything is read from the user's ROM.
 
 import argparse
 import collections
+import hashlib
 import json
 import struct
 import sys
@@ -103,10 +104,11 @@ _UNPACKED = {}
 def pack(rom, gfx):
     """(tiles as 32-byte strings, mode, stream bytes) of graphics entry `gfx`, unpacked as Decomp_ToWram does."""
     at = u24(rom, TILES_PTR + 3 * gfx)
-    key = (id(rom), at)
+    window = bytes(rom[pc(at):pc(at) + 0x10000])
+    key = (at, hashlib.sha1(window).digest())              # by content: a built copy may differ at the same address
     if key not in _UNPACKED:
         import ct_tilesets
-        data, mode, end = ct_tilesets.unpack_bytes(rom[pc(at):pc(at) + 0x10000])
+        data, mode, end = ct_tilesets.unpack_bytes(window)
         if len(data) % TILE_BYTES:
             raise ValueError(f"graphics {gfx} unpacks to {len(data)} bytes, not whole tiles")
         _UNPACKED[key] = ([bytes(data[TILE_BYTES * t:TILE_BYTES * (t + 1)]) for t in range(len(data) // TILE_BYTES)],
@@ -207,6 +209,26 @@ def decode_npc(rom, r):
         "animationList": [a for a in lists if all(i < n for i in a["frames"])],
         "slotTile": SLOT_TILE[rec["size"]],
     }
+
+
+def long_of(text):
+    """$BB:AAAA as a long address."""
+    return int(text[1:3], 16) << 16 | int(text[4:], 16)
+
+
+def npc_spans(rom, r):
+    """The spans an NPC write-back may touch for record r: its frame records,
+    palette, frame-id rows (4 x stride) and durations (stride), and its pack."""
+    d = decode_npc(rom, r)
+    frames_at = pc(long_of(d["frames"]["address"]))
+    ids = pc(long_of(d["animations"]["frameIds"]))
+    durs = pc(long_of(d["animations"]["durations"]))
+    pal = pc(long_of(d["palette"]["address"]))
+    stride = d["animations"]["stride"]
+    at = pc(long_of(d["tiles"]["pointer"]))
+    return {"frames": range(frames_at, frames_at + d["layout"]["recordBytes"] * d["frames"]["count"]),
+            "palette": range(pal, pal + PAL_BYTES), "frameIds": range(ids, ids + 4 * stride),
+            "durations": range(durs, durs + stride), "pack": range(at, at + d["tiles"]["packedBytes"])}
 
 
 def palette(rom, r):

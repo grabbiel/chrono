@@ -276,6 +276,12 @@ if [ -f macos_studio/Package.swift ]; then
   RC=$?
   note "NPC sprite import ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_npc_sprite_import.log | tail -1) checks: CLI = ct_npc_sprites.py decode)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   rm -rf "$NPC_DIR"
+  # NPC write-back: identical rebuild of every PC, enemy and NPC sprite, edits (in place, relocated, shared
+  # with an NPC and with an enemy) checked by ct_rom_check.py, the field's loader, builders, lookup and tick
+  # on the built ROM, damaged copies rejected, refusals.
+  $PY macos_studio/tools/verify_npc_sprite_build.py >/tmp/verify_npc_sprite_build.log 2>&1
+  RC=$?
+  note "NPC sprite write-back ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_npc_sprite_build.log | tail -1) field-routine claims on the built ROM)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
   # Audio: project samples and a composed song written back (identical rebuild, replaced and
   # appended samples, the ROM's song load and the S-SMP driver on the built ROM, damage, budgets).
   $PY macos_studio/tools/verify_audio_build.py >/tmp/verify_audio_build.log 2>&1

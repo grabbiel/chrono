@@ -158,7 +158,7 @@ final class CTNPCSpritesTests: XCTestCase {
     }
 
     /// Local ROM: every NPC record the event packs load imports, saves, validates
-    /// and draws its first frame; an unedited one builds without a write.
+    /// and draws its first frame; unedited ones build without a write.
     func testImportEveryNPC() throws {
         let rom = [UInt8](try Repo.romData())
         let raw = rom.count == CTROMBuilder.romSize + 512 ? Array(rom.dropFirst(512)) : rom
@@ -199,5 +199,12 @@ final class CTNPCSpritesTests: XCTestCase {
             }
             XCTAssertGreaterThan(lit, 0, "record \(r)")
         }
+        // rom.sprites builds unedited NPC sprites without a write (CTNPCSpritePatchTests edits them).
+        var building = loaded
+        building.project.rom = Project.ROMBuild(sprites: ["npc_007", "npc_067"])
+        let (built, report) = try CTROMBuilder.build(base: raw, project: building)
+        XCTAssertEqual(built, raw)
+        XCTAssertEqual(report.npcSprites?.map(\.set), [7, 67])
+        XCTAssertNil(report.enemySprites)
     }
 }

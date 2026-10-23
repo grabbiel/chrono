@@ -402,10 +402,11 @@ count, cells, OBJs at 32p + 2q, palette, animations, sheet tile 0) and then:
    rewritten as `$C0:0000 | pc`.
 
    A relocation is refused if it would change the measured end of any raw tile
-   block: the PC sets 0–6, the graphics of records `$F8` and up, and the
-   graphics of every non-empty NPC record (`$E4:F000` 7–255). A raw block's size
-   is the distance to the next pointer in its bank. The old span is not
-   reclaimed.
+   block: the PC sets 0–6 and the graphics of records `$F8` and up. A raw
+   block's size is the distance to the next pointer in its bank. NPC records'
+   graphics are not raw blocks: opcode `$82` always unpacks them, and the event
+   packs use `$81` (raw tiles) only for records 0–6
+   ([NPC sprites](#npc-sprites)). The old span is not reclaimed.
 
 Cells past the graphics or with bits 11–13 are refused, unless the base ROM's
 cell holds the same word: records 117 and 253 have such cells, and the build
@@ -430,10 +431,11 @@ agrees:
   playable set c" or "differ from sprite X's as built".
 - For any other part, every enemy record naming it (0–254, all-zero records
   included, since each id is an enemy the battle can show) must be listed with
-  identical content, or the build refuses and names the sharers. An NPC record
-  naming it blocks the edit. So do the layout-3 records (111, 147 and 215),
-  which cannot be listed: their parts, such as palette 208, which records 110
-  and 216 also use, stay frozen.
+  identical content, or the build refuses and names the sharers. So must every
+  non-empty NPC record naming it (`$E4:F000` 7–255), listed as a `ct-npc`
+  sprite ([NPC write-back](#npc-write-back)). The layout-3 records (111, 147
+  and 215) cannot be listed: their parts, such as palette 208, which records
+  110 and 216 also use, stay frozen.
 
 A PC write-back still changes the parts `$F8`–`$FE` show. The build does not
 update those enemies' project files. Instead it lists each unlisted enemy
@@ -516,8 +518,9 @@ The sprite list has an All / PC / Enemy / NPC / Other filter. `--select <id>` an
   animation counts, layout and parts (no re-pointing a record to another pack
   or palette). Packs may grow into free space; frame sets may not.
 - An edit to a shared part needs every sharer listed with the same edit
-  ([Write-back](#write-back)). Parts that NPC records or layout-3 records show
-  cannot change.
+  ([Write-back](#write-back)). NPC records are listed as `ct-npc` sprites
+  ([NPC write-back](#npc-write-back)); parts that layout-3 records show cannot
+  change.
 - An imported enemy sprite is a snapshot of the clean ROM. A PC write-back
   warns about records `$F8`–`$FE` (`spriteWarnings`) but does not update their
   project files.
@@ -653,3 +656,60 @@ load the record. An NPC sprite's animations play with the field's clock
 (`CTNPCSpriteROM.fieldStep`): the first tick steps on, a `$FF` marker shows
 step 0 again for its duration, and the list repeats. Other sprites keep
 `SpriteEditing.step`.
+
+### NPC write-back
+
+`rom.sprites` accepts `ct-npc` sprites (`CTNPCSpritePatch`). They go through
+the enemy write-back (`CTEnemySpritePatch.applyAll`) in the same pass as the
+`ct-enemy` sprites, so one sharer rule covers both families:
+
+- **Kept as they are:** the record's size and shape. The frame count, the
+  cells per frame (8 × 2 or 16 × 2), the OBJs (16×16 at tile 2n, palette 0)
+  and the stream (at `$188` or `$C0`) stay. So does the animation set's facing
+  stride: a list may not run past its facing's entries. The record itself
+  (`$E4:F000` + 5r) is never written.
+- **Written in place:** frames, animation rows (entry e of facing f at
+  frameIds + f × stride + e, the durations shared) and colours 1–12.
+- **Tiles:** the pack is re-encoded with `LZSS.compress` in its own mode. It
+  goes in place when it fits its old stream, otherwise into confirmed free
+  space with its `$E4:2000` pointer rewritten. Tile 0 must stay as imported:
+  the Studio draws cell word 0 blank, although the field copies tile 0 as it
+  is.
+- **Sharing:** a changed part needs every record that names it listed with
+  the same edit. That means every non-empty NPC record (7–255, including the
+  58 that no pack loads; `--npc N` imports any of them) and every enemy record.
+  A part of a PC set (tiles, frames and animations 0–6, and the palettes the
+  PC records name: NPCs use palettes 0, 1, 3, 5 and 6) needs that set's sprite
+  in `rom.sprites` with the same result. The refusal names the sharers.
+- **Decoded back:** every listed record is decoded from a scratch image of the
+  result before anything is written. Only changes are written, so an unedited
+  import rebuilds the base ROM byte for byte.
+- **Report:** `report.npcSprites`. A PC write-back that changes a part an
+  imported but unlisted NPC sprite shows adds a `spriteWarnings` line naming
+  the record.
+
+`ct_rom_check.py` checks the reported records against the built ROM, through
+its zones (frames, palette, frame-id and duration rows, pack, relocated
+pointer) and its decode. Unreported NPC records must decode as before, unless
+they show a part of a reported PC set.
+
+`macos_studio/tools/verify_npc_sprite_build.py`:
+
+1. Imports every PC, enemy and NPC sprite and checks that the unedited
+   build of all 450 is byte-identical to the clean ROM.
+2. Builds edits together:
+   - record 12 edited in place;
+   - record 23's pack moved to free space;
+   - one pixel painted into the pack that records 14 and 18 share;
+   - one pixel painted into the pack that record 9 shares with enemy 244;
+   - a colour of Ayla's palette, which records 13 and 101 show (two
+     warnings).
+3. Checks the result with `ct_rom_check.py` and decodes it back against
+   the edited project.
+4. Runs `Evt_Op82_InitWramSprite`, the frame builders, the lookup and the
+   tick on the built ROM in ChronoRET's interpreter.
+5. Makes the checker reject 7 damaged copies, and the CLI refuse 15 edits.
+
+The Studio's ROM panel shows an NPC sprite's pack budget and sharers, as for
+an enemy. The Validator applies the `ct-npc` format rules to `rom.sprites`
+entries and warns about unlisted sharers.

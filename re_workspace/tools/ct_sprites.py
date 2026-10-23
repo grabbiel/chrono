@@ -1109,14 +1109,10 @@ def enemy_users(rom, offset, value):
 
 def measured_entries(rom):
     """$E4:2000 entries read as raw tiles, whose size is the distance to the
-    next pointer in the bank: the PC sets, the graphics of records $F8 and up,
-    and (conservatively) every graphics an NPC record names."""
-    out = set(range(SETS)) | {enemy_record(rom, i)["gfx"] for i in range(ROM_GFX_MIN, ENEMY_IDS)}
-    for i in range(SETS, POINTERS):
-        b = rom[pc(SPR_REC + SPR_REC_BYTES * i):pc(SPR_REC + SPR_REC_BYTES * (i + 1))]
-        if any(b):
-            out.add(b[0])
-    return sorted(out)
+    next pointer in the bank: the PC sets and the graphics of records $F8 and
+    up. An NPC record's graphics are not: opcode $82 always unpacks them, and
+    the event packs use $81 (raw tiles) only for records 0-6 (ct_npc_sprites.py)."""
+    return sorted(set(range(SETS)) | {enemy_record(rom, i)["gfx"] for i in range(ROM_GFX_MIN, ENEMY_IDS)})
 
 
 def enemy_pack_span(rom, i):

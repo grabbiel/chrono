@@ -93,7 +93,10 @@ omitted when empty.
 `ct-pc` (written in place, [sprites](sprites.md#writing-back)) or `ct-enemy`
 (frames, animations, palette, record fields and tiles; a pack that outgrows its
 span moves to free space; an edited shared part needs every sharer listed,
-[enemy write-back](sprites.md#write-back)). The list is omitted when empty.
+[enemy write-back](sprites.md#write-back)) or `ct-npc` (frames, animations,
+palette and tiles, as for an enemy, with the record itself kept; NPC and enemy
+records share one sharer rule, [NPC write-back](sprites.md#npc-write-back)).
+The list is omitted when empty.
 `samples` lists `audio/samples/<id>.brr` files to write into the sample tables
 ([SFX Lab](sfx_lab.md#a-project-sample-in-the-game-romsamples)). Each entry has:
 
@@ -453,11 +456,11 @@ written by the SFX Lab for preview; it can be regenerated. See
    record twice, in the game's ranges (equipment with `party.json`); `rom.techs`
    needs `tech_system.json` in the game's ranges (read-only fields are checked
    against the base ROM by `rom build`); `rom.sprites` rows name sprite files of
-   family `ct-pc` or `ct-enemy`, one per set or record, in the format the set can
-   carry (the build adds the base ROM's addresses, counts, sharers and the
-   re-decode). Warnings cover an enemy pack over its in-place budget, unlisted
-   project sprites sharing an enemy's parts, and enemy sprites showing a listed
-   PC set's parts.
+   family `ct-pc`, `ct-enemy` or `ct-npc`, one per set or record, in the format
+   the set can carry (the build adds the base ROM's addresses, counts, sharers and
+   the re-decode). Warnings cover an enemy or NPC pack over its in-place budget,
+   unlisted project sprites sharing an enemy's or NPC's parts, and enemy or NPC
+   sprites showing a listed PC set's parts.
 5. With a ROM text profile, every string compiles to a terminated CT message whose
    decode re-encodes byte-exactly; otherwise the placeholder codec round-trip (warning).
 6. BRR encode → decode ≈ source WAV within SNES BRR error envelope; loop points

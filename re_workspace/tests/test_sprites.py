@@ -326,9 +326,9 @@ def test_measured_entries_are_raw_tile_blocks():
     image, _ = synthetic_enemy_image()
     assert cs.measured_entries(image) == list(range(cs.SETS))          # record $F8 shows PC set 0
     image = bytearray(image)
-    image[cs.pc(cs.SPR_REC + cs.SPR_REC_BYTES * 7)] = 11
+    image[cs.pc(cs.SPR_REC + cs.SPR_REC_BYTES * 7)] = 11                 # an NPC record: $82 unpacks its graphics
     image[cs.pc(cs.ENEMY_SPR + cs.ENEMY_SPR_BYTES * 0xF9)] = 12
-    assert cs.measured_entries(bytes(image)) == list(range(cs.SETS)) + [11, 12]
+    assert cs.measured_entries(bytes(image)) == list(range(cs.SETS)) + [12]
 
 
 def test_enemy_spans_cover_the_write_back():

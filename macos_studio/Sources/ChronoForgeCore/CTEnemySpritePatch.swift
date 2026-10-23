@@ -11,9 +11,10 @@
 // accounted for. A part of a playable character's set (tiles, frames and
 // animations 0-6, and the PC palettes) belongs to that set: an enemy edit to
 // it needs the set listed in rom.sprites with the same result (the PC
-// write-back writes it). Any other part needs every enemy record naming it
-// listed with the same edit; records of $E4:F000 and layout-3 enemies cannot
-// be listed, so a part they share is refused with the sharers named.
+// write-back writes it). Any other part needs every enemy record and every
+// NPC record ($E4:F000 7-255, as ct-npc sprites: CTNPCSpritePatch) naming it
+// listed with the same edit; layout-3 enemies cannot be listed, so a part
+// they share is refused with the sharers named.
 //
 // Everything is checked and the listed sprites are decoded again from the
 // result before anything is written. Unchanged parts are not written, so an
@@ -164,7 +165,8 @@ public enum CTEnemySpritePatch {
     /// The pack the sheet's first `tileCount` tiles make and the base ROM's
     /// pack size (the in-place budget), for a packed import (nil otherwise).
     public static func packBudget(_ s: SpriteDef, sheet: [[UInt8]]) -> (packed: Int, budget: Int)? {
-        guard let src = s.rom, src.family == family, src.packed == true, let budget = src.packedBytes,
+        guard let src = s.rom, src.family == family || src.family == CTNPCSpritePatch.family, src.packed == true,
+              let budget = src.packedBytes,
               sheet.count >= src.tileCount else { return nil }
         var data: [UInt8] = []
         for t in 0..<src.tileCount { data += TileDecoder.encodePlanar(sheet[t], depth: .bpp4) }
@@ -253,17 +255,14 @@ public enum CTEnemySpritePatch {
     }
 
     /// Records whose $E4:2000 block is read as raw tiles, so its measured end
-    /// (the next pointer in the bank) is its size: the PC sets, the graphics of
-    /// records $F8 and up, and (conservatively) every graphics an NPC record names.
+    /// (the next pointer in the bank) is its size: the PC sets and the graphics
+    /// of enemy records $F8 and up. An NPC record's graphics are not: opcode $82
+    /// always unpacks them, and the event packs use $81 (raw tiles) only for
+    /// records 0-6 (ct_npc_sprites.py check).
     static func measuredEntries(_ rom: [UInt8]) -> [Int] {
         var out = Set(0..<CTSpriteROM.sets)
         for i in CTEnemySpriteROM.romGfxMin..<CTEnemySpriteROM.ids {
             out.insert(CTEnemySpriteROM.record(rom, i).gfx)
-        }
-        for i in CTSpriteROM.sets..<CTSpriteROM.pointers {
-            let at = CTSpriteROM.pc(CTSpriteROM.sprRec + CTSpriteROM.sprRecBytes * i)
-            if rom[at..<(at + CTSpriteROM.sprRecBytes)].allSatisfy({ $0 == 0 }) { continue }
-            out.insert(Int(rom[at]))
         }
         return out.sorted()
     }
@@ -280,7 +279,7 @@ public enum CTEnemySpritePatch {
 
     struct Want {
         var id: String
-        var record: Int
+        var owner: Owner
         var content: [UInt8]
     }
 
@@ -305,11 +304,54 @@ public enum CTEnemySpritePatch {
         a.family == b.family && a.set == b.set && a.tiles == b.tiles && a.tileCount == b.tileCount && a.frames == b.frames
             && a.frameCount == b.frameCount && a.palette == b.palette && a.frameIds == b.frameIds && a.durations == b.durations
             && a.rows == b.rows && (a.layout ?? 0) == (b.layout ?? 0) && (a.packed ?? false) == (b.packed ?? false)
+            && a.stride == b.stride
     }
 
     static func sortedAnimations(_ list: [SpriteDef.Animation]) -> [CTSpritePatch.ReportAnimation] {
         list.map { CTSpritePatch.ReportAnimation(row: $0.row ?? 0, facing: $0.facing ?? 0, frames: $0.frames, durations: $0.durations) }
             .sorted { ($0.row, $0.facing) < ($1.row, $1.facing) }
+    }
+
+    /// The record a request writes: an enemy record of $E4:F600 or an NPC record of $E4:F000.
+    enum Owner: Hashable, Comparable {
+        case enemy(Int), npc(Int)
+
+        var label: String {
+            switch self {
+            case .enemy(let i): return "enemy record \(i)"
+            case .npc(let r): return "NPC record \(r)"
+            }
+        }
+    }
+
+    /// A request's record as the base ROM has it, in the terms both families share.
+    struct Source {
+        var owner: Owner
+        var gfx: Int, frameSet: Int, palette: Int, anim: Int
+        var packed: Bool
+        var tilesAt: Int, packedBytes: Int
+        var mode: LZSSMode
+        var tiles: [[UInt8]]
+        var framesAt: Int
+        var frames: [CTSpriteROM.Frame]
+        var recordBytes: Int
+        var paletteAt: Int, frameIdsAt: Int, durationsAt: Int
+        var stride: Int                                // frame ids per facing
+        var rows: Int
+    }
+
+    static func source(_ d: CTEnemySpriteROM.DecodedEnemy) -> Source {
+        Source(owner: .enemy(d.id), gfx: d.record.gfx, frameSet: d.record.frames, palette: d.record.palette, anim: d.record.anim,
+               packed: d.packed, tilesAt: d.tilesAt, packedBytes: d.packedBytes, mode: d.mode, tiles: d.tiles,
+               framesAt: d.framesAt, frames: d.frames, recordBytes: CTEnemySpriteROM.layouts[d.layout].recordBytes,
+               paletteAt: d.paletteAt, frameIdsAt: d.frameIdsAt, durationsAt: d.durationsAt, stride: 4 * d.rows, rows: d.rows)
+    }
+
+    static func source(_ d: CTNPCSpriteROM.DecodedNPC) -> Source {
+        Source(owner: .npc(d.record), gfx: d.fields.gfx, frameSet: d.fields.frames, palette: d.fields.palette, anim: d.fields.anim,
+               packed: true, tilesAt: d.tilesAt, packedBytes: d.packedBytes, mode: d.mode, tiles: d.tiles,
+               framesAt: d.framesAt, frames: d.frames, recordBytes: CTNPCSpriteROM.layouts[d.layout]!.recordBytes,
+               paletteAt: d.paletteAt, frameIdsAt: d.frameIdsAt, durationsAt: d.durationsAt, stride: d.stride, rows: d.rows)
     }
 
     /// Writes `requests` (all ct-enemy) over `built` (the base ROM with the
@@ -319,32 +361,56 @@ public enum CTEnemySpritePatch {
     static func apply(_ requests: [CTSpritePatch.Request], base: [UInt8], built: [UInt8], pcListed: [Int: String],
                       space: inout FreeSpace, write: ([UInt8], Int, String) -> Void,
                       relocated: (String, Int?, Int, Int) -> Void) throws -> [ReportSprite] {
-        guard !requests.isEmpty else { return [] }
+        try applyAll(requests, base: base, built: built, pcListed: pcListed, space: &space, write: write,
+                     relocated: relocated).enemies
+    }
+
+    /// `apply` for ct-enemy and ct-npc requests together: one sharer pass over
+    /// both families, so an NPC record listed with the same edit counts as a
+    /// sharer of an enemy's part and the other way round.
+    static func applyAll(_ requests: [CTSpritePatch.Request], base: [UInt8], built: [UInt8], pcListed: [Int: String],
+                         space: inout FreeSpace, write: ([UInt8], Int, String) -> Void,
+                         relocated: (String, Int?, Int, Int) -> Void) throws
+        -> (enemies: [ReportSprite], npcs: [CTNPCSpritePatch.ReportSprite]) {
+        guard !requests.isEmpty else { return ([], []) }
         var parts: [Part: PartData] = [:]
-        var decoded: [Int: CTEnemySpriteROM.DecodedEnemy] = [:]
-        var tilesWanted: [Int: [[UInt8]]] = [:]
-        var byRecord: [Int: String] = [:]
+        var decoded: [Owner: Source] = [:]
+        var tilesWanted: [Owner: [[UInt8]]] = [:]
+        var byOwner: [Owner: String] = [:]
         var seenIDs = Set<String>()
         for r in requests {
             let s = r.sprite
             guard seenIDs.insert(s.id).inserted else { throw CTROMBuildError("sprite \(s.id) is built twice") }
-            if let problem = validate(s).first { throw CTROMBuildError("sprite \(s.id): \(problem)") }
-            let src = s.rom!, i = src.set, name = "sprite \(s.id)"
-            if let other = byRecord.updateValue(s.id, forKey: i) {
-                throw CTROMBuildError("\(name): enemy record \(i) is also sprite \(other)")
+            let npc = s.rom?.family == CTNPCSpriteROM.family
+            if let problem = (npc ? CTNPCSpritePatch.validate(s) : validate(s)).first {
+                throw CTROMBuildError("sprite \(s.id): \(problem)")
             }
-            let d = try CTEnemySpriteROM.decode(rom: base, id: i)
-            let have = CTEnemySpriteROM.spriteDef(d, id: s.id).rom!
+            let src = s.rom!, i = src.set, name = "sprite \(s.id)"
+            let owner: Owner = npc ? .npc(i) : .enemy(i)
+            if let other = byOwner.updateValue(s.id, forKey: owner) {
+                throw CTROMBuildError("\(name): \(owner.label) is also sprite \(other)")
+            }
+            let d: Source, have: SpriteDef.ROMSource
+            var enemy: CTEnemySpriteROM.DecodedEnemy?
+            if npc {
+                let n = try CTNPCSpriteROM.decode(rom: base, record: i)
+                d = source(n)
+                have = CTNPCSpriteROM.spriteDef(n, id: s.id, field: nil).rom!
+            } else {
+                let e = try CTEnemySpriteROM.decode(rom: base, id: i)
+                d = source(e)
+                enemy = e
+                have = CTEnemySpriteROM.spriteDef(e, id: s.id).rom!
+            }
             guard sameLocation(src, have) else {
-                throw CTROMBuildError("\(name): its rom source is not where the base ROM has record \(i) " +
+                throw CTROMBuildError("\(name): its rom source is not where the base ROM has \(owner.label) " +
                                       "(tiles \(have.tiles) x \(have.tileCount), frames \(have.frames) x \(have.frameCount), " +
                                       "palette \(have.palette), \(have.rows) rows, layout \(have.layout ?? 0)); re-import the sprites")
             }
             guard r.sheet.count >= d.tiles.count else {
                 throw CTROMBuildError("\(name): the sheet has \(r.sheet.count) tiles; the record has \(d.tiles.count)")
             }
-            decoded[i] = d
-            let shape = CTEnemySpriteROM.layouts[d.layout]
+            decoded[owner] = d
             // Cells past the graphics or with bits 11-13 (not read by the game) only where the base ROM
             // has the same word (records 117 and 253 pair graphics with frame sets drawn for others).
             for (f, frame) in s.frames.enumerated() {
@@ -359,22 +425,22 @@ public enum CTEnemySpritePatch {
             var tiles: [[UInt8]] = []
             for t in 0..<d.tiles.count { tiles.append(TileDecoder.encodePlanar(r.sheet[t], depth: .bpp4)) }
             guard tiles.isEmpty || tiles[0] == d.tiles[0] else {
-                throw CTROMBuildError("\(name): sheet tile 0 is the blank cell (the battle draws zeros for it) and must stay as imported")
+                let why = npc ? "the Studio draws cell word 0 blank" : "the battle draws zeros for it"
+                throw CTROMBuildError("\(name): sheet tile 0 is the blank cell (\(why)) and must stay as imported")
             }
-            tilesWanted[i] = tiles
-            let recordPC = CTSpriteROM.pc(CTEnemySpriteROM.records + CTEnemySpriteROM.recordBytes * i)
-            if let b = s.battle, b.flags & keptFlags != d.record.flags & keptFlags {
+            tilesWanted[owner] = tiles
+            if let e = enemy, let b = s.battle, b.flags & keptFlags != e.record.flags & keptFlags {
                 throw CTROMBuildError(String(format: "%@: battle flags bits 4 and 6 have no reader and stay $%02X", name,
-                                             d.record.flags & keptFlags))
+                                             e.record.flags & keptFlags))
             }
 
             // Tiles: the pack's unpacked bytes, or the raw block in place.
             let joined: [UInt8] = tiles.flatMap { $0 }
-            let tilesPart = Part.tiles(d.record.gfx)
+            let tilesPart = Part.tiles(d.gfx)
             if parts[tilesPart] == nil {
                 var p = PartData()
                 if d.packed {
-                    p.pack = (d.record.gfx, CTSpriteROM.pc(d.tilesAt), d.packedBytes, d.mode, d.tiles.flatMap { $0 })
+                    p.pack = (d.gfx, CTSpriteROM.pc(d.tilesAt), d.packedBytes, d.mode, d.tiles.flatMap { $0 })
                 } else {
                     p.slices = [(CTSpriteROM.pc(d.tilesAt), CTSpriteROM.tileBytes * d.tiles.count)]
                     p.unit = CTSpriteROM.tileBytes
@@ -382,23 +448,24 @@ public enum CTEnemySpritePatch {
                 }
                 parts[tilesPart] = p
             }
-            parts[tilesPart]!.wants.append(Want(id: s.id, record: i, content: joined))
+            parts[tilesPart]!.wants.append(Want(id: s.id, owner: owner, content: joined))
 
             // Frames: the records in place.
-            let framesPart = Part.frames(d.record.frames)
+            let framesPart = Part.frames(d.frameSet)
             var frameBytes: [UInt8] = []
             for f in s.frames { frameBytes += encodeFrame(f) }
             if parts[framesPart] == nil {
                 var p = PartData()
-                p.slices = [(CTSpriteROM.pc(d.framesAt), shape.recordBytes * d.frames.count)]
-                p.unit = shape.recordBytes
+                p.slices = [(CTSpriteROM.pc(d.framesAt), d.recordBytes * d.frames.count)]
+                p.unit = d.recordBytes
                 p.unitName = { "frame \($0)" }
                 parts[framesPart] = p
             }
-            parts[framesPart]!.wants.append(Want(id: s.id, record: i, content: frameBytes))
+            parts[framesPart]!.wants.append(Want(id: s.id, owner: owner, content: frameBytes))
 
-            // Animations: each list over the rows as built, as the PC write-back does.
-            let stride = 4 * d.rows, ids0 = CTSpriteROM.pc(d.frameIdsAt), durs0 = CTSpriteROM.pc(d.durationsAt)
+            // Animations: each list over the rows as built, as the PC write-back does
+            // (entry e of facing f at frameIds + f * stride + e, the durations shared).
+            let stride = d.stride, ids0 = CTSpriteROM.pc(d.frameIdsAt), durs0 = CTSpriteROM.pc(d.durationsAt)
             var ids = Array(built[ids0..<(ids0 + 4 * stride)]), durs = Array(built[durs0..<(durs0 + stride)])
             for a in s.animations {
                 let row = a.row!, facing = a.facing!
@@ -407,19 +474,18 @@ public enum CTEnemySpritePatch {
                     durs[4 * row + k] = UInt8(a.durations[k])
                 }
             }
-            let animPart = Part.animations(d.record.anim)
+            let animPart = Part.animations(d.anim)
             if parts[animPart] == nil {
                 var p = PartData()
                 p.slices = [(ids0, 4 * stride), (durs0, stride)]
                 p.unit = 4
-                let rows = d.rows
                 p.unitName = { u in
-                    u < 4 * rows ? String(format: "frame ids r%02d.%@", u % rows, CTSpriteROM.facings[u / rows])
-                                 : String(format: "durations r%02d", u - 4 * rows)
+                    guard u < stride else { return String(format: "durations r%02d", u - stride) }
+                    return String(format: "frame ids r%02d.%@", 4 * u % stride / 4, CTSpriteROM.facings[4 * u / stride])
                 }
                 parts[animPart] = p
             }
-            parts[animPart]!.wants.append(Want(id: s.id, record: i, content: ids + durs))
+            parts[animPart]!.wants.append(Want(id: s.id, owner: owner, content: ids + durs))
 
             // Palette: colours 1-12.
             var colours: [UInt8] = []
@@ -427,7 +493,7 @@ public enum CTEnemySpritePatch {
                 let w = Int(BGR555(hex: h)!.word)
                 colours += [UInt8(w & 0xFF), UInt8(w >> 8)]
             }
-            let palPart = Part.palette(d.record.palette)
+            let palPart = Part.palette(d.palette)
             if parts[palPart] == nil {
                 var p = PartData()
                 p.slices = [(CTSpriteROM.pc(d.paletteAt), CTSpriteROM.paletteBytes)]
@@ -435,12 +501,14 @@ public enum CTEnemySpritePatch {
                 p.unitName = { _ in "palette" }
                 parts[palPart] = p
             }
-            parts[palPart]!.wants.append(Want(id: s.id, record: i, content: colours))
+            parts[palPart]!.wants.append(Want(id: s.id, owner: owner, content: colours))
 
-            // Record +4 to +9: the battle fields over the kept bits.
+            // Record +4 to +9 (enemies): the battle fields over the kept bits.
+            guard let e = enemy else { continue }
+            let recordPC = CTSpriteROM.pc(CTEnemySpriteROM.records + CTEnemySpriteROM.recordBytes * i)
             var fields = Array(built[(recordPC + 4)..<(recordPC + 10)])
             if let b = s.battle {
-                fields[0] = UInt8(b.flags | d.record.size)
+                fields[0] = UInt8(b.flags | e.record.size)
                 fields[1] = UInt8(b.screenOffsetX); fields[2] = UInt8(b.screenOffsetY)
                 fields[3] = UInt8(b.halfWidth); fields[4] = UInt8(b.height)
                 fields[5] = UInt8(b.moveSpeed | b.moveDelay << 4) | fields[5] & UInt8(keptMove)
@@ -449,16 +517,22 @@ public enum CTEnemySpritePatch {
             p.slices = [(recordPC + 4, 6)]
             p.unit = 6
             p.unitName = { _ in "record" }
-            p.wants = [Want(id: s.id, record: i, content: fields)]
+            p.wants = [Want(id: s.id, owner: owner, content: fields)]
             parts[.record(i)] = p
         }
 
         // The sharer rule, then the writes (kept until everything decodes back).
         var writes: [CTSpritePatch.Write] = []
         var moves: [(what: String, from: Int, to: Int, bytes: Int)] = []
-        var changedParts: [Int: [Part]] = [:]
+        var changedParts: [Owner: [Part]] = [:]
         var packReports: [Int: ReportPack] = [:]
-        let listed = Set(byRecord.keys)
+        var listedEnemies = Set<Int>(), listedNPCs = Set<Int>()
+        for owner in byOwner.keys {
+            switch owner {
+            case .enemy(let i): listedEnemies.insert(i)
+            case .npc(let r): listedNPCs.insert(r)
+            }
+        }
         let measuredSet = measuredEntries(base)
         var pointers: [Int] = (0..<CTSpriteROM.pointers).map { CTSpriteROM.u24(built, CTSpriteROM.tilesPtr + 3 * $0) }
         var baseMeasure: [Int: Int] = [:]
@@ -484,19 +558,21 @@ public enum CTEnemySpritePatch {
             }
             if let field = part.field {
                 let u = users(base, offset: field.offset, value: field.value)
-                let missingEnemies = u.enemies.filter { !listed.contains($0) }
-                if !missingEnemies.isEmpty || !u.others.isEmpty {
+                let missingEnemies = u.enemies.filter { !listedEnemies.contains($0) }
+                let missingNPCs = u.others.filter { !listedNPCs.contains($0) }
+                if !missingEnemies.isEmpty || !missingNPCs.isEmpty {
                     var who: [String] = []
                     if !missingEnemies.isEmpty { who.append("enemy records " + missingEnemies.map(String.init).joined(separator: ", ")) }
-                    if !u.others.isEmpty {
-                        who.append("\(CTSpriteROM.snes(CTSpriteROM.sprRec)) records " + u.others.map(String.init).joined(separator: ", "))
+                    if !missingNPCs.isEmpty {
+                        who.append("\(CTSpriteROM.snes(CTSpriteROM.sprRec)) records " +
+                                   missingNPCs.map(String.init).joined(separator: ", ") + " (NPCs)")
                     }
                     throw CTROMBuildError("sprite \(names[0]): \(part.label)'s \(part.name) are also shown by " +
                                           who.joined(separator: " and ") + "; list every sharer's sprite with the same edit " +
-                                          "(\(CTSpriteROM.snes(CTSpriteROM.sprRec)) records and layout-3 enemies cannot be listed)")
+                                          "(NPC records as ct-npc sprites; layout-3 enemies cannot be listed)")
                 }
             }
-            for w in p.wants { changedParts[w.record, default: []].append(part) }
+            for w in p.wants { changedParts[w.owner, default: []].append(part) }
             let owner = "sprite \(names[0])"
             if let pack = p.pack {
                 guard let packed = LZSS.compress(first, mode: pack.mode) else {
@@ -555,11 +631,39 @@ public enum CTEnemySpritePatch {
                 throw CTROMBuildError("graphics \(g): its raw tile block's measured end moved")
             }
         }
-        var report: [ReportSprite] = []
+        /// The other records naming one of `owner`'s changed parts, with the sprite listing them.
+        func sharedWith(_ owner: Owner) -> [String] {
+            var shared: [String] = []
+            for part in changedParts[owner] ?? [] {
+                guard let field = part.field else { continue }
+                let u = users(base, offset: field.offset, value: field.value)
+                for j in u.enemies where Owner.enemy(j) != owner {
+                    shared.append("enemy record \(j) (\(byOwner[.enemy(j)] ?? "?")): \(part.name)")
+                }
+                for j in u.others where Owner.npc(j) != owner {
+                    shared.append("NPC record \(j) (\(byOwner[.npc(j)] ?? "?")): \(part.name)")
+                }
+            }
+            return shared
+        }
+        var report: [ReportSprite] = [], npcReport: [CTNPCSpritePatch.ReportSprite] = []
         for r in requests {
-            let s = r.sprite, i = s.rom!.set, name = "sprite \(s.id)", d = decoded[i]!
-            let e = try CTEnemySpriteROM.decode(rom: out, id: i)
-            guard e.tiles == tilesWanted[i]! else { throw CTROMBuildError("\(name): the tiles do not decode back") }
+            let s = r.sprite, i = s.rom!.set, name = "sprite \(s.id)"
+            let owner: Owner = s.rom!.family == CTNPCSpriteROM.family ? .npc(i) : .enemy(i)
+            let d = decoded[owner]!
+            let e: Source, animations: [SpriteDef.Animation], palette: [UInt16]
+            var enemy: CTEnemySpriteROM.DecodedEnemy?
+            var layout = 0
+            if case .npc = owner {
+                let n = try CTNPCSpriteROM.decode(rom: out, record: i)
+                (e, animations, palette, layout) = (source(n), n.animations, n.palette, n.layout)
+            } else {
+                let x = try CTEnemySpriteROM.decode(rom: out, id: i)
+                let kept = x.animations.filter { $0.frames.allSatisfy { $0 < x.frames.count } }
+                (e, animations, palette, layout) = (source(x), kept, x.palette, x.layout)
+                enemy = x
+            }
+            guard e.tiles == tilesWanted[owner]! else { throw CTROMBuildError("\(name): the tiles do not decode back") }
             guard e.frames.count == s.frames.count else {
                 throw CTROMBuildError("\(name): the edit changes the frame set's end (an all-zero last frame is trimmed)")
             }
@@ -569,45 +673,54 @@ public enum CTEnemySpritePatch {
                     throw CTROMBuildError("\(name): frame \(f) does not decode back")
                 }
             }
-            let kept = e.animations.filter { $0.frames.allSatisfy { $0 < e.frames.count } }
-            let got = sortedAnimations(kept), want = sortedAnimations(s.animations)
-            if got != want {
+            let got = sortedAnimations(animations), want = sortedAnimations(s.animations)
+            var markers: [String: Int] = [:]
+            for a in animations { markers[a.id] = a.markerDuration ?? 0 }
+            let markersKept = s.animations.allSatisfy { (markers[$0.id] ?? 0) == ($0.markerDuration ?? 0) }
+            if got != want || !markersKept {
                 throw CTROMBuildError("\(name): an animation would not read back as given; a list keeps its row's length and " +
                                       "terminator, and the 4 facings of a row share its durations")
             }
             let colours: [Int] = s.palettes![0][1...CTSpriteROM.paletteColours].map { Int(BGR555(hex: $0)!.word) }
-            guard e.palette.map(Int.init) == colours else { throw CTROMBuildError("\(name): the palette does not decode back") }
-            let record = CTEnemySpriteROM.battle(e.record)
-            if let b = s.battle, b != record { throw CTROMBuildError("\(name): the record fields do not decode back") }
+            guard palette.map(Int.init) == colours else { throw CTROMBuildError("\(name): the palette does not decode back") }
 
-            let mine = changedParts[i] ?? []
+            let mine = changedParts[owner] ?? []
             var changed: [String] = []
             for part in mine { if !changed.contains(part.name) { changed.append(part.name) } }
             var changedTiles: [Int] = []
             for t in 0..<d.tiles.count where e.tiles[t] != d.tiles[t] { changedTiles.append(t) }
-            var shared: [String] = []
-            for part in mine {
-                guard let field = part.field else { continue }
-                for j in users(base, offset: field.offset, value: field.value).enemies where j != i {
-                    shared.append("enemy record \(j) (\(byRecord[j] ?? "?")): \(part.name)")
-                }
+            let shared = sharedWith(owner)
+            let pack: ReportPack? = mine.contains(.tiles(e.gfx)) ? packReports[e.gfx] : nil
+            let frameList: [CTSpritePatch.ReportFrame] = e.frames.map { f in
+                CTSpritePatch.ReportFrame(cells: f.cells, pieces: f.pieces.map { [$0.x, $0.y] })
             }
-            let shape = CTEnemySpriteROM.layouts[e.layout]
+            guard let x = enemy else {
+                npcReport.append(CTNPCSpritePatch.ReportSprite(
+                    id: s.id, family: CTNPCSpritePatch.family, set: i, layout: layout, changed: changed,
+                    graphics: e.gfx, tiles: CTSpriteROM.snes(e.tilesAt), tileCount: e.tiles.count,
+                    tilesSHA256: CTEventPack.sha256(e.tiles.flatMap { $0 }), changedTiles: changedTiles, pack: pack,
+                    frameSet: e.frameSet, frames: CTSpriteROM.snes(e.framesAt), frameCount: e.frames.count,
+                    recordBytes: e.recordBytes, frameList: frameList, animationSet: e.anim,
+                    frameIds: CTSpriteROM.snes(e.frameIdsAt), durations: CTSpriteROM.snes(e.durationsAt), rows: e.rows,
+                    stride: e.stride, animations: got, paletteIndex: e.palette, palette: CTSpriteROM.snes(e.paletteAt),
+                    colours: palette.map(Int.init), sharedWith: shared.isEmpty ? nil : shared))
+                continue
+            }
+            let record = CTEnemySpriteROM.battle(x.record)
+            if let b = s.battle, b != record { throw CTROMBuildError("\(name): the record fields do not decode back") }
             report.append(ReportSprite(
-                id: s.id, family: family, set: i, layout: e.layout, packed: e.packed, changed: changed,
-                graphics: e.record.gfx, tiles: CTSpriteROM.snes(e.tilesAt), tileCount: e.tiles.count,
-                tilesSHA256: CTEventPack.sha256(e.tiles.flatMap { $0 }), changedTiles: changedTiles,
-                pack: mine.contains(.tiles(e.record.gfx)) ? packReports[e.record.gfx] : nil,
-                frameSet: e.record.frames, frames: CTSpriteROM.snes(e.framesAt), frameCount: e.frames.count,
-                recordBytes: shape.recordBytes,
-                frameList: e.frames.map { CTSpritePatch.ReportFrame(cells: $0.cells, pieces: $0.pieces.map { [$0.x, $0.y] }) },
-                animationSet: e.record.anim, frameIds: CTSpriteROM.snes(e.frameIdsAt), durations: CTSpriteROM.snes(e.durationsAt),
-                rows: e.rows, animations: got, paletteIndex: e.record.palette, palette: CTSpriteROM.snes(e.paletteAt),
-                colours: e.palette.map(Int.init), record: record, sharedWith: shared.isEmpty ? nil : shared))
+                id: s.id, family: family, set: i, layout: x.layout, packed: x.packed, changed: changed,
+                graphics: e.gfx, tiles: CTSpriteROM.snes(e.tilesAt), tileCount: e.tiles.count,
+                tilesSHA256: CTEventPack.sha256(e.tiles.flatMap { $0 }), changedTiles: changedTiles, pack: pack,
+                frameSet: e.frameSet, frames: CTSpriteROM.snes(e.framesAt), frameCount: e.frames.count,
+                recordBytes: e.recordBytes, frameList: frameList,
+                animationSet: e.anim, frameIds: CTSpriteROM.snes(e.frameIdsAt), durations: CTSpriteROM.snes(e.durationsAt),
+                rows: e.rows, animations: got, paletteIndex: e.palette, palette: CTSpriteROM.snes(e.paletteAt),
+                colours: palette.map(Int.init), record: record, sharedWith: shared.isEmpty ? nil : shared))
         }
         for w in writes { write(w.bytes, w.pc, w.what) }
         for m in moves { relocated(m.what, m.from, m.to, m.bytes) }
-        return report
+        return (report, npcReport)
     }
 
     /// The PC write-back's changed parts that unlisted enemy records show
