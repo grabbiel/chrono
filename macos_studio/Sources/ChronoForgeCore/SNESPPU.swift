@@ -819,15 +819,16 @@ public enum PPUReferenceRenderer {
         let hires = r.highResolution
         let backdrop = c.memory.cgram[0] & 0x7FFF
         var out = [UInt16](repeating: 0, count: columns)
+        var subBGs = [BGPixel?](repeating: nil, count: 4)
+        var mainBGs = [BGPixel?](repeating: nil, count: 4)
+        let halves = r.mode == 5 || r.mode == 6
         for x in 0..<PPUFrame.width {
             // Half 0 feeds the sub screen, half 1 the main screen; they differ
             // only where modes 5/6 draw BGs at 512 columns.
-            var subBGs: [BGPixel?] = []
-            var mainBGs: [BGPixel?] = []
             for n in 0..<4 {
                 let even = bgPixel(c, r, bg: n, x: x, half: 0)
-                subBGs.append(even)
-                mainBGs.append(r.mode == 5 || r.mode == 6 ? bgPixel(c, r, bg: n, x: x, half: 1) : even)
+                subBGs[n] = even
+                mainBGs[n] = halves ? bgPixel(c, r, bg: n, x: x, half: 1) : even
             }
             let obj = objPixel(c.memory.vram, objs, x: x)
             let windows = PPUWindows.layerMask(r, x: x)

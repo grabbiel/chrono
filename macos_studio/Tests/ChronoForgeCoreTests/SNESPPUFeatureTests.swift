@@ -487,7 +487,7 @@ final class SNESPPUFeatureTests: XCTestCase {
     func testInterlacedModes5And6UseHalfLines() {
         var f = FeatureScene.frame(mode: 0x05)
         // Tile pair 1/2: pixel index 1 + row.
-        let rows = (0..<64).map { UInt8(1 + $0 / 8) }
+        let rows: [UInt8] = (0..<64).map { (i: Int) -> UInt8 in UInt8(1 + i / 8) }
         f.storeTiles(FeatureScene.solid(0) + rows + rows, bpp: 4, atWord: FeatureScene.bg1Chars)
         FeatureScene.fillMap(&f, bg: 0, PPUFrame.tilemapEntry(tile: 1))
         f.setAllLines { $0.tm = 0x01; $0.setini = 0x01; $0.bg[0].vofs = 0x3FE }
@@ -502,7 +502,7 @@ final class SNESPPUFeatureTests: XCTestCase {
         var f = FeatureScene.frame(mode: 0x01)
         f.setAllLines { $0.tm = 0x10; $0.setini = 0x02 }   // OBSEL size 0: 8x8 / 16x16
         // A 16x16 OBJ whose row r has index 1 + r % 8, tiles 1, 2, 17, 18.
-        let rows = (0..<64).map { UInt8(1 + $0 / 8) }
+        let rows: [UInt8] = (0..<64).map { (i: Int) -> UInt8 in UInt8(1 + i / 8) }
         f.storeTiles(FeatureScene.solid(0) + rows + rows, bpp: 4, atWord: FeatureScene.objChars)
         f.storeTiles(rows + rows, bpp: 4, atWord: FeatureScene.objChars + 17 * 16)
         f.setOBJ(0, x: 0, y: 20, tile: 1, large: true)

@@ -15,11 +15,16 @@ struct ChronoForgeStudioApp: App {
                 Button("Open .ctproj…") { store.requestOpen = true }
                     .keyboardShortcut("o")
             }
+            CommandGroup(after: .windowList) { PPUDemosMenuButton() }
         }
         WindowGroup("Play", id: "runtime", for: Int.self) { $location in
             RuntimeWindow(store: store, location: location ?? 0)
         }
         .defaultSize(width: 1180, height: 640)
+        WindowGroup("PPU Demos", id: "ppu-demos") {
+            PPUDemosWindow(initial: LaunchArguments.value("--ppu-demo"))
+        }
+        .defaultSize(width: 760, height: 520)
     }
 }
 
@@ -104,6 +109,7 @@ struct RootView: View {
                 store.load(url: URL(fileURLWithPath: path))
             }
             if let play = LaunchArguments.value("--play").flatMap({ Int($0) }) { openWindow(id: "runtime", value: play) }
+            if LaunchArguments.value("--ppu-demo") != nil { openWindow(id: "ppu-demos") }
         }
         .fileImporter(isPresented: $store.requestOpen,
                       allowedContentTypes: [.folder],

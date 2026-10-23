@@ -101,3 +101,12 @@ ChronoForgeCoreTests.CTSceneRunTests/testABattleNamesItsEnemiesFromTheirObjects 
 ChronoForgeCoreTests.CTSceneRunTests/testScrollToMovesTheCameraToItsTopLeftTile                 skip      # local ROM
 ChronoForgeCoreTests.CTSceneRunTests/testADirectionPathEndsWhereTheHandlerMovesTheObject        skip      # local ROM
 ChronoForgeCoreTests.CTEnemySpritePatchTests/testImportThenBuildIsIdentical                 skip      # local ROM
+ChronoForgeCoreTests.CTPPUEvidenceTests/testSwirlFrameFromTheROMSineTable                       skip      # local ROM
+ChronoForgeCoreTests.CTPPUEvidenceTests/testSwirlProgramsHDMAForAPerLineMode7Matrix             skip      # local ROM
+ChronoForgeMetalTests.PPUFeatureParityTests/testParityHiresAndInterlace                         may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUFeatureParityTests/testParityMidFrameWrites                            may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUFeatureParityTests/testParityMode7AndEXTBG                             may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUFeatureParityTests/testParityModes2To6OffsetPerTileAndDirectColor      may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUFeatureParityTests/testParityMosaic                                    may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUFeatureParityTests/testParityOverscanBorder                            may-skip  # Metal device availability on hosted runners
+ChronoForgeMetalTests.PPUFeatureParityTests/testParityRandomFeatureFrames                       may-skip  # Metal device availability on hosted runners
