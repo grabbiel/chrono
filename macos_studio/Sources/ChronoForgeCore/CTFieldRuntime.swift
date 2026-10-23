@@ -124,6 +124,12 @@ public final class CTFieldRuntime {
     public private(set) var dialogue: (layout: CTDialogueLayout, frame: Int)?
     /// Sound-driver commands, oldest first (drained from the VM each frame).
     public private(set) var audio: [(frame: Int, command: CTEventVM.AudioCommand)] = []
+    /// Party, inventory and gold changes, oldest first (drained from the VM each frame).
+    public private(set) var changes: [(frame: Int, change: CTEventVM.StateChange)] = []
+    /// The map cells region copies changed since the location loaded, by layer (row << 8 | column).
+    public private(set) var mapEdits: [Int: Set<Int>] = [:]
+    /// Counts the region copies drained, so a cached picture of the map knows to rebuild.
+    public private(set) var mapRevision = 0
     /// Packs to run instead of the ROM's, by location (an edited scene).
     public var packOverrides: [Int: CTEventPack] = [:]
     /// Opt-in: run `$E7`'s scroll-to (Map_Unk91AC) instead of centring on
@@ -144,6 +150,7 @@ public final class CTFieldRuntime {
         "the frame-build queue (ObjQ_Head/Tail) is drained every frame, so every object's animation advances",
         "Party_LeaderAnim: no idle rows (Party_AnimIdle) and no shape-$1E stair row; followers hold their place (Party_UnkA26B/A2CE not run)",
         "battles, menus, fades and palettes are not run",
+        "after a party or item-count command, Menu_RunCommand's refresh (Menu_Unk834D: weapon records, BankFF_UnkF958, Menu_Unk82E1) is not run",
     ]
 
     /// `wram`: carried over (a warp keeps it); nil starts from zeroes with the
@@ -160,6 +167,7 @@ public final class CTFieldRuntime {
         vm = CTEventVM(pack: try CTEventPack(bytes: [0]), rom: rom, wram: wram ?? WRAMModel())
         if wram == nil {
             for k in 0..<3 { vm.wram[WRAM.partyMembers + k] = k < party.count ? party[k] : 0x80 }
+            for k in 3..<9 { vm.wram[WRAM.menuPartyOrder + k] = 0x80 }   // the reserve: empty places
             setEntry(x: (map.limits.left + map.limits.right) / 2, y: (map.limits.top + map.limits.bottom) / 2, facing: 1)
         }
         vm.party = { [unowned self] in self.partyRequest($0) }
@@ -188,6 +196,7 @@ public final class CTFieldRuntime {
         let pack = try packOverrides[location] ?? CTEventPack(bytes: CTEventROM.unpack(rom: rom, entry: entry[events]))
         for a in 0..<16 { vm.wram[WRAM.evtUnk0920 + a] = 0xFF }     // Evt_ClearUnk0920
         vm.load(pack: pack)
+        vm.seedPartyBlocks()                                        // LocLoad_InitUnk7F3700
         vm.initObjects()
         runObj0Func1()
         initEntryTile()
@@ -240,6 +249,13 @@ public final class CTFieldRuntime {
                 w[WRAM.mapTileExitIdx + i] = 0x80; w[WRAM.mapTreasureIdx + i] = 0x80
             }
         }
+        for (k, plane) in [WRAM.mapLayer1Tiles, WRAM.mapLayer2Tiles, WRAM.mapLayer3Tiles].enumerated() {
+            guard let tiles = map.props.planes[k + 1] else { continue }
+            let size = map.props.sizes[k]
+            for r in 0..<min(64, size.height) {
+                for c in 0..<min(64, size.width) { w[plane + r * WRAM.mapRowStride + c] = UInt8(tiles[r * size.width + c] & 0xFF) }
+            }
+        }
         if let p = props {
             for r in 0..<min(64, p.height) {
                 for c in 0..<min(64, p.width) {
@@ -276,12 +292,19 @@ public final class CTFieldRuntime {
         pressed = input.subtracting(held)
         held = input
         if vm.wram[WRAM.fieldSceneFlags] & 0x80 != 0 { try warp(); return }
+        if vm.wram[WRAM.fieldSceneFlags] & 0x20 != 0 {                 // DefaultHandler: SceneFlag_MapRedraw
+            vm.wram[WRAM.fieldSceneFlags] &= ~0x20
+            vm.copyMapRegion()
+        }
         frameUpdate()
         actionButton()
         dialogueFrame()
         vm.frame()
         for c in vm.audio { audio.append((frameCount, c)) }
         vm.audio.removeAll()
+        for c in vm.changes { changes.append((frameCount, c)) }
+        vm.changes.removeAll()
+        drainMapCopies()
         objectMotion()
         if runsScrollTo { scrollToOrFollow() } else { followCamera() }
         frameCount += 1
@@ -309,6 +332,7 @@ public final class CTFieldRuntime {
             throw CTEventError("warp to \(dest): not a field location (overworld or a special destination)")
         }
         location = dest
+        mapEdits = [:]
         map = try CTMapROM.decode(rom, dest)
         gameMap = CTMaps.gameMap(map)
         props = gameMap.tileProps.flatMap(CTTilePropsPlane.init)
@@ -891,13 +915,69 @@ public final class CTFieldRuntime {
     public struct Summary: Codable, Equatable, Sendable {
         public var location: Int, frames: Int, objects: [ObjectState], messages: [Message], warps: [Warp]
         public var audio: Int, leader: Int?, level: Int
+        /// Menu_PartyOrder (9 places, nil empty), the gold, and the opcodes' party / item / gold changes.
+        public var partyOrder: [Int?], gold: Int, changes: [String]
         public var limitations: [String]
+    }
+
+    func drainMapCopies() {
+        for copy in vm.mapCopies {
+            for layer in copy.layers { mapEdits[layer, default: []].formUnion(copy.cells) }
+            mapRevision += 1
+        }
+        vm.mapCopies.removeAll()
+    }
+
+    /// `m` (the location's map) with the cells region copies changed read back
+    /// from the WRAM planes: layer 1 Map_TileProps | Map_TileHiBits bit 0 << 8,
+    /// layer 2 Map_Layer2Tiles | bit 1 << 8, layer 3 Map_Layer3Tiles.
+    public func liveMap(_ m: GameMap) -> GameMap {
+        guard !mapEdits.isEmpty else { return m }
+        var out = m
+        for (i, layer) in m.layers.enumerated() {
+            guard let cells = mapEdits[layer.bg], (1...3).contains(layer.bg) else { continue }
+            let width = layer.width ?? m.width, height = layer.height ?? m.height
+            let plane = [WRAM.mapLayer1Tiles, WRAM.mapLayer2Tiles, WRAM.mapLayer3Tiles][layer.bg - 1]
+            for cell in cells {
+                let r = cell >> 8, c = cell & 0xFF
+                guard c < min(64, width), r < min(64, height), r * width + c < layer.metatiles.count else { continue }
+                let at = r * WRAM.mapRowStride + c
+                var tile = Int(vm.wram[plane + at])
+                if layer.bg < 3 { tile |= Int(vm.wram[WRAM.mapTileHiBits + at] >> (layer.bg - 1) & 1) << 8 }
+                out.layers[i].metatiles[r * width + c] = tile
+            }
+        }
+        return out
+    }
+
+    /// Menu_PartyOrder: the active party (0-2) and the reserve (3-8); nil where a place is empty.
+    public var partyOrder: [Int?] {
+        (0..<9).map { k -> Int? in
+            let c = vm.wram[WRAM.menuPartyOrder + k]
+            return c & 0x80 != 0 ? nil : Int(c)
+        }
+    }
+
+    /// The 24-bit gold (Battle_Gold).
+    public var gold: Int { Int(vm.wram[WRAM.goldHi]) << 16 | vm.wram.word(WRAM.gold) }
+
+    /// The held items (Battle_InvIds / Battle_InvCounts), id and count, in entry order.
+    public var inventory: [(item: Int, count: Int)] {
+        (0..<0x100).compactMap { k -> (item: Int, count: Int)? in
+            let id = vm.wram[WRAM.invIds + k]
+            return id == 0 ? nil : (Int(id), Int(vm.wram[WRAM.invCounts + k]))
+        }
     }
 
     public func summary() -> Summary {
         let leader = Int(vm.wram[WRAM.partyObjSlot])
         return Summary(location: location, frames: frameCount, objects: (0..<vm.pack.objectCount).map(objectState),
                        messages: messages, warps: warps, audio: audio.count, leader: leader & 0x80 == 0 ? leader / 2 : nil,
-                       level: Int(vm.wram[WRAM.fieldUnk55]), limitations: Self.limitations)
+                       level: Int(vm.wram[WRAM.fieldUnk55]), partyOrder: partyOrder, gold: gold,
+                       changes: changes.map { c in
+                           String(format: "frame %d obj %d $%04X %02X: %@", c.frame, c.change.slot / 2, c.change.offset,
+                                  Int(c.change.opcode), c.change.what)
+                       },
+                       limitations: Self.limitations)
     }
 }

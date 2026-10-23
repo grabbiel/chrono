@@ -80,7 +80,7 @@ final class CTSceneRunTests: XCTestCase {
     }
 
     func testAnUnmodelledOpcodeEndsTheLaneWithTheReason() throws {
-        let p = try pack([0xAD, 0x01, 0xD2] + Array(repeating: 0, count: 8))
+        let p = try pack([0xAD, 0x01, 0x32] + Array(repeating: 0, count: 8))
         let (lanes, _) = CTSceneRun.derive(steps(p, frames: 20), pack: p)
         let lane = try XCTUnwrap(lanes.first)
         XCTAssertNotNil(lane.stopped)

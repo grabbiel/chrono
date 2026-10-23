@@ -4,8 +4,8 @@ opcode handlers.
 The helpers run on synthetic data: the random states stay inside the bounds
 the handlers index by, the comparison names the first difference and leaves
 the handlers' scratch bytes out. With the ROM, ChronoRET and a built
-`chronoforge`, a small sample of the party-control opcodes ($AF, $B0) runs both
-ways and must agree.
+`chronoforge`, small samples of the party-control opcodes ($AF, $B0) and of
+the item, gold and party-membership opcodes run both ways and must agree.
 
 Run: re_workspace/.venv/bin/python -m pytest re_workspace/tests/test_event_vm.py -q
 """
@@ -54,6 +54,26 @@ def test_states_stay_in_the_handlers_bounds():
     assert all(t < 16 for t in tiles[0x7E1800][1::2])
 
 
+def test_item_and_party_states_plant_the_operand():
+    rng = random.Random(11)
+    e4 = bytes(range(8))
+    held = 0
+    for _ in range(60):
+        regions = dict(vm.state(rng, 4, 0xCA, e4, b"\x2a\x00"))
+        inv = regions[0x7E2400]
+        assert len(inv) == 0x200 and len(regions[0x7E2C53]) == 3   # ids, counts; the 24-bit gold
+        held += 0x2A in inv[:0x100]
+    assert held > 20                                             # the item is often held
+    listed = 0
+    for _ in range(60):
+        regions = dict(vm.state(rng, 4, 0xD4, e4, b"\x03\x00"))
+        order = regions[0x7E2980]
+        assert len(order) == 0x30 and len(regions[0x7E21A0]) == 0x60   # Menu_PartyOrder .. $29AF; palette rows 5-7
+        listed += 3 in order[:9]
+    assert listed > 20
+    assert 0x7E2400 not in dict(vm.state(rng, 4, 0xB0, e4))
+
+
 def test_compare_names_the_first_difference():
     known = {0x7E0200: 5}
     rom = ("go", 0x23, True, {0x7E0200: 6, 0x7E01C1: 9}, known)
@@ -78,10 +98,10 @@ def test_recorded_evidence_matches_the_swift_families():
         assert f["disagree"] == 0
         assert f["agree"] <= f["cases"]
     modelled = sum(f["opcodes"] for f in vm.EVIDENCE.values())
-    assert modelled == len({op for ops in families.values() for op in ops}) == 175
-    assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 172
-    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 8450
-    assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 8451
+    assert modelled == len({op for ops in families.values() for op in ops}) == 194
+    assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 191
+    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 9401
+    assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 9402
     assert vm.EVIDENCE_UNMODELLED["instructions"] < vm.EVIDENCE_UNMODELLED["instructionsInPacks"] // 10
 
 
@@ -97,3 +117,17 @@ def test_party_control_agrees_with_the_rom(rom_path, chronoret, require, tmp_pat
     assert party["opcodesVerified"] == 2
     assert party["disagree"] == 0
     assert party["agree"] >= 12
+
+
+def test_items_and_membership_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "check", "--cli", str(cli),
+                        "--ops", "C9,CA,CB,CD,CE,D7,D2,D3,D4,D6", "--per-op", "3", "--states", "2", "--jobs", "2",
+                        "--json", str(out)], capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    families = json.loads(out.read_text())["families"]
+    for name, verified in (("items", 6), ("membership", 4)):
+        assert families[name]["opcodesVerified"] == verified, name
+        assert families[name]["disagree"] == 0
+        assert families[name]["agree"] == families[name]["cases"]

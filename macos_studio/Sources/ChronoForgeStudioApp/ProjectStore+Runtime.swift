@@ -23,7 +23,7 @@ final class RuntimeSession {
     /// Story bytes to set before Evt_InitObjects runs (address -> value).
     var startFlags: [Int: UInt8] = [:]
     var party: [UInt8] = [0, 0x80, 0x80]
-    private var baseKey: (x: Int, y: Int)?
+    private var baseKey: (x: Int, y: Int, revision: Int)?
     private var baseFrame: PPUFrame?
     private var boxKey: Int?
     private let store: ProjectStore
@@ -90,9 +90,9 @@ final class RuntimeSession {
     /// The picture for the Metal view, with the location only re-built when the camera moves.
     func picture() -> PPUFrame {
         let cam = field.camera
-        if baseKey?.x != cam.x || baseKey?.y != cam.y || baseFrame == nil {
+        if baseKey?.x != cam.x || baseKey?.y != cam.y || baseKey?.revision != field.mapRevision || baseFrame == nil {
             baseFrame = CTFieldPicture.base(field, map: map, assets: assets)
-            baseKey = cam
+            baseKey = (cam.x, cam.y, field.mapRevision)
         }
         updateBox()
         return CTFieldPicture.frame(field, base: baseFrame).picture

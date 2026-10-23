@@ -192,4 +192,16 @@ final class CTFieldRuntimeTests: XCTestCase {
         XCTAssertEqual(s.limitations, CTFieldRuntime.limitations)
         XCTAssertEqual(s.objects.count, field.vm.pack.objectCount)
     }
+
+    func testARedrawCopyChangesTheMapsPicture() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 27)  // the courtroom: $E5 turns the jury
+        try field.start()
+        try run(field, "", frames: 40)
+        XCTAssertGreaterThan(field.mapRevision, 0)
+        let edited = try XCTUnwrap(field.mapEdits.first)
+        let live = field.liveMap(field.gameMap)
+        let layer = try XCTUnwrap(live.layers.firstIndex { $0.bg == edited.key })
+        XCTAssertNotEqual(live.layers[layer].metatiles, field.gameMap.layers[layer].metatiles)
+    }
 }
+

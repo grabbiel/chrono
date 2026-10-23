@@ -140,5 +140,6 @@ private func runtimeRun(rom: [UInt8], location: String, options: [String: String
                      m.error.map { " error: \($0)" } ?? (m.closedAt.map { " closed at \($0)" } ?? " open")))
     }
     for w in s.warps { print("  warp at frame \(w.frame): \(w.from) -> \(w.to) tile \(w.x),\(w.y)") }
+    for c in s.changes { print("  \(c)") }
     return 0
 }

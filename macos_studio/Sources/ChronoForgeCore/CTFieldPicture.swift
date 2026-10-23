@@ -112,7 +112,7 @@ public enum CTFieldPicture {
     public static func base(_ field: CTFieldRuntime, map: GameMap?, assets: LocationScene.Assets?,
                             cgram: [UInt16]? = nil) -> PPUFrame? {
         guard let map, let assets else { return nil }
-        return LocationScene.frame(map, assets: assets, cgram: cgram ?? TilesetScene.cgram(assets.palette),
+        return LocationScene.frame(field.liveMap(map), assets: assets, cgram: cgram ?? TilesetScene.cgram(assets.palette),
                                    cameraX: field.camera.x, cameraY: field.camera.y)
     }
 

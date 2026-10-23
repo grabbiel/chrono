@@ -30,6 +30,17 @@ public final class CTEventVM {
     public var audio: [AudioCommand] = []
     /// The field's party routines, called by `$B0`/`$AF` (nil: the handler alone).
     public var party: ((PartyRequest) -> Void)?
+    /// Party, inventory and gold changes the opcodes made, oldest first; the field drains them.
+    public var changes: [StateChange] = []
+    /// Menu_RunCommand runs that ended with Menu_Unk834D's refresh (not modelled).
+    public var menuRefreshes = 0
+    /// Map region copies done (Field_UnkAF4E), oldest first; the field drains them.
+    public var mapCopies: [MapCopy] = []
+
+    /// One Field_UnkAF4E copy: the layers whose tiles changed and the destination cells (row << 8 | column).
+    public struct MapCopy: Equatable, Sendable {
+        public var layers: Set<Int>, cells: [Int]
+    }
 
     /// Audio_CmdId and Audio_CmdArg0-2 as Audio_DriverCommand found them.
     public struct AudioCommand: Equatable, Sendable {
@@ -274,6 +285,10 @@ public final class CTEventVM {
         "sound": [0xE8, 0xEA, 0xEB, 0xEC],
         "movement": [0x8F, 0x92, 0x94, 0x95, 0x96, 0x9C, 0xA0, 0xA8, 0xA9, 0xB5, 0xB6],
         "party": [0xAF, 0xB0],
+        "membership": [0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6],
+        "items": [0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7],
+        "gather": [0xD9, 0xDA],
+        "maps": [0xE4, 0xE5],
     ]
     public static let modelled: Set<UInt8> = Set(families.values.joined())
 
@@ -585,6 +600,11 @@ public final class CTEventVM {
         case 0x82: return initNpcSprite(y)
         case 0x83: return initEnemySprite(y)
         case 0xE8, 0xEA, 0xEB, 0xEC: return sound(op, y)
+        case 0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7: return inventoryOp(op, y)
+        case 0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6: return membershipOp(op, y)
+        case 0xD9: return partyWalkToTiles(y)
+        case 0xDA: return partyGather(y)
+        case 0xE4, 0xE5: return mapCopyOp(op, y)
         case 0xE3: wram[WRAM.fieldControlEnabled] = UInt8(data(y + 1)); return .go(x: y + 2, carry: true)
         case 0xE6:
             let amount = dataWord(y + 1), layers = data(y + 3)

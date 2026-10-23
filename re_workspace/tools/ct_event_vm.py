@@ -13,29 +13,40 @@ each opcode it models is run two ways on the same concrete WRAM and compared.
 The operand sets are the ones the ROM's packs use (every distinct instruction,
 or a seeded sample of them), each over seeded random states of the object
 tables, the story bytes and event words, the call-level save table, the
-field's direct page, the pad latches and the tile attributes. A case agrees
+field's direct page, the pad latches and the tile attributes (for the item
+and party opcodes also the inventory, the gold, Menu_PartyOrder and the
+party palette rows). A case agrees
 when both give the same X (where the script goes on), the same carry (on in
 this run or not) and the same final value at every WRAM byte either wrote,
 leaving out the handlers' DP scratch ($01C1-$01EA, $01EE-$01F7). A handler
 that never returns (Sys_HaltWithColor, a loop with no end) must be `halted`
-in the model. The interpreter is run with the entry carry clear and set; a
-handler whose results differ by it is reported, not compared.
+in the model. The interpreter is run with the entry carry clear and set. A
+handler that only hands the entry carry back (no SEC/CLC: $D0, $D1, $D3, and
+$D4/$D6 when nothing is compared) is compared on the clear run, since
+Evt_RunObjScriptSteps enters every handler with C=0 (its ASL of the opcode
+byte); a handler whose results differ by it otherwise is reported, not
+compared.
 
 Nothing from the ROM is written out: the report holds counts, opcodes and
 offsets. The packs and states pass to the CLI through a temporary file.
 
   ct_event_vm.py check [--cli PATH] [--per-op N] [--states K] [--ops 12,13]
-                       [--json report.json]
+                       [--jobs J] [--json report.json]
+
+The ROM-handler runs are spread over J worker processes (default: the CPU
+count), each with its own interpreter; the report does not depend on J.
   ct_event_vm.py unmodelled [--cli PATH]
 """
 
 import argparse
 import json
+import os
 import random
 import subprocess
 import sys
 import tempfile
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 WS = Path(__file__).resolve().parents[1]
@@ -51,10 +62,15 @@ SCRATCH = (range(0x7E01C1, 0x7E01EB), range(0x7E01EE, 0x7E01F8),
 STEP_LIMIT = 3_000_000
 EXTERNAL_PCS = (0x070004,                  # $C7:0004 Audio_DriverCommand (the APU handshake)
                 0x009E29, 0x00A26B, 0x00A2CE,  # Party_Unk9E29/A26B/A2CE: the field's party routines
-                0x003154)                  # Evt_StartTargetFunc2: the touch start the field runs
+                0x003154,                  # Evt_StartTargetFunc2: the touch start the field runs
+                0x02834D)                  # $C2:834D Menu_Unk834D: Menu_RunCommand's party refresh
 OBJ_TABLES = (0x0C00, 0x0F00, 0x0F80, 0x1000, 0x1080, 0x1100, 0x1180, 0x1300, 0x1600, 0x1680, 0x1780,
               0x1800, 0x1880, 0x1900, 0x1980, 0x1A00, 0x1A80, 0x1B00, 0x1B80, 0x1C00, 0x1C80)
 TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E, 0x92, 0x96, 0x9C, 0xA0)
+ITEM_OPS = (0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7)
+PARTY_OPS = (0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6)
+MAP_OPS = (0xE4, 0xE5)
+SLOW_OPS = (0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83)   # sprite loads, unpacking
 
 # The last full `check` (2026-10-22, default --per-op 24 --states 2): per family the opcodes
 # modelled and verified, the operand sets the packs use, and the cases (agree, disagree).
@@ -68,6 +84,10 @@ EVIDENCE = {
     "conditions": {"opcodes": 26, "verified": 24, "operandSets": 233, "cases": 1161, "agree": 1161, "disagree": 0},
     "field": {"opcodes": 9, "verified": 9, "operandSets": 126, "cases": 432, "agree": 432, "disagree": 0},
     "flow": {"opcodes": 18, "verified": 18, "operandSets": 177, "cases": 864, "agree": 864, "disagree": 0},
+    "gather": {"opcodes": 2, "verified": 2, "operandSets": 25, "cases": 96, "agree": 96, "disagree": 0},
+    "items": {"opcodes": 8, "verified": 8, "operandSets": 129, "cases": 414, "agree": 414, "disagree": 0},
+    "maps": {"opcodes": 2, "verified": 2, "operandSets": 48, "cases": 96, "agree": 96, "disagree": 0},
+    "membership": {"opcodes": 7, "verified": 7, "operandSets": 70, "cases": 345, "agree": 345, "disagree": 0},
     "memory": {"opcodes": 47, "verified": 46, "operandSets": 730, "cases": 2331, "agree": 2331, "disagree": 0},
     "messages": {"opcodes": 7, "verified": 7, "operandSets": 151, "cases": 337, "agree": 337, "disagree": 0},
     "movement": {"opcodes": 11, "verified": 11, "operandSets": 161, "cases": 555, "agree": 555, "disagree": 0},
@@ -76,7 +96,7 @@ EVIDENCE = {
     "sound": {"opcodes": 4, "verified": 4, "operandSets": 96, "cases": 192, "agree": 192, "disagree": 0},
     "warps": {"opcodes": 5, "verified": 5, "operandSets": 61, "cases": 246, "agree": 246, "disagree": 0},
 }
-EVIDENCE_UNMODELLED = {"opcodes": 48, "instructions": 7684, "instructionsInPacks": 142702}
+EVIDENCE_UNMODELLED = {"opcodes": 29, "instructions": 3505, "instructionsInPacks": 142702}
 
 
 def scratch(a):
@@ -96,7 +116,38 @@ def biased(rng):
     return rng.randrange(256)
 
 
-def state(rng, objects, op, e4):
+def inventory(rng, wanted):
+    """Battle_InvIds / Battle_InvCounts ($7E:2400, $2500): mostly empty, with the
+    item asked for at a random entry (sometimes twice, or with a count of 0) and
+    the gold ($7E:2C53, 24-bit) near the edges the services test."""
+    ids = bytearray(rng.choice((0, 0, 0, rng.randrange(1, 256))) for _ in range(256))
+    counts = bytearray(rng.choice((0, 1, 2, 98, 99, rng.randrange(256))) for _ in range(256))
+    if rng.random() < 0.7:
+        for _ in range(rng.choice((1, 1, 2))):
+            ids[rng.randrange(256)] = wanted
+    if rng.random() < 0.15:
+        ids = bytearray(rng.randrange(1, 256) for _ in range(256))     # no empty entry
+    hi = rng.choice((0, 0, 1, 0x97, 0x98, 0x99, rng.randrange(256)))
+    lo = rng.choice((0, 1, 0x9680, 0x967F, 0xFFFF, rng.randrange(0x10000)))
+    return [(0x7E2400, ids + counts), (0x7E2C53, bytes((lo & 0xFF, lo >> 8, hi)))]
+
+
+def party_order(rng, char, slots):
+    """Menu_PartyOrder ($7E:2980, 9 places and Menu_Unk29AF), the character
+    asked for listed or not, and the party's objects' Obj_Unk1101 (the
+    character each stands for) matching it now and then."""
+    order = bytearray(rng.choice((0, 1, 2, 3, 4, 5, 6, 7, 0x80, 0x80 | rng.randrange(8), rng.randrange(256)))
+                      for _ in range(9))
+    if rng.random() < 0.6:
+        order[rng.randrange(9)] = char
+    if rng.random() < 0.2:
+        order[rng.randrange(3)] = 0x80 | char
+    tail = bytearray(biased(rng) for _ in range(0x30 - 9))
+    unk1101 = [(0x7E1101 + s, bytes((char if rng.random() < 0.5 else rng.randrange(8),))) for s in slots]
+    return [(0x7E2980, order + tail), (0x7E21A0, bytearray(rng.randrange(256) for _ in range(0x60)))] + unk1101
+
+
+def state(rng, objects, op, e4, operand=b"\0\0"):
     """[(address, bytes)]: one random WRAM state for a handler of `op`."""
     n = max(1, min(16, objects))
     slot = lambda: 2 * rng.randrange(n)  # noqa: E731
@@ -144,6 +195,21 @@ def state(rng, objects, op, e4):
     out.append((0x7F0980, bytearray(biased(rng) for _ in range(0x280))))  # ObjX_* $0980-$0BFF
     if op in TILE_OPS:
         out.append((0x7E7000, bytearray(rng.randrange(256) for _ in range(0x1000))))
+    if op in MAP_OPS:                                       # the map planes the copy reads and writes
+        out.append((0x7E3000, bytearray(rng.randrange(256) for _ in range(0x4000))))
+        out.append((0x7E7000, bytearray(rng.randrange(256) for _ in range(0x4000))))
+    if op in ITEM_OPS:
+        wanted = operand[0]
+        if op == 0xC7:                                      # the item is event word a's low byte
+            story = next(b for at, b in out if at == 0x7F0000)
+            wanted = story[0x200 + 2 * operand[0]] if rng.random() < 0.8 else wanted
+        out += inventory(rng, wanted)
+    if op in (0xD9, 0xDA):                                  # the arrival counters, around their end values
+        story = next(b for at, b in out if at == 0x7F0000)
+        story[0x3FC], story[0x3FE] = rng.choice((0, 0, 1, 2, 3, 4, 5)), rng.choice((0, 1, 2, 3, 3, 4))
+    if op in PARTY_OPS:
+        slots = [dp[0x97 + p] for p in (0, 2, 4) if dp[0x97 + p] < 0x80]
+        out += party_order(rng, operand[0], slots)
     return out
 
 
@@ -311,6 +377,47 @@ def compare(rom_out, swift, known):
     return None
 
 
+_WORKER = {}
+
+
+def _worker_init(packs_by_label):
+    """A pool worker: its own ROM image, interpreter and concrete machine."""
+    rom = packs.read_rom()
+    interp, _ = packs.interpreter(rom)
+    import absint                       # on the path once the interpreter is set up
+    _WORKER.update(conc=Concrete(interp, absint), packs=packs_by_label)
+
+
+def _verdict(task):
+    """One case's ROM-handler runs (entry carry clear and set) against the model's
+    result: (case id, outcome, message or None)."""
+    cid, label, y, regions, swift = task
+    conc, data = _WORKER["conc"], _WORKER["packs"][label]
+    outs = [conc.run(data, y, regions, carry) for carry in (False, True)]
+    if outs[0][0] == "unknown":
+        return cid, "unverifiable", f"{label} ${y:04X}: {outs[0][1]}"
+    if outs[0][:4] != outs[1][:4]:
+        keeps = outs[0][0] == outs[1][0] == "go" and outs[0][1] == outs[1][1] and outs[0][3] == outs[1][3] \
+            and outs[0][2] is False and outs[1][2] is True
+        if not keeps:                       # anything but the entry carry handed back
+            return cid, "carry-dependent", None
+    why = compare(outs[0], swift, outs[0][4] if outs[0][0] == "go" else {})
+    if why is not None:
+        return cid, "disagree", f"{label} ${y:04X}: {why}"
+    return cid, "halts" if outs[0][0] == "halted" else "agree", None
+
+
+def verdicts(tasks, by_label, jobs):
+    """{case id: (outcome, message)} for the tasks, over `jobs` processes (1: in this one)."""
+    if jobs <= 1:
+        _worker_init(by_label)
+        return {cid: (k, m) for cid, k, m in map(_verdict, tasks)}
+    used = {t[1] for t in tasks}
+    with ProcessPoolExecutor(max_workers=jobs, initializer=_worker_init,
+                             initargs=({k: v for k, v in by_label.items() if k in used},)) as pool:
+        return {cid: (k, m) for cid, k, m in pool.map(_verdict, tasks, chunksize=4)}
+
+
 def check(args):
     rom = packs.read_rom()
     table = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -321,16 +428,13 @@ def check(args):
     wanted = set(range(256)) if not args.ops else {int(o, 16) for o in args.ops.split(",")}
     sites = operand_sets(loaded, wanted, args.per_op, rng)
     e4 = rom[0x24FFE0:0x24FFE8]                         # RomE4_PtrInit: Field_E4Ptr0-3 low words
-    interp, _ = packs.interpreter(rom)
-    import absint
-    conc = Concrete(interp, absint)
     cases, meta = [], {}
     for op in sorted(sites):
         states = max(args.states, -(-args.per_op * args.states // len(sites[op])))   # few operand sets: more states
         for label, y in sites[op]:
             for _ in range(states):
                 objects = by_label[label][0]
-                regions = state(rng, objects, op, e4)
+                regions = state(rng, objects, op, e4, by_label[label][2 + y:4 + y])
                 cid = len(cases)
                 cases.append({"id": cid, "pack": label, "y": y,
                               "regions": [[at, bytes(b).hex()] for at, b in regions]})
@@ -348,33 +452,30 @@ def check(args):
     family_of = {int(op): f for f, ops in families.items() for op in ops}
     per_op = defaultdict(Counter)
     failures = defaultdict(list)
+    tasks = []
     for cid, (op, label, y, regions) in meta.items():
         swift = results[cid]
         if op not in family_of:
             per_op[op]["unmodelled"] += 1
-            continue
-        if swift["kind"] == "unmodelled":
+        elif swift["kind"] == "unmodelled":
             per_op[op]["declined"] += 1                 # the model stops (e.g. a comparison past the table)
-            continue
-        data = by_label[label]
-        outs = [conc.run(data, y, regions, carry) for carry in (False, True)]
-        if outs[0][0] == "unknown":
-            per_op[op]["unverifiable"] += 1
-            failures[op].append(f"{label} ${y:04X}: {outs[0][1]}")
-            continue
-        if outs[0][:4] != outs[1][:4]:
-            per_op[op]["carry-dependent"] += 1
-            continue
-        why = compare(outs[0], swift, outs[0][4] if outs[0][0] == "go" else {})
-        if why is None:
+        else:
+            tasks.append((cid, label, y, regions, swift))
+    tasks.sort(key=lambda t: (meta[t[0]][0] not in SLOW_OPS, t[0]))     # the long handlers first
+    done = verdicts(tasks, by_label, args.jobs)
+    for cid, label, y, regions, swift in sorted(tasks):
+        op = meta[cid][0]
+        kind, msg = done[cid]
+        if kind in ("agree", "halts"):
             per_op[op]["agree"] += 1
             if str(0x7E0306) in swift["mem"]:
                 per_op[op]["unpacked"] += 1             # agreed through Decomp_ToWram
-            if outs[0][0] == "halted":
+            if kind == "halts":
                 per_op[op]["halts"] += 1
         else:
-            per_op[op]["disagree"] += 1
-            failures[op].append(f"{label} ${y:04X}: {why}")
+            per_op[op][kind] += 1
+        if msg:
+            failures[op].append(msg)
     report = {"families": {}, "unmodelled": {}, "failures": {f"{op:02X}": v[:5] for op, v in failures.items()}}
     for fam, ops in sorted(families.items()):
         rows = {f"{op:02X}": dict(per_op[op]) for op in ops if op in per_op}
@@ -436,6 +537,7 @@ def main():
     c.add_argument("--states", type=int, default=2)
     c.add_argument("--ops")
     c.add_argument("--json")
+    c.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     u = sub.add_parser("unmodelled")
     u.add_argument("--cli", default=str(CLI))
     args = ap.parse_args()
