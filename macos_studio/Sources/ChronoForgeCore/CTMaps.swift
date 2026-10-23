@@ -445,6 +445,7 @@ public enum CTMaps {
         var need12: Set<Int> = [], need3: Set<Int> = [], needPal: Set<Int> = []
         for i in picks {
             var m = gameMap(try CTMapROM.decode(rom, i))
+            if project.maps[m.id]?.rom?.createdFrom != nil { continue }        // a created location stays (CTNewLocation)
             if let old = project.maps[m.id] { m.name = old.name; m.triggers = old.triggers }
             project.maps[m.id] = m
             ids.append(m.id)
@@ -467,7 +468,7 @@ public enum CTMaps {
         var problems: [String] = [], checked = 0
         for (id, m) in project.maps.sorted(by: { $0.key < $1.key }) {
             problems += LocationScene.invariants(m, project: project).map { "\(id): \($0)" }
-            guard let i = m.rom?.location else { continue }
+            guard let i = m.rom?.location, m.rom?.createdFrom == nil else { continue }
             checked += 1
             var want = gameMap(try CTMapROM.decode(rom, i))
             want.name = m.name; want.triggers = m.triggers

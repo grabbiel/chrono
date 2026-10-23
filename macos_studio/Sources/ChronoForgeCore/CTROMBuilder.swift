@@ -145,6 +145,7 @@ public enum CTROMBuilder {
         public var maps: [CTMapPatch.ReportMap]? = nil             // absent: not requested
         public var tilesets: [CTTilesetPatch.ReportTileset]? = nil // absent: not requested
         public var relocations: [Relocation]? = nil               // absent: nothing moved
+        public var treasureRom: CTTreasure.ReportBlock? = nil     // absent: TreasureRom unchanged
         public var enemies: [Enemy]? = nil                        // absent: none requested
         public var enemyScripts: [CTEnemyAIPatch.ReportScript]? = nil // absent: no script written
         public var sprites: [CTSpritePatch.ReportSprite]? = nil   // absent: none requested
@@ -443,9 +444,10 @@ public enum CTROMBuilder {
         }
 
         // Maps and tilesets first: the exits may grow only into the padding right after them.
+        var treasureReport: CTTreasure.ReportBlock?
         let mapReport = maps.isEmpty ? nil : try CTMapPatch.apply(
             maps: maps, base: base, space: &space, write: { write($0, at: $1, $2) },
-            relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
+            relocated: { relocated($0, from: $1, to: $2, bytes: $3) }, treasure: &treasureReport)
         let tilesetReport = tilesets.isEmpty ? nil : try CTTilesetPatch.apply(
             requests: tilesets, base: base, space: &space, write: { write($0, at: $1, $2) },
             relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
@@ -655,6 +657,7 @@ public enum CTROMBuilder {
                             techs: techs, items: items?.items, itemTables: items?.tables,
                             writes: changed, freeBytesLeft: space.total, maps: mapReport, tilesets: tilesetReport,
                             relocations: relocations.isEmpty ? nil : relocations)
+        report.treasureRom = treasureReport
         report.enemies = enemyReport.isEmpty ? nil : enemyReport
         report.enemyScripts = scriptReport.isEmpty ? nil : scriptReport
         report.sprites = pcSpriteRequests.isEmpty ? nil : spriteReport

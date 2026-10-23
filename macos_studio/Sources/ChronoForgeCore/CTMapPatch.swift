@@ -3,8 +3,11 @@
 // its entry's mode, kept in place when it fits and otherwise moved and
 // repointed; a map edited away from a shared entry takes a free
 // Map_PropsPtrs slot; the LocRom records in place; ExitRom rewritten with its
-// 513 offset words; TreasureRom records in place. Unchanged parts are not
-// written, so an unedited import rebuilds the base ROM byte for byte.
+// 513 offset words; TreasureRom rebuilt as a whole when a list changed
+// (CTTreasure: chests added and removed renumber the later flags); a map
+// created from another (CTNewLocation) over a location the game never loads.
+// Unchanged parts are not written, so an unedited import rebuilds the base ROM
+// byte for byte.
 // re_workspace/tools/ct_rom_check.py checks the result independently.
 import Foundation
 
@@ -33,6 +36,8 @@ public enum CTMapPatch {
         public let exits: [[Int]]              // 7 raw bytes each
         public let treasureList: Int           // the location whose TreasureRom list it uses
         public let treasure: [[Int]]           // x, y, contents of that list
+        public var flags: [Int]? = nil         // that list's flag numbers (absent: TreasureRom unchanged)
+        public var createdFrom: Int? = nil     // the source location of a created one (CTNewLocation)
     }
 
     /// A map's MapProps from the project: the sizes come from the layers, the
@@ -103,6 +108,12 @@ public enum CTMapPatch {
                               sizes: CTMapROM.layerSizes(size1: size1, size3: size3), layer3Plane: s3 != nil,
                               halfRate2: settings.halfRate2, ownStep2: settings.ownStep2, ownStep3: settings.ownStep3,
                               planes: planes, hiBits: plane.hiBits, attrA: plane.attrA, attrB: plane.attrB)
+    }
+
+    /// Two maps with the same content (their names, triggers and provenance aside).
+    static func sameMap(_ a: GameMap, _ b: GameMap) -> Bool {
+        guard a.layers == b.layers, a.exits == b.exits, a.tileProps == b.tileProps else { return false }
+        return a.location == b.location && a.settings == b.settings && a.treasure == b.treasure
     }
 
     /// What two MapProps images mean to Map_UnpackTilePlanes (their run splits aside).
@@ -185,8 +196,14 @@ public enum CTMapPatch {
         }
         for e in m.exits { do { _ = try exitBytes(e, map: m.id) } catch { problems.append("\(error)") } }
         for (k, t) in (m.treasure ?? []).enumerated() where !(0...0xFF).contains(t.x) || !(0...0xFF).contains(t.y)
-            || !(0...0xFFFF).contains(t.contents) || (k == 0 && t.x | t.y == 0) {
-            problems.append("treasure \(k) is out of range (a first record on tile 0,0 is a redirect)")
+            || !(0...0xFFFF).contains(t.contents) || t.x | t.y == 0 {
+            problems.append("treasure \(k) is out of range or on tile 0,0 (the redirect marker)")
+        }
+        if let t = m.treasure, t.count > CTTreasure.listMax {
+            problems.append("\(t.count) chests; Map_TreasureIdx numbers at most \(CTTreasure.listMax) in a location")
+        }
+        if let from = m.rom?.createdFrom {
+            problems += CTNewLocation.problems(number: loc, from: from)
         }
         return problems
     }
@@ -198,7 +215,8 @@ public enum CTMapPatch {
     /// and every moved block with `relocated`.
     static func apply(maps: [GameMap], base: [UInt8], space: inout FreeSpace,
                       write: ([UInt8], Int, String) -> Void,
-                      relocated: (String, Int?, Int, Int) -> Void) throws -> [ReportMap] {
+                      relocated: (String, Int?, Int, Int) -> Void,
+                      treasure treasureBlock: inout CTTreasure.ReportBlock?) throws -> [ReportMap] {
         // Each listed map: its location, the base decode, the new MapProps and whether it changed.
         struct Item { var map: GameMap; var loc: Int; var base: CTMapROM.Decoded; var image: [UInt8]?; var props: CTMapROM.Props }
         var items: [Item] = [], seen = Set<Int>()
@@ -207,8 +225,18 @@ public enum CTMapPatch {
                 throw CTROMBuildError("map \(m.id): no rom.location; maps are written over the location they were imported from")
             }
             guard seen.insert(loc).inserted else { throw CTROMBuildError("map \(m.id): location \(loc) is built twice") }
+            if let from = m.rom?.createdFrom, let problem = CTNewLocation.problems(number: loc, from: from).first {
+                throw CTROMBuildError("map \(m.id): \(problem)")
+            }
+            if m.rom?.createdFrom != nil, let e = m.location?.events, CTROMLayout.notEventPackEntries.contains(e) {
+                throw CTROMBuildError("map \(m.id): its Events entry \(e) does not point at an event pack")
+            }
             let d: CTMapROM.Decoded
             do { d = try CTMapROM.decode(base, loc) } catch { throw CTROMBuildError("map \(m.id): \(error)") }
+            if m.rom?.createdFrom == nil, CTNewLocation.unused.contains(loc), !sameMap(m, CTMaps.gameMap(d)) {
+                throw CTROMBuildError("map \(m.id): location \(loc) is one the game never loads; create it from another " +
+                                      "location (maps new-location) to change it")
+            }
             let p = try props(m, base: d.props)
             let image = CTMapROM.packProps(p)
             let back = try CTMapROM.parseProps(image)
@@ -281,6 +309,14 @@ public enum CTMapPatch {
             guard it.map.exits != old else { continue }
             exitLists[it.loc] = try it.map.exits.map { try exitBytes($0, map: it.map.id) }
         }
+        let created = Set(items.filter { $0.map.rom?.createdFrom != nil }.map(\.loc))
+        for it in items {
+            for e in it.map.exits {
+                guard let dest = Int(e.map.dropFirst(4)), CTNewLocation.unused.contains(dest), !created.contains(dest) else { continue }
+                throw CTROMBuildError("map \(it.map.id): exit at \(e.x),\(e.y) leads to \(e.map), a location the game never " +
+                                      "loads and this build leaves out (list a map created there in rom.maps)")
+            }
+        }
         let block = exitBlock(exitLists), oldBlock = baseExitBlock(base)
         if block != oldBlock {
             let start = CTMapROM.pc(exitBlock)
@@ -295,35 +331,37 @@ public enum CTMapPatch {
             write(block, start, "ExitRom")
         }
 
-        // Treasure: each list's records in place (a count change renumbers every later chest's flag).
+        // Treasure: TreasureRom rebuilt as a whole when a list changed (CTTreasure).
+        var tlists = CTTreasure.lists(base)
         var lists: [Int: (map: String, records: [GameMap.Treasure])] = [:]
         for it in items {
             let old = it.base.treasure.map { GameMap.Treasure(x: $0.x, y: $0.y, contents: $0.contents) }
             let new = it.map.treasure ?? old
             guard new != old else { continue }
-            guard new.count == old.count else {
-                throw CTROMBuildError("map \(it.map.id): \(new.count) treasure records instead of \(old.count); a chest's flag " +
-                                      "is its number in TreasureRom, so adding or removing one renumbers every later chest")
+            guard it.base.treasureList != 0 else {
+                throw CTROMBuildError("map \(it.map.id): location 0's treasure list is its dummy record ($2F2F), which is kept")
             }
             if let other = lists[it.base.treasureList], other.records != new {
                 throw CTROMBuildError("map \(it.map.id): it shares location \(it.base.treasureList)'s treasure list with " +
                                       "\(other.map), which lists other treasure")
             }
+            guard new.count <= CTTreasure.listMax else {
+                throw CTROMBuildError("map \(it.map.id): \(new.count) chests; Map_TreasureIdx numbers at most \(CTTreasure.listMax)")
+            }
             for (k, t) in new.enumerated() {
                 guard (0...0xFF).contains(t.x), (0...0xFF).contains(t.y), (0...0xFFFF).contains(t.contents) else {
                     throw CTROMBuildError("map \(it.map.id): treasure \(k) is out of range")
                 }
-                guard k > 0 || t.x | t.y != 0 else {
-                    throw CTROMBuildError("map \(it.map.id): a first treasure record on tile 0,0 redirects to another location")
+                guard t.x | t.y != 0 else {
+                    throw CTROMBuildError("map \(it.map.id): treasure \(k) is on tile 0,0, which marks a redirect to another location")
                 }
             }
             lists[it.base.treasureList] = (it.map.id, new)
-            for (record, t) in zip(it.base.treasure, new) {
-                let tile = t.y << 8 | t.x
-                write([UInt8(tile & 0xFF), UInt8(tile >> 8), UInt8(t.contents & 0xFF), UInt8(t.contents >> 8)],
-                      CTMapROM.pc(CTMapROM.treasureBank + record.offset), "TreasureRom[\(it.base.treasureList)]")
-            }
+            tlists[it.base.treasureList] = new.map(CTTreasure.Record.init)
         }
+        treasureBlock = try CTTreasure.apply(lists: tlists, base: base, keep: Set(images.map(\.entry)), space: &space,
+                                     write: write, relocated: relocated)
+        let numbers = treasureBlock == nil ? nil : CTTreasure.numbers(tlists)
 
         return items.map { it in
             let entry = entryOf[it.loc] ?? it.base.header.mapProps
@@ -339,7 +377,8 @@ public enum CTMapPatch {
                              unpackedBytes: shaBytes.count, unpackedSHA256: CTEventPack.sha256(shaBytes),
                              placement: placed?.placement ?? "unchanged", record: records[it.loc]!.map(Int.init),
                              exits: exits, treasureList: it.base.treasureList,
-                             treasure: tlist.map { [$0.x, $0.y, $0.contents] })
+                             treasure: tlist.map { [$0.x, $0.y, $0.contents] },
+                             flags: numbers?[it.base.treasureList], createdFrom: it.map.rom?.createdFrom)
         }
     }
 }

@@ -805,11 +805,16 @@ public struct GameMap: Codable, Equatable, Sendable, Identifiable {
         /// The location whose TreasureRom list this one uses (itself unless redirected).
         public var treasureList: Int
         public var treasureAt: String?
+        /// A location created from another (CTNewLocation): the source's number. The rest of this block is
+        /// the source's provenance, with `location` and `record` the new location's.
+        public var createdFrom: Int?
         public init(location: Int, record: String, mapProps: Int, packedAt: String, packedBytes: Int,
-                    unpackedBytes: Int, staleTiles: Int, exitsAt: String?, treasureList: Int, treasureAt: String?) {
+                    unpackedBytes: Int, staleTiles: Int, exitsAt: String?, treasureList: Int, treasureAt: String?,
+                    createdFrom: Int? = nil) {
             self.location = location; self.record = record; self.mapProps = mapProps; self.packedAt = packedAt
             self.packedBytes = packedBytes; self.unpackedBytes = unpackedBytes; self.staleTiles = staleTiles
             self.exitsAt = exitsAt; self.treasureList = treasureList; self.treasureAt = treasureAt
+            self.createdFrom = createdFrom
         }
     }
 }
