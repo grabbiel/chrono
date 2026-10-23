@@ -1,7 +1,8 @@
 // MusicPane.swift — CT song sequences (audio/songs/*.ctsong, ct-song/1) as a
 // listing, tracker, piano roll, instrument rack and echo designer, and
 // .akao.json tracker scores. `--song <name>` and `--music-view <view>` at
-// launch open a listing on a view (Listing, Tracker, Piano Roll, Instruments, Echo).
+// launch open a listing on a view (Listing, Tracker, Piano Roll, Instruments, Echo);
+// `--music-new` opens the New… sheet and `--import-midi <file.mid>` the Import MIDI sheet.
 import SwiftUI
 import ChronoForgeCore
 import UniformTypeIdentifiers
@@ -36,6 +37,8 @@ private struct SongListingsView: View {
     @State private var pickROM = false
     @State private var importIndex = 1
     @State private var newSong = false
+    @State private var pickMIDI = false
+    @State private var midi: MIDIPick?
 
     var body: some View {
         NavigationSplitView {
@@ -48,13 +51,25 @@ private struct SongListingsView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                HStack {
-                    Stepper(String(format: "song $%02X", importIndex), value: $importIndex, in: 0...(CTSongISA.romSongCount - 1))
-                    Button("Play", systemImage: "play.fill") { store.playROMSong(importIndex) }
-                        .labelStyle(.iconOnly).help("Play this ROM song")
-                    Button("Import from ROM…") { pickROM = true }
-                    Button("New…") { newSong = true }.help("Start a song from the template, built into this song number")
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Stepper(String(format: "song $%02X", importIndex), value: $importIndex, in: 0...(CTSongISA.romSongCount - 1))
+                            .fixedSize()
+                        Button("Play", systemImage: "play.fill") { store.playROMSong(importIndex) }
+                            .labelStyle(.iconOnly).help("Play this ROM song")
+                        Spacer()
+                        Button("New…") { newSong = true }.help("Start a song from the template, built into this song number")
+                    }
+                    Menu("Import") {
+                        Button("From the ROM…") { pickROM = true }
+                        Button("MIDI File…") { pickMIDI = true }
+                    }
+                    .help("Import this song number from the ROM, or convert a MIDI file into a listing built into it")
                 }.padding(8)
+                .fileImporter(isPresented: $pickMIDI, allowedContentTypes: [.midi], allowsMultipleSelection: false) { picked in
+                    guard case .success(let urls) = picked, let url = urls.first else { return }
+                    midi = MIDIPick(url: url)
+                }
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
@@ -69,12 +84,24 @@ private struct SongListingsView: View {
             listings = store.songListings()
             if selection == nil, let song = LaunchArguments.value("--song") { selection = listings.first { $0.hasSuffix("/" + song) } }
         }
+        .task {
+            // Sheets asked for at launch open once the window is up.
+            try? await Task.sleep(for: .milliseconds(500))
+            if CommandLine.arguments.contains("--music-new") { newSong = true }
+            if let path = LaunchArguments.value("--import-midi") { midi = MIDIPick(url: URL(fileURLWithPath: path)) }
+        }
         .sheet(isPresented: $newSong) {
             NewSongSheet(song: importIndex) { song, options in
                 if let rel = store.newSong(song, options: options) {
                     listings = store.songListings()
                     selection = rel
                 }
+            }
+        }
+        .sheet(item: $midi) { pick in
+            MIDIImportSheet(store: store, url: pick.url, song: importIndex) { rel in
+                listings = store.songListings()
+                selection = rel
             }
         }
         .fileImporter(isPresented: $pickROM, allowedContentTypes: [.data], allowsMultipleSelection: false) { picked in
@@ -132,6 +159,161 @@ private struct NewSongSheet: View {
         }
         .padding()
         .frame(width: 380)
+    }
+}
+
+/// A MIDI file chosen for the Import MIDI sheet.
+private struct MIDIPick: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+/// Import MIDI (CTMIDIImport, docs/music_tracker.md): the file's channels
+/// and programs, the program → sample table, channel 10 as a drum kit, the
+/// grid and transpose; a live conversion shows the voices, tempo and rounding
+/// or why it is refused, and Import checks the budgets with rom.samples.
+private struct MIDIImportSheet: View {
+    let store: ProjectStore
+    let url: URL
+    @State var song: Int
+    let done: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var file: Result<CTMIDIFile, Error>?
+    @State private var programs: [Int: Int] = [:]
+    @State private var drumKeys: [Int: Int] = [:]
+    @State private var drums = true
+    @State private var grid = 3
+    @State private var transpose = 0
+    @State private var loop = true
+    @State private var failure: String?
+
+    /// Programs at the notes of each channel (channel 10 apart), and channel 10's keys.
+    private var used: (programs: [Int], keys: [Int], channels: [Int: Int]) {
+        guard case .success(let f)? = file else { return ([], [], [:]) }
+        var program = [Int](repeating: 0, count: 16), programs = Set<Int>(), keys = Set<Int>(), channels: [Int: Int] = [:]
+        for e in f.events {
+            switch e.kind {
+            case .program(let c, let p): program[c] = p
+            case .noteOn(let c, let k, _):
+                channels[c + 1, default: 0] += 1
+                if c == CTMIDIImport.percussionChannel && drums { keys.insert(k) } else { programs.insert(program[c]) }
+            default: break
+            }
+        }
+        return (programs.sorted(), keys.sorted(), channels)
+    }
+
+    /// "1 (12 notes), 10 (4 notes)": its own function for CI's older type checker (Xcode 26.6).
+    private func channelList(_ channels: [Int: Int]) -> String {
+        var parts: [String] = []
+        for c in channels.keys.sorted() { parts.append("\(c) (\(channels[c] ?? 0) notes)") }
+        return parts.joined(separator: ", ")
+    }
+
+    private var options: CTMIDIImport.Options {
+        var o = CTMIDIImport.Options()
+        // Every program the file plays maps to what its stepper shows (sample 1 until changed).
+        // Typed closures keep these cheap for CI's older type checker (Xcode 26.6).
+        let pairs: [(Int, Int)] = used.programs.map { (p: Int) -> (Int, Int) in (p, programs[p] ?? 1) }
+        o.programs = Dictionary(uniqueKeysWithValues: pairs)
+        o.grid = grid
+        o.transpose = transpose
+        o.loop = loop
+        if drums {
+            o.drums = used.keys.prefix(CTDrumKit.padCount).map { (k: Int) -> CTMIDIImport.DrumPad in
+                CTMIDIImport.DrumPad(key: k, sample: drumKeys[k] ?? 1)
+            }
+        }
+        return o
+    }
+
+    var body: some View {
+        let u = used
+        VStack(spacing: 0) {
+        Form {
+            Section(url.lastPathComponent) {
+                switch file {
+                case .success(let f)?:
+                    Text("format \(f.format), \(f.division) ticks a quarter; channels \(channelList(u.channels))")
+                        .font(.caption)
+                case .failure(let e)?: Text("\(e)").foregroundStyle(.red)
+                case nil: ProgressView()
+                }
+                Stepper(String(format: "Build into song $%02X", song), value: $song, in: 0...(CTSongISA.romSongCount - 1))
+            }
+            Section("Programs → samples (Audio_SampleTable numbers; 63 on for rom.samples' appended ones)") {
+                ForEach(u.programs, id: \.self) { p in
+                    Stepper("program \(p) → sample \(programs[p] ?? 1)", value: Binding(get: { programs[p] ?? 1 }, set: { programs[p] = $0 }),
+                            in: 1...CTSongISA.sampleNumberMax)
+                }
+            }
+            Section("Channel 10") {
+                Toggle("as a drum kit (each key a pad, played at note 60)", isOn: $drums)
+                if drums {
+                    ForEach(u.keys.prefix(CTDrumKit.padCount), id: \.self) { k in
+                        Stepper("key \(k) → sample \(drumKeys[k] ?? 1)", value: Binding(get: { drumKeys[k] ?? 1 }, set: { drumKeys[k] = $0 }),
+                                in: 1...CTSongISA.sampleNumberMax)
+                    }
+                }
+            }
+            Section("Timing and notes") {
+                Picker("grid", selection: $grid) {
+                    ForEach([3, 6, 12, 24], id: \.self) { Text("\($0) steps").tag($0) }
+                }
+                Stepper("transpose \(transpose) semitones", value: $transpose, in: -48...48)
+                Toggle("loop back to the start at the end", isOn: $loop)
+            }
+        }
+        .formStyle(.grouped)
+        Divider()
+        VStack(alignment: .leading, spacing: 6) {
+            if case .success(let f)? = file {
+                switch Result(catching: { try CTMIDIImport.convert(f, options: options) }) {
+                case .success(let (_, r)):
+                    Text(summary(r)).font(.caption.monospaced()).fixedSize(horizontal: false, vertical: true)
+                case .failure(let e):
+                    Text("\(e)").foregroundStyle(.red).font(.caption)
+                }
+            }
+            if let failure { Text(failure).foregroundStyle(.red).font(.caption) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Import") {
+                    do {
+                        let (rel, _) = try store.importMIDI(url, song: song, options: options)
+                        done(rel)
+                        dismiss()
+                    } catch { failure = "\(error)" }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled((try? file?.get()) == nil)
+            }
+        }
+        .padding()
+        }
+        .frame(width: 520, height: 640)
+        .onAppear {
+            file = Result { try CTMIDIFile(bytes: [UInt8](try Data(contentsOf: url))) }
+        }
+    }
+
+    private func summary(_ r: CTMIDIImport.Report) -> String {
+        // Built line by line for CI's older type checker (Xcode 26.6).
+        var lines: [String] = []
+        for v in r.voices {
+            let kit: String = v.drums ? " (drum kit)" : ""
+            var line: String = "voice \(v.voice): channel \(v.channel)\(kit), \(v.notes) notes"
+            if v.droppedFromChords > 0 { line += ", \(v.droppedFromChords) chord notes dropped" }
+            lines.append(line)
+        }
+        for t in r.tempo {
+            lines.append(String(format: "step %d: %.1f BPM → tempo $%02X (plays %.1f)", t.step, t.bpm, t.byte, t.playedBPM))
+        }
+        let sampleList: String = r.samples.map { (n: Int) -> String in String(n) }.joined(separator: " ")
+        lines.append(String(format: "@samples %@; %d steps, %d bytes; rounding ≤ %.2f steps (%.1f ms)",
+                            sampleList, r.steps, r.sequenceBytes, r.maxErrorSteps, r.maxErrorMilliseconds))
+        return lines.joined(separator: "\n")
     }
 }
 

@@ -307,3 +307,17 @@ public final class SPCStream {
         throw CTSongError("\(file.count) bytes is not whole 9-byte BRR blocks (with or without a 2-byte header)")
     }
 }
+
+extension SPCStream {
+    /// Song `song` of a built ROM (`CTROMBuilder.audioScratch`, or a build's
+    /// output): its transfer plan is read from `built`, and the driver boots
+    /// from the verified ROM `clean`, as `ctSong(rom:replacing:)` does.
+    public static func ctSong(clean: [UInt8], built: [UInt8], song: Int, iplROM: [UInt8]? = nil) throws -> SPCStream {
+        let plan = try CTSPCTransfer.Plan(rom: built, song: song)
+        let (session, load) = try CTSPCTransfer.loadSession(rom: clean, plan: plan, iplROM: iplROM, limits: .init())
+        guard load.passed else {
+            throw CTSongError("song load checks failed: " + load.checks.filter { !$0.passed }.map(\.name).joined(separator: ", "))
+        }
+        return SPCStream(cpu: session.cpu, bus: session.bus, dsp: session.dsp)
+    }
+}

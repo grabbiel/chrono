@@ -93,6 +93,14 @@ struct SFXLabEditor: View {
         _envelope = State(initialValue: DSPEnvelope.Setting(sample: saved))
     }
 
+    /// The saved sidecar as the editor shows it unedited: a sidecar with no
+    /// envelope gets the editor's default, which is not an unsaved change.
+    private var savedAsEdited: SampleMeta {
+        var m = saved
+        DSPEnvelope.Setting(sample: saved).apply(to: &m)
+        return m
+    }
+
     /// The sidecar as edited, envelope included.
     private var edited: SampleMeta {
         var m = meta
@@ -101,6 +109,7 @@ struct SFXLabEditor: View {
     }
 
     var body: some View {
+        ScrollViewReader { scroller in
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
@@ -111,10 +120,18 @@ struct SFXLabEditor: View {
                 }
                 GroupBox("Envelope") { EnvelopeShaper(setting: $envelope, fx: $meta.fx) }
                 GroupBox("Pitch, vibrato and noise") { VoiceFXControls(meta: $meta) }
-                GroupBox("Use in game") { SampleUseInGameView(store: store, id: id, unsaved: edited != saved) }
+                GroupBox("Use in game") { SampleUseInGameView(store: store, id: id, unsaved: edited != savedAsEdited) }
+                    .id("use-in-game")
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onAppear {
+            // `--sfx-section use` at launch scrolls to Use in game.
+            if LaunchArguments.value("--sfx-section") == "use" {
+                DispatchQueue.main.async { scroller.scrollTo("use-in-game", anchor: .bottom) }
+            }
+        }
         }
         // The content's ideal width (the waveform is as wide as the sample) must
         // not size the split view's columns.

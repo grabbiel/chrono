@@ -294,9 +294,10 @@ edited.
 - six damaged copies, which must be rejected;
 - six refused edits.
 
-**Not yet:**
+Auditions in the rack and the drum-kit editor play project samples before a
+build: a scratch ROM is built in memory with only `rom.samples` and the
+audition listing, and loaded into the audio engine; nothing is written
+([music_tracker.md](music_tracker.md), "Project-sample auditions"). The
+kit editor and MIDI import are described there too.
 
-- a drum-kit editor (`@drum` rows are written as listed);
-- MIDI import;
-- auditioning a project sample in the rack before a build (the audition
-  plays the playback ROM's samples).
+`--sfx-section use` at launch scrolls the SFX Lab to **Use in game**.

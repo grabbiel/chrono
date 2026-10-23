@@ -119,13 +119,19 @@ that row as it is. `music disasm` and Studio's import write all three.
   empty list.
 - `@echo`: `AudioRom_SongEcho` (`$C7:241D`, a word per song).
   `Audio_StartSong` sends byte 0's low nibble as the echo delay and byte 1 as the
-  song command's Arg1. The driver keeps Arg1 in `Spc_Unk4D` and uses it as a
-  volume factor (a song volume, probably).
+  song command's Arg1. The driver keeps Arg1 in `Spc_Unk4D` and multiplies every
+  song voice's volume by it: it is the song volume, and `$00` is silent
+  (`CTProjectAuditionTests` plays the same note at `$FF` and at `$00`). No ROM
+  song uses `$00`; the template writes `$FF`.
 - `@drum` / `@drums none`: `AudioRom_SongExtra` (`$C7:1871`, 36 bytes per song,
   sent to ARAM `$F120` at each load). It is the song's drum kit: in drum mode
-  (`drums_on`), a note's semitone picks one of 12 entries (`Spc_DrumNote`). Each
-  entry gives the sample, the note to play, and a pan; a pan of `$80` or more
-  keeps the track's pan. 41 ROM songs have one.
+  (`drums_on`), a note's semitone picks one of 12 entries (`Spc_DrumNote`,
+  `driver.asm` `$0720`: entry = note byte / 14, at `$F120` + 3 × entry). Each
+  entry gives the directory entry to play (through `Spc_SetTrackSample`), the
+  note (plus the track's transpose − 10), and a pan, doubled into the track's
+  pan; a pan of `$80` or more keeps the track's pan. 41 ROM songs have one.
+  The format is checked against the driver by `CTDrumKitTrace`
+  ([music_tracker.md](music_tracker.md), "Drum kits").
 
 ## Disassembly
 

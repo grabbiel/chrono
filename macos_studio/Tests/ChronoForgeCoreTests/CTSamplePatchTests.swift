@@ -139,7 +139,7 @@ final class CTSamplePatchTests: XCTestCase {
         let text = try CTSongTemplate.listing(.init(samples: [5, 9], tracks: [.init(slot: 0), .init(slot: 1, octave: 3)], steps: 384))
         let (data, tables) = try CTSongListing.assembleSong(text)
         XCTAssertEqual(tables.samples, [5, 9])
-        XCTAssertEqual(tables.echo, [0, 0])
+        XCTAssertEqual(tables.echo, [0, 0xFF])          // byte 1 is the song volume: 0 would be silent
         var doc = CTSongDocument(listing: text)
         let timeline = try CTSongTimeline(doc, tables: tables)
         XCTAssertEqual(timeline.tracks[0].endStep, 384)

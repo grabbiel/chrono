@@ -58,3 +58,30 @@ public enum CTProjectSamples {
                                    edl: Int(echo[0] & 0x0F))
     }
 }
+
+/// Auditions with the project's samples: the listing (an instrument's
+/// one-note audition, a drum pad's, or a whole song) built in place of song
+/// `song` together with `rom.samples` into a scratch ROM in memory
+/// (`CTROMBuilder.audioScratch`), then sent to the driver as the game sends
+/// it. Without `rom.samples` this is the playback ROM's song load.
+public enum CTProjectAudition {
+    public static func rom(base: [UInt8], project: CTProject, listing: String, song: Int) throws -> [UInt8] {
+        let (data, tables) = try CTSongListing.assembleSong(listing)
+        return try CTROMBuilder.audioScratch(base: base, project: project,
+                                            song: .init(song: song, source: "audition", data: data, tables: tables)).rom
+    }
+
+    public static func stream(base: [UInt8], project: CTProject, listing: String, song: Int) throws -> SPCStream {
+        try SPCStream.ctSong(clean: base, built: try rom(base: base, project: project, listing: listing, song: song), song: song)
+    }
+
+    /// A listing that plays `pad` of `kit` once on track 0 in drum mode, with
+    /// `tables` (the song's sample list and echo) and the kit.
+    public static func pad(_ pad: Int, kit: CTDrumKit, tables: CTSongTables, steps: Int = 96) -> String {
+        var t = tables
+        t.drums = kit.bytes
+        let text = CTSongInstrument.audition(slot: 0, number: 48 + max(0, min(pad, 11)), steps: steps, tables: t)
+        // Octave 4 at transpose $0A: note index `pad`, which drum mode reads as the pad.
+        return text.replacingOccurrences(of: "    transpose $0A\n", with: "    transpose $0A\n    drums_on\n")
+    }
+}

@@ -21,6 +21,11 @@ usage: chronoforge music list <rom.sfc>
                              [--steps N] [--tempo $XX] [--edl N] [--out audio/songs/new.ctsong]
        chronoforge music budget <rom.sfc> [--songs a,b,...]
        chronoforge music sample-check <clean.sfc> <built.sfc> <song> <sample> [--frames N] [--out probe.json]
+       chronoforge music kit <song.ctsong> [set <pad> <sample> <note> <pan> | clear <pad>] [--out song.ctsong]
+       chronoforge music drum-check <clean.sfc> <built.sfc> <song> [--listing song.ctsong] [--steps N] [--out report.json]
+       chronoforge music import-midi <file.mid> --song N --project <p.ctproj> --rom <rom.sfc> [--programs P:S,...]
+                             [--default-sample S] [--drums KEY:SAMPLE[:NOTE[:PAN]],...] [--grid N] [--transpose N]
+                             [--edl N] [--no-loop] [--out audio/songs/x.ctsong] [--report import.json]
 
 driver-check --ipl uploads the boot blocks through the supplied 64-byte S-SMP
 IPL image instead of copying them into ARAM. No IPL image is bundled.
@@ -52,10 +57,20 @@ listed in rom.songs as song N, which it replaces. budget prints each song's sequ
 sample ARAM against its echo buffer. sample-check loads <song> of the built ROM on the driver
 (booted from the clean ROM), waits for a voice to key on <sample> and checks its directory
 entry, ARAM bytes, words, pitch (Spc_NotePitch) and the samples the S-DSP decodes for it.
+kit prints a listing's drum kit (the @drum rows: 12 pads of sample, note and pan, as
+Spc_DrumNote reads them) and its problems, or sets or clears one pad. drum-check plays <song> of
+the built ROM on the driver and checks every drum-mode key-on's SRCN, note and pan against the
+model of --listing (default: the built ROM's song). import-midi converts a MIDI file
+(docs/music_tracker.md, "MIDI import"): channels to voices (at most 8), times to a grid of N steps
+(default 3; 24 steps a quarter), keys + --transpose to the driver's notes 0-95, programs to sample
+numbers through --programs (or --default-sample), channel 10 to a drum kit with --drums, and tempo
+to the driver's tempo byte. It refuses a song over the budgets with the project's rom.samples,
+then writes the listing and its rom.songs row. --report writes the mapping and rounding as JSON.
 """
 
 func cmdMusic(_ args: [String]) -> Int32 {
     if let operation = args.first, ["import", "new", "budget", "sample-check"].contains(operation) { return cmdMusicGame(args) }
+    if let operation = args.first, ["kit", "drum-check", "import-midi"].contains(operation) { return cmdMusicKitMIDI(args) }
     let operations = ["list", "disasm", "asm", "verify-rom", "spc-info", "driver-check", "song-load", "render", "spc-render", "play"]
     if let operation = args.first, ["events", "edit", "verify-model"].contains(operation) { return cmdMusicModel(args) }
     guard let operation = args.first, operations.contains(operation) else {
@@ -531,6 +546,128 @@ private func cmdMusicGame(_ args: [String]) -> Int32 {
             else { FileHandle.standardOutput.write(data); print() }
             for c in result.checks where !c.passed { print("FAILED: \(c.name)") }
             return result.passed ? 0 : 1
+        }
+        return 0
+    } catch {
+        print("music \(operation) failed: \(error)"); return 1
+    }
+}
+
+// MARK: - Drum kits and MIDI import (kit, drum-check, import-midi)
+
+private func cmdMusicKitMIDI(_ args: [String]) -> Int32 {
+    let operation = args[0]
+    var positional: [String] = [], options: [String: String] = [:], noLoop = false
+    var i = 1
+    while i < args.count {
+        if args[i] == "--no-loop" { noLoop = true; i += 1; continue }
+        if args[i].hasPrefix("--") {
+            guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
+            options[args[i]] = args[i + 1]; i += 2
+        } else { positional.append(args[i]); i += 1 }
+    }
+    func write(_ data: Data, to path: String?) throws {
+        if let path { try data.write(to: URL(fileURLWithPath: path), options: .atomic) }
+        else { FileHandle.standardOutput.write(data); print() }
+    }
+    do {
+        switch operation {
+        case "kit":
+            guard let path = positional.first else { print(musicUsage); return 2 }
+            let text = try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)
+            var doc = CTSongDocument(listing: text)
+            guard var kit = doc.drumKit else { print("\(path) has no @drums / @drum rows (the ROM's row stays)"); return 1 }
+            let edit = Array(positional.dropFirst())
+            if !edit.isEmpty {
+                let values = edit.dropFirst().map { songNumber($0) }
+                guard let pad = values.first ?? nil, (0..<CTDrumKit.padCount).contains(pad), !values.contains(nil),
+                      (edit[0] == "set" && values.count == 4) || (edit[0] == "clear" && values.count == 1) else {
+                    print(musicUsage); return 2
+                }
+                kit.pads[pad] = edit[0] == "set" ? .init(sample: values[1]!, note: values[2]!, pan: values[3]!) : .init()
+                kit = try CTDrumKit(pads: kit.pads)
+                doc.setDrumKit(kit)
+                _ = try doc.assemble()
+                try Data(doc.listing.utf8).write(to: URL(fileURLWithPath: options["--out"] ?? path), options: .atomic)
+            }
+            let samples = doc.tables?.samples
+            for (k, p) in kit.pads.enumerated() {
+                if p.isEmpty { print(String(format: "pad %2d  -", k)); continue }
+                let listed = p.slot.flatMap { s in samples.flatMap { $0.indices.contains(s) ? $0[s] : nil } }
+                // Arguments as typed lets for CI's older type checker (Xcode 26.6).
+                let listedText: String = listed.map { (n: Int) -> String in " (sample \(n))" } ?? ""
+                let panText: String = p.keepsPan ? "track's" : String(format: "$%02X", p.pan)
+                let noteName: String = CTSongTimeline.noteName(p.number())
+                print(String(format: "pad %2d  sample $%02X%@  note $%02X (%@)  pan %@", k, p.sample,
+                             listedText, p.note, noteName, panText))
+            }
+            let problems = kit.problems(listed: samples?.count)
+            for p in problems { print("problem: \(p)") }
+            return problems.isEmpty ? 0 : 1
+        case "drum-check":
+            guard positional.count == 3, let song = songNumber(positional[2]) else { print(musicUsage); return 2 }
+            let clean = try readROM(positional[0]), built = try readROM(positional[1])
+            let listing: String
+            if let path = options["--listing"] { listing = try String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) }
+            else {
+                let songs = try CTSong.romSongs(built)
+                guard songs.indices.contains(song) else { throw CTSongError("song \(song) is not 0-\(songs.count - 1)") }
+                listing = try CTSongListing.render(try CTSong(data: songs[song].data), tables: CTSongTables.rom(built, song: song))
+            }
+            let steps = Int(options["--steps"] ?? "600") ?? 600
+            let result = try CTDrumKitTrace.run(clean: clean, built: built, song: song, listing: listing, steps: steps)
+            try write(try CTProject.jsonEncoder.encode(result), to: options["--out"])
+            print("\(result.matched) of \(result.drumNotes) drum notes key on with their pad's sample, note and pan over \(steps) steps")
+            for m in result.mismatches.prefix(10) { print("MISMATCH: \(m)") }
+            return result.passed ? 0 : 1
+        default:
+            guard positional.count == 1, let path = options["--project"], let romPath = options["--rom"],
+                  let songText = options["--song"], let song = songNumber(songText) else { print(musicUsage); return 2 }
+            var o = CTMIDIImport.Options()
+            if let t = options["--programs"] { o.programs = try CTMIDIImport.programTable(t) }
+            if let t = options["--default-sample"] {
+                guard let n = songNumber(t) else { throw CTSongError("--default-sample takes a sample number") }
+                o.defaultSample = n
+            }
+            if let t = options["--drums"] { o.drums = try CTMIDIImport.drumTable(t) }
+            if let t = options["--grid"] { guard let n = Int(t) else { throw CTSongError("--grid takes steps") }; o.grid = n }
+            if let t = options["--transpose"] { guard let n = Int(t) else { throw CTSongError("--transpose takes semitones") }; o.transpose = n }
+            if let t = options["--edl"] { guard let n = Int(t), (0...15).contains(n) else { throw CTSongError("--edl takes 0-15") }; o.edl = n }
+            o.loop = !noLoop
+            let listing = options["--out"] ?? String(format: "audio/songs/song%02X.ctsong", song)
+            guard !listing.hasPrefix("/"), !listing.split(separator: "/").contains("..") else {
+                throw CTSongError("--out is a path inside the project")
+            }
+            var p = try CTProject.load(from: URL(fileURLWithPath: path))
+            let file = try CTMIDIFile(bytes: [UInt8](try Data(contentsOf: URL(fileURLWithPath: positional[0]))))
+            let name = (positional[0] as NSString).lastPathComponent
+            let (text, report, budget) = try CTMIDIImport.importSong(file, options: o, rom: try readROM(romPath), project: p, song: song,
+                                                                     title: String(format: "%@ as song $%02X", name, song))
+            let url = p.fileURL(relative: listing)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url, options: .atomic)
+            var spec = p.project.rom ?? .init()
+            spec.songs.removeAll { $0.song == song }
+            spec.songs.append(.init(song: song, listing: listing))
+            spec.songs.sort { $0.song < $1.song }
+            p.project.rom = spec
+            try p.save()
+            if let r = options["--report"] { try CTProject.jsonEncoder.encode(report).write(to: URL(fileURLWithPath: r), options: .atomic) }
+            for v in report.voices {
+                print("voice \(v.voice): MIDI channel \(v.channel)\(v.drums ? " (drum kit)" : ""), \(v.notes) notes"
+                      + (v.droppedFromChords > 0 ? ", \(v.droppedFromChords) chord notes dropped" : "")
+                      + (v.shortened > 0 ? ", \(v.shortened) cut at the next note" : ""))
+            }
+            for r in report.programs { print("program \(r.program) -> sample \(r.sample) (slot \(r.slot), channels \(r.channels.map(String.init).joined(separator: ",")))") }
+            for t in report.tempo {
+                print(String(format: "tempo at step %d: %.2f BPM -> tempo $%02X (driver %d) plays %.2f BPM (%+.2f%%)",
+                             t.step, t.bpm, t.byte, t.driverTempo, t.playedBPM, t.errorPercent))
+            }
+            print(String(format: "grid %d steps: %d notes, rounding at most %.2f steps (%.1f ms), mean %.3f steps",
+                         report.grid, report.notes, report.maxErrorSteps, report.maxErrorMilliseconds, report.meanErrorSteps))
+            print(String(format: "wrote %@ (%d steps, %d sequence bytes; samples %@ end at $%04X, echo at $%04X) as song $%02X in rom.songs",
+                         listing, report.steps, report.sequenceBytes, report.samples.map(String.init).joined(separator: ","),
+                         budget.sampleEnd, budget.echoStart, song))
         }
         return 0
     } catch {
