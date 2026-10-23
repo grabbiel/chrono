@@ -163,6 +163,14 @@ def test_routine_states_stay_in_the_routines_bounds():
         assert len(page) == 0x100 and page[0x1A] <= page[0x1B] and page[0x1C] <= page[0x1D]
         assert cam[0x7E0100][0x97] in (0, 2, 4, 6, 0x80)                # the leader's slot (or none)
         assert cam[0x7E0100][0x98] in (0, 1)                            # Map_StepStop*'s 16-bit index stays in WRAM
+        probe = dict(vm.probe_state(rng, {0x0402: [(3, 5), (7, 0x3D)], 0x0410: []}))
+        page, dp, attr = probe[0x7E1D00], probe[0x7E0100], probe[0x7E7000]
+        assert page[0x1E] == page[0x1F] in (0x0F, 0x1F)                 # a 16 x 16 or 32 x 32 map
+        assert int.from_bytes(page[4:6], "little") in (0x0402, 0x0410)  # Map_ExitRec0: one of the locations
+        assert (page[0x2E], page[0x30]) != (0, 0)                       # a step to probe
+        assert dp[0x97] in (0, 2, 4, 6) and dp[0x98] in (0, 1)
+        rows = page[0x1E] + 1
+        assert all(attr[0x80 + r * 0x100 + c] in (0x80, 0, 1, 2, 3) for r in range(rows) for c in range(rows))
     assert set(vm.EVIDENCE_ROUTINES) == set(vm.ROUTINES)
     assert all(agree == cases for cases, agree in vm.EVIDENCE_ROUTINES.values())
 
@@ -189,7 +197,7 @@ def test_palettes_and_their_routines_agree_with_the_rom(rom_path, chronoret, req
 def test_camera_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
     cli = require(vm.CLI, "chronoforge build")
     out = tmp_path / "report.json"
-    names = [n for n in vm.ROUTINES if n.startswith("map")]
+    names = [n for n in vm.ROUTINES if n.startswith("map") and n not in vm.PROBE_ROUTINES]
     r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "routines", "--cli", str(cli),
                         "--cases", "20", "--jobs", "2", "--only", ",".join(names), "--json", str(out)],
                        capture_output=True, text=True, timeout=1200)
@@ -198,4 +206,17 @@ def test_camera_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_pa
     assert sorted(report) == sorted(names) and len(names) == 11
     for name, row in report.items():
         assert row["agree"] == row["cases"] == 20, name
+
+
+def test_probe_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "routines", "--cli", str(cli),
+                        "--cases", "20", "--jobs", "2", "--only", ",".join(sorted(vm.PROBE_ROUTINES)),
+                        "--json", str(out)], capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads(out.read_text())
+    assert sorted(report) == sorted(vm.PROBE_ROUTINES)
+    for name, row in report.items():
+        assert row["agree"] == row["cases"] == 20 * vm.ROUTINE_CASE_SCALE.get(name, 1), name
 

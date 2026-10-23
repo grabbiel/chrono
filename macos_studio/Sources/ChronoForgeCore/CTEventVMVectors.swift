@@ -11,7 +11,10 @@
 // the camera's (CTFieldScroll.swift): "mapInitOrigin", "mapInitOriginX/Y",
 // "mapLeaderSteps" (Map_Unk9175), "mapCameraSteps" (Map_Unk99DE),
 // "mapScrollAcc" (Map_Unk91AC), "mapScroll1XInc/XDec/YInc/YDec" and
-// "mapRecentre" (Field_Unk885A).
+// "mapRecentre" (Field_Unk885A), and the leader's collision
+// (CTFieldProbes.swift): "mapLeaderProbes" (Map_Unk8A6D), "mapHitsObj"
+// (Map_ProbeHitsObj, carry = solid), "mapStepEffects" (Map_StepTileEffects)
+// and "mapEntryTile" (Map_InitEntryTile).
 // results.json: {"families": {name: [opcode]}, "results": [{"id", "kind": "go"|"halted"|"unmodelled", "x", "carry",
 // "reason", "mem": {"<address>": byte}}], mem holding the final value of each
 // WRAM byte the model wrote.}
@@ -88,6 +91,10 @@ public enum CTEventVMVectors {
                 let r = c.routine!
                 vm.scroll1(axis: r.contains("X") ? 0 : 1, rising: r.hasSuffix("Inc")); outcome = .go(x: 0, carry: false)
             case "mapRecentre": vm.recentreStep(); outcome = .go(x: 0, carry: false)
+            case "mapLeaderProbes": vm.leaderProbes(); outcome = .go(x: 0, carry: false)
+            case "mapStepEffects": vm.stepTileEffects(); outcome = .go(x: 0, carry: false)
+            case "mapHitsObj": outcome = .go(x: 0, carry: vm.probeHitsObj())
+            case "mapEntryTile": vm.initEntryTile(); outcome = .go(x: 0, carry: false)
             default: throw CTEventError("case \(c.id): no routine \(c.routine ?? "")")
             }
             var mem: [String: Int] = [:]

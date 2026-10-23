@@ -34,10 +34,13 @@ public final class CTEventVM {
     public var changes: [StateChange] = []
     /// Menu_RunCommand runs that ended with Menu_Unk834D's refresh (not modelled).
     public var menuRefreshes = 0
-    /// Map region copies done (Field_UnkAF4E), oldest first; the field drains them.
     /// Colour numbers (0-255) the palette opcodes and their records wrote in Pal_CgramBuf.
     public var paletteWrites: Set<Int> = []
+    /// Map region copies done (Field_UnkAF4E), oldest first; the field drains them.
     public var mapCopies: [MapCopy] = []
+    /// The location's exit records (7 bytes each) Map_StepTileEffects reads
+    /// by a tile's exit index; nil reads the ROM's bank $E5 at Map_ExitRec0.
+    public var exitRecords: [[UInt8]]?
 
     /// One Field_UnkAF4E copy: the layers whose tiles changed and the destination cells (row << 8 | column).
     public struct MapCopy: Equatable, Sendable {

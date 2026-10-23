@@ -110,7 +110,9 @@ EVIDENCE_UNMODELLED = {"opcodes": 17, "instructions": 2002, "instructionsInPacks
 # The last `routines` (2026-10-23, default --cases 200): cases and agreements per routine.
 EVIDENCE_ROUTINES = {name: (200, 200) for name in (
     "palAnimTick", "palClaim", "palRelease", "mapInitOriginX", "mapInitOriginY", "mapInitOrigin", "mapLeaderSteps",
-    "mapCameraSteps", "mapScrollAcc", "mapScroll1XInc", "mapScroll1XDec", "mapScroll1YInc", "mapScroll1YDec", "mapRecentre")}
+    "mapCameraSteps", "mapScrollAcc", "mapScroll1XInc", "mapScroll1XDec", "mapScroll1YInc", "mapScroll1YDec", "mapRecentre",
+    "mapHitsObj", "mapEntryTile")}
+EVIDENCE_ROUTINES.update({"mapLeaderProbes": (2000, 2000), "mapStepEffects": (2000, 2000)})
 
 
 def scratch(a):
@@ -459,7 +461,16 @@ ROUTINES = {                               # entry PC, 8-bit X/Y, how it returns
     "mapScroll1YInc": (0xC094AD, False, "rts", 0x1D00),
     "mapScroll1YDec": (0xC094DF, False, "rts", 0x1D00),
     "mapRecentre": (0xC0885A, False, "rts"),                 # Field_Unk885A (layer 1 only, see ROUTINE_IGNORE)
+    "mapLeaderProbes": (0xC08A6D, True, "rts", 0x1D00),     # Map_Unk8A6D
+    "mapHitsObj": (0xC09923, True, "rts", 0x1D00),          # Map_ProbeHitsObj (carry compared)
+    "mapStepEffects": (0xC09C5C, True, "rts", 0x1D00),      # Map_StepTileEffects
+    "mapEntryTile": (0xC09DC3, True, "rts"),                # Map_InitEntryTile
 }
+ROUTINE_CARRY = {"palClaim", "mapHitsObj"}                  # routines whose carry is compared
+PROBE_ROUTINES = {"mapLeaderProbes", "mapHitsObj", "mapStepEffects", "mapEntryTile"}
+# Routines whose branches turn on one tile edge or one exit row: ten times
+# the cases (2000 run in about 13 s).
+ROUTINE_CASE_SCALE = {"mapLeaderProbes": 10, "mapStepEffects": 10}
 ROUTINE_SCRATCH = range(0x7E050C, 0x7E051B)    # PalAnim_Save ... PalAnim_Dest (DP $0500)
 # Bytes a routine writes that the model leaves to code it does not run:
 # Sub_C07F9A's edge addresses and sizes and its Map_Span* scratch; for
@@ -539,6 +550,81 @@ def camera_state(rng):
     return [(0x7E1D00, page), (0x7E0100, dp), (0x7E0A00, screen), (0x7E1800, tiles)] + misc
 
 
+# The leader's box offsets (X +-$70, Y -$40/-$70, slides of $10 and the
+# no-CLC $61): a low byte this far below a tile edge or the half-tile line
+# ($80) puts a probe on it.
+_PROBE_EDGES = (0x70, -0x70, 0x80, -0x80, 0x60, 0x61, -0x60, 0x10, -0x10, 0x40, 0x30, 0x20, -0x20)
+
+
+def _edge_byte(rng):
+    return (rng.choice((0x100, 0x80)) - rng.choice(_PROBE_EDGES) + rng.choice((-1, 0, 0, 1))) & 0xFF
+
+
+def probe_state(rng, exits=None):
+    """The leader's collision: a 16 x 16 (sometimes 32 x 32) map of tiles
+    with every shape, level and push, a few treasure and exit tiles (the
+    exits of a real location: `exits` maps Map_ExitRec0 to its records'
+    (column, row)), steps of every direction, the leader often a box offset
+    from a tile edge or on an exit's column near the $3F row limit, and
+    objects around the leader's box."""
+    exits = exits or {0: []}
+    page = bytearray(biased(rng) for _ in range(0x100))
+    mask = rng.choice((0x0F, 0x0F, 0x0F, 0x1F))
+    page[0x1E], page[0x1F] = mask, mask
+    rec0 = rng.choice(list(exits))
+    page[0x04:0x06] = rec0.to_bytes(2, "little")
+    aim = rng.randrange(len(exits[rec0])) if exits[rec0] and rng.random() < 0.3 else None
+    for at in (0x2E, 0x30):
+        page[at] = rng.choice((0, 0x10, 0xF0, 0x20, 0xE0, 0x10, 0xF0, rng.randrange(256)))
+    if page[0x2E] == page[0x30] == 0:
+        page[0x2E] = 0x10
+    rows = mask + 1
+    hi = bytearray(rows * 0x100)
+    attr = bytearray(rows * 0x100)
+    for r in range(rows):
+        for col in range(rows):
+            at = r * 0x100 + col
+            hi[0xC0 + at] = rng.choice((0, 0, 0, 1, rng.randrange(2, 0x18), rng.randrange(0x18, 0x20),
+                                        0x1E, rng.randrange(0x40))) << 2 | rng.randrange(4)
+            attr[at] = rng.choice((0, 0, 0, 0x10, rng.randrange(256)))                       # AttrA
+            attr[0x40 + at] = rng.choice((0x01, 0x02, 0x03, 0x09, 0x1B, 0x04, 0x20, 0, rng.randrange(256)))
+            attr[0x80 + at] = 0x80 if rng.random() < 0.93 else rng.randrange(4)                 # exit
+            if aim is not None and rng.random() < 0.5:
+                attr[0x80 + at] = aim
+            attr[0xC0 + at] = 0x80 if rng.random() < 0.95 else rng.randrange(0x80)             # treasure
+    dp = bytearray(biased(rng) for _ in range(0xC0))
+    leader = rng.choice((0, 2, 4, 6))
+    dp[0x97], dp[0x98] = leader, rng.choice((0, 0, 0, 1))
+    dp[0x99], dp[0x9B] = rng.choice((0x80, 2, 8)), rng.choice((0x80, 4, 10))
+    dp[0x55] = rng.randrange(4)
+    dp[0x17] = rng.choice((0, 0, 0x80, 0x10, rng.randrange(256)))
+    dp[0x02], dp[0x03] = rng.randrange(0x40), rng.randrange(0x40)
+    lx = rng.randrange(1, rows - 1) << 8 | rng.choice((0x00, 0x10, 0x70, 0x80, 0x8F, 0x90, 0xF0, rng.randrange(256),
+                                                       _edge_byte(rng), _edge_byte(rng)))
+    ly = rng.randrange(1, rows - 1) << 8 | rng.choice((0x00, 0x10, 0x70, 0x80, 0xFF, rng.randrange(256),
+                                                       _edge_byte(rng), _edge_byte(rng)))
+    if aim is not None:
+        col, row = exits[rec0][aim]
+        lx = col << 8 | lx & 0xFF
+        ly = (row + rng.choice((0, 0x3E, 0x3F, 0x40, -0x3E, -0x3F, -0x40))) % 0x100 << 8 | ly & 0xFF
+    pos = bytearray(rng.randrange(256) for _ in range(0x100))
+    flags = {0x0F00: bytearray(0x80), 0x1100: bytearray(0x80), 0x1B00: bytearray(0x80)}
+    for s in range(0, 0x20, 2):
+        x = lx + rng.randrange(-0x1A0, 0x1A0) if rng.random() < 0.6 else rng.randrange(0x10000)
+        y = ly + rng.randrange(-0x1A0, 0x1A0) if rng.random() < 0.6 else rng.randrange(0x10000)
+        pos[s:s + 2] = (x & 0xFFFF).to_bytes(2, "little")
+        pos[0x80 + s:0x82 + s] = (y & 0xFFFF).to_bytes(2, "little")
+        flags[0x0F00][s] = rng.choice((0, 1, 1))
+        flags[0x1100][s] = rng.choice((0, 0, 0x80))
+        flags[0x1B00][s + 1] = rng.randrange(4)
+    pos[leader:leader + 2] = lx.to_bytes(2, "little")
+    pos[0x80 + leader:0x82 + leader] = ly.to_bytes(2, "little")
+    regions = [(0x7E1D00, page), (0x7E0100, dp), (0x7E1800, pos), (0x7E3000, hi), (0x7E7000, attr),
+               (0x7F2000, bytearray((rng.randrange(17),)))]
+    regions += [(0x7E0000 + base, b) for base, b in flags.items()]
+    return regions
+
+
 def slot_state(rng):
     """Obj_Cur and its kind, the 8 palette slots (free or owned), the chain
     links, a few shared Obj_PalSrc values and the Obj_OamAttr palette bits."""
@@ -604,7 +690,7 @@ def _routine_verdict(task):
     _, _, c0, mem, known = outs[0]
     if mem != outs[1][3]:
         return cid, "carry-dependent", None
-    if name == "palClaim" and swift.get("reason") != "skipped" and not (c0 == outs[1][2] == swift["carry"]):
+    if name in ROUTINE_CARRY and swift.get("reason") != "skipped" and not (c0 == outs[1][2] == swift["carry"]):
         return cid, "disagree", f"{name} #{cid}: carry {c0}/{outs[1][2]} vs model {swift['carry']}"
     smem = {int(k): v for k, v in swift["mem"].items()}
     for a in sorted(set(mem) | set(smem)):
@@ -722,13 +808,22 @@ def routines(args):
     loaded, _ = load(rom, table)
     label, data, _ = loaded[0]                           # any pack: the routines do not read it
     rng = random.Random(SEED + 1)
+    exit_ofs = sorted({rom[0x250000 + 2 * k] | rom[0x250001 + 2 * k] << 8 for k in range(0x201)})
+    exits = {}                                           # Map_ExitRec0 -> its records' (column, row)
+    for ofs, end in zip(exit_ofs, exit_ofs[1:]):
+        at = 0x250000 + ofs
+        exits[ofs] = [(rom[at + 7 * i], rom[at + 7 * i + 1]) for i in range(min((end - ofs) // 7, 4))]
     cases, meta = [], {}
     for name in ROUTINES:
         if args.only and name not in args.only.split(","):
             continue
-        for _ in range(args.cases):
-            regions = tick_state(rng) if name == "palAnimTick" else camera_state(rng) if name.startswith("map") \
-                else slot_state(rng)
+        for _ in range(args.cases * ROUTINE_CASE_SCALE.get(name, 1)):
+            if name in PROBE_ROUTINES:
+                regions = probe_state(rng, exits)
+            elif name.startswith("map"):
+                regions = camera_state(rng)
+            else:
+                regions = tick_state(rng) if name == "palAnimTick" else slot_state(rng)
             cid = len(cases)
             cases.append({"id": cid, "pack": label, "y": 0, "routine": name,
                           "regions": [[at, bytes(b).hex()] for at, b in regions]})

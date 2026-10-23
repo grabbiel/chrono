@@ -176,3 +176,4 @@ re_workspace/tests/test_event_vm.py::test_items_and_membership_agree_with_the_ro
 re_workspace/tests/test_event_vm.py::test_palettes_and_their_routines_agree_with_the_rom	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_event_vm.py::test_steps_agree_with_the_rom	local ROM not present (re_workspace/ct_clean.sfc)
 re_workspace/tests/test_event_vm.py::test_camera_routines_agree_with_the_rom	local ROM not present (re_workspace/ct_clean.sfc)
+re_workspace/tests/test_event_vm.py::test_probe_routines_agree_with_the_rom	local ROM not present (re_workspace/ct_clean.sfc)

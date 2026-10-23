@@ -4,9 +4,10 @@
 //
 //   Field_SceneChangeTick  a pending warp (SceneFlag_Warp) loads Loc_Dest*
 //   Field_FrameUpdate      the D-pad step (Field_DpadDispatch), the leader's
-//                          probes (Map_Unk8A6D's four straight cases), the
+//                          probes and corner slides (Map_Unk8A6D), the
 //                          tile effects (Map_StepTileEffects: level, exits,
-//                          push), the column/row limits (Map_Unk9175) and
+//                          push; CTFieldProbes.swift), the column/row
+//                          limits (Map_Unk9175) and
 //                          the camera (Map_Unk99DE, Map_Unk91AC, layer 1 of
 //                          Map_Unk93E1: CTFieldScroll.swift)
 //   DefaultHandler         a map redraw ($E5) steps the camera to a 16-pixel
@@ -17,8 +18,8 @@
 //                          then each object's motion and view (Vblank_UnkA810)
 //
 // What is not modelled is named where it is skipped (`limitations`), so the
-// runtime never pretends: Map_Unk8A6D's corner slides and diagonal cases,
-// layers 2 and 3's scroll, Evt_PushTarget, battles, menus.
+// runtime never pretends: layers 2 and 3's scroll, Evt_PushTarget,
+// battles, menus.
 import Foundation
 
 extension WRAM {
@@ -146,7 +147,6 @@ public final class CTFieldRuntime {
     public var romAnimLoops = true
 
     public static let limitations = [
-        "leader probes: Map_Unk8A6D's four straight cases without the corner slides; a diagonal runs the X case then the Y case",
         "camera: layer 1 only (Map_Unk93E1's layers 2 and 3, their own steps and the edge builders are not run); the redraw's own frames after Field_Unk885A (Field_BuildC800Mode*) are not counted",
         "Evt_PushTarget (pushing objects) and treasure opening are not run",
         "the dialogue box's own code (Field_Unk1F87) is CTDialogueLayout's; the D-pad is held while the box is open; a choice answers its first line",
@@ -195,6 +195,7 @@ public final class CTFieldRuntime {
         for a in WRAM.mapPage..<(WRAM.mapPage + 0x100) { w[a] = 0 }  // LocLoad_ClearPage1D00
         try loadMap(&w)
         vm.wram = w
+        vm.exitRecords = map.exits.map(\.raw)
         vm.loadLocationPalette(map.header.palette)                 // LocLoad_Unk7084, Pal_LoadUnkRow0's copy
         let entry = try CTEventROM.entries(rom: rom)
         let events = map.header.events
@@ -205,7 +206,7 @@ public final class CTFieldRuntime {
         vm.seedPartyBlocks()                                        // LocLoad_InitUnk7F3700
         vm.initObjects()
         runObj0Func1()
-        initEntryTile()
+        vm.initEntryTile()                                          // Map_InitEntryTile
         vm.initOrigin()                                             // LocLoad_DrawMap's Map_InitOrigin
         camera = vm.cameraPixels
     }
@@ -243,8 +244,11 @@ public final class CTFieldRuntime {
 
     /// Map_InitMasksAndLimits and the tile planes: Map_TileHiBits/AttrA/AttrB
     /// from the props image, Map_TileExitIdx (Map_LoadExitTiles) and
-    /// Map_TreasureIdx, each row << 8 | column.
+    /// Map_TreasureIdx, each row << 8 | column; Map_ExitRec0 the location's
+    /// ExitRom offset (the records themselves are the map's: `exitRecords`).
     func loadMap(_ w: inout WRAMModel) throws {
+        let ptr = 0x250000 + 2 * (location & 0x1FF)
+        w.setWord(WRAM.mapExitRec0, Int(rom[ptr]) | Int(rom[ptr + 1]) << 8)
         let (col, row) = map.masks[0]
         w[WRAM.mapColMask1] = UInt8(col); w[WRAM.mapRowMask1] = UInt8(row)
         w[WRAM.mapLimitLeft] = UInt8(map.limits.left & 0xFF); w[WRAM.mapLimitTop] = UInt8(map.limits.top & 0xFF)
@@ -275,21 +279,6 @@ public final class CTFieldRuntime {
         for (at, rec) in tiles { w[WRAM.mapTileExitIdx + at] = UInt8(rec & 0x7F) }
         for (k, t) in map.treasure.enumerated() where t.tile != 0 {
             w[WRAM.mapTreasureIdx + ((t.y & row) << 8 | (t.x & col))] = UInt8(k & 0x7F)
-        }
-    }
-
-    /// Map_InitEntryTile: Field_Unk55 from the leader's entry tile (level 0 → 1).
-    func initEntryTile() {
-        let w = vm.wram
-        let tile = w.word(WRAM.locEntryX) & w.word(WRAM.mapColMask1)
-        let p = probeLevel(tile: tile, x: 0x80, y: 0xFF, step: 0)
-        vm.wram[WRAM.fieldUnk55] = p.level == 0 ? 1 : UInt8(p.level)
-        vm.wram[WRAM.mapUnk1D34] = p.moveFlags
-        for (k, s) in [WRAM.partyObjSlot, WRAM.partyObjSlot1, WRAM.partyObjSlot2].enumerated() {
-            let slot = Int(w[s])
-            if slot & 0x80 != 0 { continue }
-            vm.wram[WRAM.objPrioLow + slot] = p.prio
-            vm.wram[WRAM.objPrioHigh + slot] = k == 0 ? p.prioHi : p.prio
         }
     }
 
@@ -416,151 +405,12 @@ public final class CTFieldRuntime {
 
     static func signed(_ b: UInt8) -> Int { Int(Int8(bitPattern: b)) }
 
-    /// Map_Unk8A6D's straight cases: the object in the way (Map_ProbeHitsObj),
-    /// two tile probes across the leading edge, then Map_StepTileEffects.
+    /// Map_Unk8A6D (CTFieldProbes.swift): the leader's box against objects
+    /// and tiles, its corner slides, then Map_StepTileEffects. No leader
+    /// (slot $80) probes nothing here; the ROM would read slot $80.
     func leaderProbes() {
-        let leader = Int(vm.wram[WRAM.partyObjSlot])
-        guard leader & 0x80 == 0 else { return }
-        let lx = vm.wram.word(WRAM.objPosX + leader), ly = vm.wram.word(WRAM.objPosY + leader)
-        let halfW = 0x70, midY = 0x40, height = 0x70
-        let sx = Self.signed(vm.wram[WRAM.mapUnk1D2E])
-        if sx != 0 {
-            let edge = sx > 0 ? lx + halfW + sx : lx + sx - halfW
-            let free = !hitsObject(x: edge, y: ly - midY) && !probeBlocked(x: edge, y: ly) && !probeBlocked(x: edge, y: ly - height)
-            if free { stepTileEffects(lx: lx, ly: ly, dx: sx, dy: 0) } else { vm.wram[WRAM.mapUnk1D2E] = 0 }
-        }
-        let sy = Self.signed(vm.wram[WRAM.mapUnk1D30])
-        if sy != 0 {
-            let x = lx + Self.signed(vm.wram[WRAM.mapUnk1D2E])
-            let edge = sy > 0 ? ly + sy : ly - height + sy
-            let free = !hitsObject(x: x, y: edge) && !probeBlocked(x: x - halfW, y: edge) && !probeBlocked(x: x + halfW, y: edge)
-            if free {
-                stepTileEffects(lx: lx, ly: ly, dx: Self.signed(vm.wram[WRAM.mapUnk1D2E]), dy: sy)
-            } else {
-                vm.wram[WRAM.mapUnk1D30] = 0
-            }
-        }
-    }
-
-    /// Map_ProbeHitsObj: Field_UnkEB the last in-view, non-party object near
-    /// the probe (within $E0 both ways), C=1 when it is solid.
-    func hitsObject(x: Int, y: Int) -> Bool {
-        let w = vm.wram
-        let party = [WRAM.partyObjSlot, WRAM.partyObjSlot1, WRAM.partyObjSlot2].map { Int(w[$0]) }
-        var slot = 2 * Int(w[WRAM.evtObjCount])
-        while slot > 0 {
-            defer { slot -= 2 }
-            guard w[WRAM.objUnk0F00 + slot] != 0, w[WRAM.objUnk1100 + slot] & 0x80 == 0, !party.contains(slot) else { continue }
-            vm.wram[WRAM.fieldUnkEB] = UInt8(slot)
-            let dx = abs(w.word(WRAM.objPosX + slot) - x), dy = abs(w.word(WRAM.objPosY + slot) - y)
-            guard dx < 0xE0, dy < 0xE0 else { continue }
-            return w[WRAM.objUnk1B01 + slot] & 1 != 0
-        }
-        vm.wram[WRAM.fieldUnkEB] = 0x80
-        return false
-    }
-
-    struct Probe { var level: Int, noLevel: Bool, prio: UInt8, prioHi: UInt8, moveFlags: UInt8 }
-
-    func tileIndex(x: Int, y: Int) -> Int {
-        ((y & 0xFF00) | (x >> 8 & 0xFF)) & vm.wram.word(WRAM.mapColMask1)
-    }
-
-    /// Map_Unk8A6D's .test_probe: a treasure tile blocks, else the level test.
-    func probeBlocked(x: Int, y: Int) -> Bool {
-        let tile = tileIndex(x: x & 0xFFFF, y: y & 0xFFFF)
-        if vm.wram[WRAM.mapTreasureIdx + tile] & 0x80 == 0 { return true }
-        return levelBlocked(probeLevel(tile: tile, x: x & 0xFF, y: y & 0xFF, step: 0))
-    }
-
-    /// Map_ProbeTileLevel: the half the probe's pixel falls in (the slope
-    /// tables Map_SlopeShift/Base/Side at $C0:9BF5, read from the ROM), its
-    /// level, "no level" bit and OAM priorities.
-    func probeLevel(tile: Int, x: Int, y: Int, step: Int) -> Probe {
-        let hi = vm.wram[WRAM.mapTileHiBits + tile], a = vm.wram[WRAM.mapTileAttrA + tile], b = vm.wram[WRAM.mapTileAttrB + tile]
-        var halfB = false, flags: UInt8 = 0
-        let shape = Int(hi >> 2)
-        if shape == 1 {
-            halfB = true
-        } else if shape >= 2 {
-            let s = shape - 2
-            if s < 0x16 {
-                let shift = Int(rom[0x009BF5 + s]), base = Int(rom[0x009C0B + s]), side = Int(rom[0x009C21 + s])
-                var v = x >> (shift & 0x7F)
-                if shift & 0x80 != 0 { v ^= 0xFF }
-                let test = (base + v - (y >> 2)) & 0xFF
-                halfB = (side ^ test) & 0x80 != 0
-            } else {
-                let xLow = x & 0x80 == 0, yLow = y & 0x80 == 0       // BPL: the left / top half
-                switch s {
-                case 0x16: halfB = xLow
-                case 0x17: halfB = yLow
-                case 0x18: halfB = xLow && !yLow
-                case 0x19: halfB = !xLow && !yLow
-                case 0x1A: halfB = !xLow && yLow
-                case 0x1B: halfB = xLow && yLow
-                case 0x1C: flags = 0x04
-                default: break
-                }
-            }
-        }
-        let prio = (a >> 2) & 0x10 | 0x20, prioHi = (b >> 2) & 0x10 | 0x20
-        if halfB { return Probe(level: Int(b & 0x18) >> 3, noLevel: b & 0x20 != 0, prio: prio, prioHi: prioHi, moveFlags: flags) }
-        return Probe(level: Int(b & 3), noLevel: b & 4 != 0, prio: prio, prioHi: prioHi, moveFlags: flags)
-    }
-
-    /// Map_ProbeLevelBlocked against Field_Unk55.
-    func levelBlocked(_ p: Probe) -> Bool {
-        let cur = Int(vm.wram[WRAM.fieldUnk55])
-        if p.noLevel { return cur == 3 }
-        if p.level == 0 { return true }
-        return !(p.level == 3 || p.level == cur || cur == 3)
-    }
-
-    /// Map_StepTileEffects at the leader's foot plus the step: blocked stops
-    /// both steps; else an exit sets Loc_Dest* and SceneFlag_Warp, the level
-    /// and priorities follow the tile, and a pushing tile sets the push step.
-    func stepTileEffects(lx: Int, ly: Int, dx: Int, dy: Int) {
-        let px = (lx + dx) & 0xFFFF, py = (ly + dy) & 0xFFFF
-        let tile = tileIndex(x: px, y: py)
-        var p = probeLevel(tile: tile, x: px & 0xFF, y: py & 0xFF, step: dy)
-        if p.moveFlags & 0x04 != 0, dy != 0 { vm.wram[WRAM.mapUnk1D30] = dy > 0 ? 0x10 : 0xF0 }
-        if levelBlocked(p) { vm.wram[WRAM.mapUnk1D2E] = 0; vm.wram[WRAM.mapUnk1D30] = 0; return }
-        if vm.wram[WRAM.fieldSceneFlags] & 0x80 == 0 {
-            let idx = vm.wram[WRAM.mapTileExitIdx + tile]
-            if idx & 0x80 == 0, Int(idx) < map.exits.count {
-                let e = map.exits[Int(idx)], tx = px >> 8, ty = py >> 8
-                let take = e.x == tx ? abs(e.y - ty) < 0x3F : e.y == ty
-                if take {
-                    let raw = e.raw
-                    vm.wram[WRAM.locDestFacing] = (raw[4] >> 1) & 0x0F | raw[4] & 0x80
-                    vm.wram[WRAM.locDestId] = raw[3]; vm.wram[WRAM.locDestId + 1] = raw[4] & 1
-                    vm.wram[WRAM.locDestX] = raw[5]; vm.wram[WRAM.locDestX + 1] = raw[6]
-                    vm.wram[WRAM.fieldSceneFlags] |= 0x80
-                }
-            }
-        }
-        if !p.noLevel {
-            vm.wram[WRAM.fieldUnk55] = UInt8(p.level)
-            let leader = Int(vm.wram[WRAM.partyObjSlot])
-            vm.wram[WRAM.objPrioLow + leader] = p.prio; vm.wram[WRAM.objPrioHigh + leader] = p.prioHi
-        }
-        let a = vm.wram[WRAM.mapTileAttrA + tile]
-        let speed = Int(a >> 2 & 3)
-        if speed != 0 {
-            p.moveFlags |= 0x08
-            let amount = UInt8([0, 0x08, 0x10, 0x20][speed])
-            let neg = 0 &- amount
-            switch a & 3 {
-            case 0: vm.wram[WRAM.mapUnk1D2B] = neg; vm.wram[WRAM.mapUnk1D2A] = 0
-            case 1: vm.wram[WRAM.mapUnk1D2B] = amount; vm.wram[WRAM.mapUnk1D2A] = 0
-            case 2: vm.wram[WRAM.mapUnk1D2A] = neg; vm.wram[WRAM.mapUnk1D2B] = 0
-            default: vm.wram[WRAM.mapUnk1D2A] = amount; vm.wram[WRAM.mapUnk1D2B] = 0
-            }
-        } else {
-            vm.wram[WRAM.mapUnk1D2A] = 0; vm.wram[WRAM.mapUnk1D2B] = 0
-        }
-        vm.wram[WRAM.mapUnk1D34] = p.moveFlags
+        guard vm.wram[WRAM.partyObjSlot] & 0x80 == 0 else { return }
+        vm.leaderProbes()
     }
 
     /// Field_ActionButton: A (Pad_Unk00F6 bit 7) starts function 1 of the
