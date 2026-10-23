@@ -7,7 +7,11 @@
 // is at $7F:2000, the regions over a zeroed WRAM, Obj_Cur among them. A case
 // with "routine" runs that field routine instead of the opcode at y:
 // "palAnimTick" (PalAnim_TickAll), "palClaim" (Obj_Unk7170, carry = claimed;
-// reason "skipped" when it does nothing) or "palRelease" (Obj_Unk734C).
+// reason "skipped" when it does nothing) or "palRelease" (Obj_Unk734C), and
+// the camera's (CTFieldScroll.swift): "mapInitOrigin", "mapInitOriginX/Y",
+// "mapLeaderSteps" (Map_Unk9175), "mapCameraSteps" (Map_Unk99DE),
+// "mapScrollAcc" (Map_Unk91AC), "mapScroll1XInc/XDec/YInc/YDec" and
+// "mapRecentre" (Field_Unk885A).
 // results.json: {"families": {name: [opcode]}, "results": [{"id", "kind": "go"|"halted"|"unmodelled", "x", "carry",
 // "reason", "mem": {"<address>": byte}}], mem holding the final value of each
 // WRAM byte the model wrote.}
@@ -74,6 +78,16 @@ public enum CTEventVMVectors {
                 let claimed = vm.claimPaletteSlot()
                 if claimed == nil { reason = "skipped" }
                 outcome = .go(x: 0, carry: claimed ?? false)
+            case "mapInitOriginX": vm.initOriginX(); outcome = .go(x: 0, carry: false)
+            case "mapInitOriginY": vm.initOriginY(); outcome = .go(x: 0, carry: false)
+            case "mapInitOrigin": vm.initOrigin(); outcome = .go(x: 0, carry: false)
+            case "mapLeaderSteps": vm.limitLeaderSteps(); outcome = .go(x: 0, carry: false)
+            case "mapCameraSteps": vm.dropCameraSteps(); outcome = .go(x: 0, carry: false)
+            case "mapScrollAcc": vm.accumulateScroll(); outcome = .go(x: 0, carry: false)
+            case "mapScroll1XInc", "mapScroll1XDec", "mapScroll1YInc", "mapScroll1YDec":
+                let r = c.routine!
+                vm.scroll1(axis: r.contains("X") ? 0 : 1, rising: r.hasSuffix("Inc")); outcome = .go(x: 0, carry: false)
+            case "mapRecentre": vm.recentreStep(); outcome = .go(x: 0, carry: false)
             default: throw CTEventError("case \(c.id): no routine \(c.routine ?? "")")
             }
             var mem: [String: Int] = [:]

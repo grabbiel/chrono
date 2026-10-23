@@ -119,3 +119,4 @@ ChronoForgeCoreTests.CTProjectAuditionTests/testADrumPadAuditionPlaysTheProjectS
 ChronoForgeCoreTests.CTTreasureTests/testAGrownTreasureRomAndANewLocationBuild                  skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testARedrawCopyChangesTheMapsPicture                  skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testThePaletteOpcodesChangeTheColours                skip      # local ROM
+ChronoForgeCoreTests.CTFieldRuntimeTests/testTheCameraComesBackToTheLeaderAfterAScrollTo      skip      # local ROM

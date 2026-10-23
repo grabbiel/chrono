@@ -214,5 +214,26 @@ final class CTFieldRuntimeTests: XCTestCase {
         for c in written { XCTAssertEqual(picture.cgram[c], UInt16(field.vm.wram.word(WRAM.palCgramBuf + 2 * c))) }
         XCTAssertTrue((0..<8).contains { field.vm.wram[WRAM.objPalSlot + $0] & 0x80 == 0 })   // claimed slots
     }
-}
 
+    func testTheCameraComesBackToTheLeaderAfterAScrollTo() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 13)
+        field.runsScrollTo = true
+        try field.start()
+        XCTAssertEqual(field.camera.x, 96)
+        let leader = Int(field.vm.wram[WRAM.partyObjSlot])
+        field.vm.wram[WRAM.mapScrollToMode] = 1                          // as $E7 would: 4 columns right
+        field.vm.wram[WRAM.mapScrollToX] = field.vm.wram[WRAM.mapTileOriginX] + 4
+        field.vm.wram[WRAM.mapScrollToY] = field.vm.wram[WRAM.mapTileOriginY]
+        try run(field, "", frames: 60)
+        XCTAssertEqual(field.vm.wram[WRAM.mapScrollToMode], 2)
+        XCTAssertEqual(field.camera.x, 128)
+        field.vm.wram[WRAM.mapScrollToMode] = 0                          // $E7's last call
+        let rest = try CTFieldInput.parse("0-99 right")
+        for f in 0..<20 { try field.step(input: rest.held(at: f)) }
+        XCTAssertEqual(field.camera.x, 128)                              // the leader is still left of the middle
+        for f in 20..<40 { try field.step(input: rest.held(at: f)) }
+        let px = field.vm.wram.word(WRAM.objPosX + leader) >> 4
+        XCTAssertGreaterThan(field.camera.x, 128)
+        XCTAssertEqual(px - field.camera.x, 0x81)                        // following a pixel past the middle
+    }
+}

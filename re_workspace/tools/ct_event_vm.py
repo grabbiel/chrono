@@ -108,7 +108,9 @@ EVIDENCE = {
 }
 EVIDENCE_UNMODELLED = {"opcodes": 17, "instructions": 2002, "instructionsInPacks": 142702}
 # The last `routines` (2026-10-23, default --cases 200): cases and agreements per routine.
-EVIDENCE_ROUTINES = {"palAnimTick": (200, 200), "palClaim": (200, 200), "palRelease": (200, 200)}
+EVIDENCE_ROUTINES = {name: (200, 200) for name in (
+    "palAnimTick", "palClaim", "palRelease", "mapInitOriginX", "mapInitOriginY", "mapInitOrigin", "mapLeaderSteps",
+    "mapCameraSteps", "mapScrollAcc", "mapScroll1XInc", "mapScroll1XDec", "mapScroll1YInc", "mapScroll1YDec", "mapRecentre")}
 
 
 def scratch(a):
@@ -393,12 +395,12 @@ class Concrete:
         return ("go", st.x, st.c, mem, known)
 
 
-    def run_routine(self, pc, short_xy, ret, regions, carry):
-        """A field routine from `pc` (M=1, DP=$0100, DB=$00): ('go', None, carry, {addr: byte}, known)."""
+    def run_routine(self, pc, short_xy, ret, regions, carry, dp=0x0100):
+        """A field routine from `pc` (M=1, DP=`dp`, DB=$00): ('go', None, carry, {addr: byte}, known)."""
         absint = self.absint
         s = absint.State()
         s.pc, s.a, s.b, s.x, s.y = pc, 0, 0, 0, 0
-        s.d, s.db, s.m, s.xf = 0x0100, 0x00, True, short_xy
+        s.d, s.db, s.m, s.xf = dp, 0x00, True, short_xy
         s.z = s.n = s.v = None
         s.c = carry
         s.sp, s.spt, s.mem, s.memt = [], [], {}, {}
@@ -442,12 +444,34 @@ def compare(rom_out, swift, known):
     return None
 
 
-ROUTINES = {                               # entry PC, 8-bit X/Y, how it returns
+ROUTINES = {                               # entry PC, 8-bit X/Y, how it returns[, DP]
     "palAnimTick": (0xFDE39C, False, "rtl"),
     "palClaim": (0xC07170, True, "rts"),
     "palRelease": (0xC0734C, True, "rts"),
+    "mapInitOriginX": (0xC07506, False, "rts", 0x1D00),     # Map_InitOriginX
+    "mapInitOriginY": (0xC07553, False, "rts", 0x1D00),     # Map_InitOriginY
+    "mapInitOrigin": (0xC074A6, False, "rts", 0x1D00),      # Map_InitOrigin (Sub_C07F9A's outputs not compared)
+    "mapLeaderSteps": (0xC09175, False, "rts", 0x1D00),     # Map_Unk9175
+    "mapCameraSteps": (0xC099DE, False, "rts", 0x1D00),     # Map_Unk99DE
+    "mapScrollAcc": (0xC091AC, False, "rts", 0x1D00),       # Map_Unk91AC
+    "mapScroll1XInc": (0xC0944B, False, "rts", 0x1D00),
+    "mapScroll1XDec": (0xC0947D, False, "rts", 0x1D00),
+    "mapScroll1YInc": (0xC094AD, False, "rts", 0x1D00),
+    "mapScroll1YDec": (0xC094DF, False, "rts", 0x1D00),
+    "mapRecentre": (0xC0885A, False, "rts"),                 # Field_Unk885A (layer 1 only, see ROUTINE_IGNORE)
 }
 ROUTINE_SCRATCH = range(0x7E050C, 0x7E051B)    # PalAnim_Save ... PalAnim_Dest (DP $0500)
+# Bytes a routine writes that the model leaves to code it does not run:
+# Sub_C07F9A's edge addresses and sizes and its Map_Span* scratch; for
+# Field_Unk885A also Map_Unk93E1's layers 2 and 3 (scroll words, fine
+# counters, half-rate layer 2's origin and bounds Map_Unk1D12-1D18,
+# Map_Unk1DFB's layer-3 wave phase), the edge and built flags,
+# the tilemap biases and the edge builders' row and column buffers.
+_EDGES = (range(0x7E1D52, 0x7E1D70), range(0x7E1D9F, 0x7E1DFB))
+ROUTINE_IGNORE = {"mapInitOrigin": _EDGES,
+                  "mapRecentre": _EDGES + (range(0x7E1D12, 0x7E1D1A), range(0x7E1D74, 0x7E1D7C), range(0x7E1D8B, 0x7E1D93),
+                                           range(0x7E1D94, 0x7E1D96), range(0x7E1D97, 0x7E1D9F), range(0x7E1DFB, 0x7E1DFC),
+                                           range(0x7EC800, 0x7EE000))}
 
 
 def tick_state(rng):
@@ -464,6 +488,55 @@ def tick_state(rng):
         recs += bytes((kind, rng.randrange(256), rng.randrange(1, 33), rng.randrange(256), tick, period,
                        channels, biased(rng), biased(rng), ptr & 0xFF, ptr >> 8, rng.choice((0xFD, 0xF6, 0xC0))))
     return [(0x7E0520, recs), (0x7E2000, bytearray(rng.randrange(256) for _ in range(0x400)))]
+
+
+def camera_state(rng):
+    """The map page ($1D00) with steps of every size and sign, fine counters
+    mostly 0-$0F, the tile origin near the limits (its bounds a screen on),
+    a scroll-to in each mode, and the leader's tile and screen position near
+    the limits and the screen's middle; the field page's shake, entry tile
+    and half-rate layer flag."""
+    page = bytearray(biased(rng) for _ in range(0x100))
+    left, top = rng.randrange(0, 0x30), rng.randrange(0, 0x30)
+    right, bottom = left + rng.randrange(0, 0x30), top + rng.randrange(0, 0x30)
+    page[0x1A], page[0x1B], page[0x1C], page[0x1D] = left, right & 0xFF, top, bottom & 0xFF
+    for at in (0x2E, 0x30, 0x2A, 0x2B):
+        page[at] = rng.choice((0, 0, 0x10, 0xF0, 0x20, 0xE0, 0x08, 0xF8, rng.randrange(256)))
+    ox = rng.choice((left, right - 0x10, rng.randrange(0x60))) * 2 + rng.randrange(-2, 3)
+    oy = rng.choice((top, bottom - 0x0E, rng.randrange(0x60))) * 2 + rng.randrange(-2, 3)
+    page[0x0A], page[0x0B] = ox & 0xFF, 0
+    page[0x0E], page[0x0F] = oy & 0xFF, 0
+    page[0x0C], page[0x0D] = (ox + 0x20) & 0xFF, 0
+    page[0x10], page[0x11] = (oy + 0x1C) & 0xFF, 0
+    page[0x00] = rng.choice((0, 0, 1, 2, rng.randrange(256)))
+    page[0x01] = rng.randrange(4)
+    page[0x02] = (ox + rng.choice((0, 0, 2, -2, rng.randrange(-8, 9)))) & 0xFF
+    page[0x03] = (oy + rng.choice((0, 0, 2, -2, rng.randrange(-8, 9)))) & 0xFF
+    for at in range(0x24, 0x2A):
+        page[at] = rng.choice((0, 0, 0x10, 0xF0, 0x04, rng.randrange(256)))
+    page[0x4D] = rng.choice((0, 0, 1, 2, rng.randrange(256)))
+    for at in range(0x3B, 0x41):
+        page[at] = rng.choice((0, rng.randrange(16), (rng.randrange(16) | 0xF0), rng.randrange(256)))
+    page[0x41:0x4D] = bytes(rng.randrange(4) for _ in range(12))
+    for at in (0x87, 0x89):
+        page[at], page[at + 1] = rng.randrange(256), rng.randrange(4)
+    for at in (0x93, 0x96):
+        page[at] = rng.choice((0, 0, 7, 8, 0x0F, rng.randrange(16), rng.randrange(256)))
+    page[0x36] = rng.randrange(8)
+    leader = rng.choice((0, 2, 4, 6, 0x80))
+    dp = bytearray(biased(rng) for _ in range(0xC0))
+    dp[0x97], dp[0x98] = leader, rng.choice((0, 0, 0, 1))
+    dp[0x02] = (rng.choice((left + 8, right - 8, rng.randrange(0x70))) + rng.randrange(-1, 2)) & 0xFF
+    dp[0x03] = (rng.choice((top + 8, bottom - 6, rng.randrange(0x70))) + rng.randrange(-1, 2)) & 0xFF
+    dp[0xBC] = rng.choice((0, 0, 1))
+    dp[0x38] = rng.choice((0, 1, 2, 3))
+    screen = bytearray(rng.choice((0x80, 0x88, 0x7F, 0x87, 0x89, 0x81, rng.randrange(256))) for _ in range(0x200))
+    tiles = bytearray(rng.randrange(256) for _ in range(0x200))
+    for s in range(0, 0x80, 2):                     # Obj_TileX/Y near the limits
+        tiles[s + 1] = rng.choice((left, right & 0xFF, top + 1, (bottom + 1) & 0xFF, rng.randrange(256))) & 0xFF
+        tiles[0x80 + s + 1] = rng.choice((top, top + 1, top + 2, bottom & 0xFF, (bottom + 1) & 0xFF, rng.randrange(256))) & 0xFF
+    misc = [(0x7E0400, bytearray((rng.randrange(8),))), (0x7E0BC9, bytearray((rng.choice((0, 0x80, rng.randrange(256))),)))]
+    return [(0x7E1D00, page), (0x7E0100, dp), (0x7E0A00, screen), (0x7E1800, tiles)] + misc
 
 
 def slot_state(rng):
@@ -523,9 +596,9 @@ def _routine_verdict(task):
     """One routine case: the ROM routine (entry carry clear and set) against the
     model's writes, and its carry where the model claims a slot."""
     cid, name, regions, swift = task
-    pc, short_xy, ret = ROUTINES[name]
+    pc, short_xy, ret, *dp = ROUTINES[name]
     conc = _WORKER["conc"]
-    outs = [conc.run_routine(pc, short_xy, ret, regions, carry) for carry in (False, True)]
+    outs = [conc.run_routine(pc, short_xy, ret, regions, carry, *dp) for carry in (False, True)]
     if outs[0][0] != "go" or outs[1][0] != "go":
         return cid, "unverifiable", f"{name} #{cid}: {outs[0][1:] if outs[0][0] != 'go' else outs[1][1:]}"
     _, _, c0, mem, known = outs[0]
@@ -535,7 +608,7 @@ def _routine_verdict(task):
         return cid, "disagree", f"{name} #{cid}: carry {c0}/{outs[1][2]} vs model {swift['carry']}"
     smem = {int(k): v for k, v in swift["mem"].items()}
     for a in sorted(set(mem) | set(smem)):
-        if scratch(a) or a in ROUTINE_SCRATCH:
+        if scratch(a) or a in ROUTINE_SCRATCH or any(a in r for r in ROUTINE_IGNORE.get(name, ())):
             continue
         r, m = mem.get(a, known.get(a, 0)), smem.get(a, known.get(a, 0))
         if r != m:
@@ -651,8 +724,11 @@ def routines(args):
     rng = random.Random(SEED + 1)
     cases, meta = [], {}
     for name in ROUTINES:
+        if args.only and name not in args.only.split(","):
+            continue
         for _ in range(args.cases):
-            regions = tick_state(rng) if name == "palAnimTick" else slot_state(rng)
+            regions = tick_state(rng) if name == "palAnimTick" else camera_state(rng) if name.startswith("map") \
+                else slot_state(rng)
             cid = len(cases)
             cases.append({"id": cid, "pack": label, "y": 0, "routine": name,
                           "regions": [[at, bytes(b).hex()] for at, b in regions]})
@@ -679,7 +755,7 @@ def routines(args):
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
     for name, row in report.items():
-        print(f"{name:<12} {row['agree']:5d} of {row['cases']:5d} cases agree  {row['disagree']} disagree")
+        print(f"{name:<15} {row['agree']:5d} of {row['cases']:5d} cases agree  {row['disagree']} disagree")
         for m in row["failures"][:3]:
             print(f"  {m}")
     return 1 if any(row["disagree"] for row in report.values()) else 0
@@ -728,6 +804,7 @@ def main():
     r.add_argument("--cases", type=int, default=200)
     r.add_argument("--json")
     r.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
+    r.add_argument("--only", help="comma-separated routine names")
     args = ap.parse_args()
     return {"check": check, "unmodelled": unmodelled, "routines": routines}[args.cmd](args)
 

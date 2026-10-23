@@ -158,6 +158,11 @@ def test_routine_states_stay_in_the_routines_bounds():
         cur = regions[0x7E0100][0x6D]
         assert cur % 2 == 0 and cur < 0x20
         assert regions[0x7E1100][cur] < 12 or regions[0x7E1100][cur] >= 0x80   # a kind with a handler
+        cam = dict(vm.camera_state(rng))
+        page = cam[0x7E1D00]
+        assert len(page) == 0x100 and page[0x1A] <= page[0x1B] and page[0x1C] <= page[0x1D]
+        assert cam[0x7E0100][0x97] in (0, 2, 4, 6, 0x80)                # the leader's slot (or none)
+        assert cam[0x7E0100][0x98] in (0, 1)                            # Map_StepStop*'s 16-bit index stays in WRAM
     assert set(vm.EVIDENCE_ROUTINES) == set(vm.ROUTINES)
     assert all(agree == cases for cases, agree in vm.EVIDENCE_ROUTINES.values())
 
@@ -172,8 +177,25 @@ def test_palettes_and_their_routines_agree_with_the_rom(rom_path, chronoret, req
     palettes = json.loads(out.read_text())["families"]["palettes"]
     assert palettes["opcodesVerified"] == 3 and palettes["agree"] == palettes["cases"]
     r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "routines", "--cli", str(cli),
-                        "--cases", "20", "--jobs", "2", "--json", str(out)], capture_output=True, text=True, timeout=1200)
+                        "--cases", "20", "--jobs", "2", "--only", "palAnimTick,palClaim,palRelease", "--json", str(out)],
+                       capture_output=True, text=True, timeout=1200)
     assert r.returncode == 0, r.stdout + r.stderr
-    for name, row in json.loads(out.read_text()).items():
+    report = json.loads(out.read_text())
+    assert len(report) == 3
+    for name, row in report.items():
+        assert row["agree"] == row["cases"] == 20, name
+
+
+def test_camera_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    names = [n for n in vm.ROUTINES if n.startswith("map")]
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "routines", "--cli", str(cli),
+                        "--cases", "20", "--jobs", "2", "--only", ",".join(names), "--json", str(out)],
+                       capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads(out.read_text())
+    assert sorted(report) == sorted(names) and len(names) == 11
+    for name, row in report.items():
         assert row["agree"] == row["cases"] == 20, name
 

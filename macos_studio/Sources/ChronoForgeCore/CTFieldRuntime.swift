@@ -6,7 +6,11 @@
 //   Field_FrameUpdate      the D-pad step (Field_DpadDispatch), the leader's
 //                          probes (Map_Unk8A6D's four straight cases), the
 //                          tile effects (Map_StepTileEffects: level, exits,
-//                          push) and the column/row limits (Map_Unk9175)
+//                          push), the column/row limits (Map_Unk9175) and
+//                          the camera (Map_Unk99DE, Map_Unk91AC, layer 1 of
+//                          Map_Unk93E1: CTFieldScroll.swift)
+//   DefaultHandler         a map redraw ($E5) steps the camera to a 16-pixel
+//                          boundary (Field_Unk885A) before its copy
 //   Field_ActionButton     A in front of an object starts its function 1
 //   Field_Unk1F87          the dialogue box, paced by CTDialogueLayout
 //   Field_EndOfFrame       the scripts (Vblank_Unk59D9 + every queued object),
@@ -14,8 +18,7 @@
 //
 // What is not modelled is named where it is skipped (`limitations`), so the
 // runtime never pretends: Map_Unk8A6D's corner slides and diagonal cases,
-// the camera's scroll accumulators (Map_Unk91AC: the camera here centres on
-// the leader inside the map's limits), Evt_PushTarget, battles, menus.
+// layers 2 and 3's scroll, Evt_PushTarget, battles, menus.
 import Foundation
 
 extension WRAM {
@@ -106,7 +109,7 @@ public final class CTFieldRuntime {
     public private(set) var gameMap: GameMap
     public private(set) var props: CTTilePropsPlane?
     public private(set) var frameCount = 0
-    /// The camera's top-left in pixels.
+    /// The camera's top-left in pixels (CTEventVM.cameraPixels after the frame's scroll).
     public private(set) var camera = (x: 0, y: 0)
     public private(set) var held: CTFieldInput = []
     public private(set) var pressed: CTFieldInput = []
@@ -132,10 +135,10 @@ public final class CTFieldRuntime {
     public private(set) var mapRevision = 0
     /// Packs to run instead of the ROM's, by location (an edited scene).
     public var packOverrides: [Int: CTEventPack] = [:]
-    /// Opt-in: run `$E7`'s scroll-to (Map_Unk91AC) instead of centring on
-    /// the leader while Map_ScrollToMode is set; after one the camera stays.
+    /// Opt-in: run Map_Unk91AC's scroll-to, so `$E7` moves the camera and
+    /// arrives. Off, Map_ScrollToMode stays as `$E7` set it and the opcode
+    /// waits (as `runtime run` and `scene vm --no-scroll` have it).
     public var runsScrollTo = false
-    private var cameraHeld = false
     /// A loop count of 3 or more drops by two at a row's end, as
     /// Obj_AnimTickAndQueue does (DEC, DEC, STA; ct_scene_run.py durations:
     /// 24 of 24 animation cases). Off only to replay traces taken before
@@ -144,7 +147,7 @@ public final class CTFieldRuntime {
 
     public static let limitations = [
         "leader probes: Map_Unk8A6D's four straight cases without the corner slides; a diagonal runs the X case then the Y case",
-        "camera: centred on the leader inside the map's limits, not Map_Unk91AC's scroll accumulators",
+        "camera: layer 1 only (Map_Unk93E1's layers 2 and 3, their own steps and the edge builders are not run); the redraw's own frames after Field_Unk885A (Field_BuildC800Mode*) are not counted",
         "Evt_PushTarget (pushing objects) and treasure opening are not run",
         "the dialogue box's own code (Field_Unk1F87) is CTDialogueLayout's; the D-pad is held while the box is open; a choice answers its first line",
         "the frame-build queue (ObjQ_Head/Tail) is drained every frame, so every object's animation advances",
@@ -189,6 +192,7 @@ public final class CTFieldRuntime {
         var w = vm.wram
         w.setWord(WRAM.locId, location)
         initLoadState(&w)
+        for a in WRAM.mapPage..<(WRAM.mapPage + 0x100) { w[a] = 0 }  // LocLoad_ClearPage1D00
         try loadMap(&w)
         vm.wram = w
         vm.loadLocationPalette(map.header.palette)                 // LocLoad_Unk7084, Pal_LoadUnkRow0's copy
@@ -202,7 +206,8 @@ public final class CTFieldRuntime {
         vm.initObjects()
         runObj0Func1()
         initEntryTile()
-        followCamera()
+        vm.initOrigin()                                             // LocLoad_DrawMap's Map_InitOrigin
+        camera = vm.cameraPixels
     }
 
     /// Evt_RunObj0Func1: object 0's function 1 to its $00, at once (the
@@ -296,8 +301,9 @@ public final class CTFieldRuntime {
         if vm.wram[WRAM.fieldSceneFlags] & 0x80 != 0 { try warp(); return }
         if vm.wram[WRAM.fieldSceneFlags] & 0x20 != 0 {                 // DefaultHandler: SceneFlag_MapRedraw
             vm.wram[WRAM.fieldSceneFlags] &= ~0x20
-            vm.copyMapRegion()
+            vm.wram[WRAM.fieldUnk38] = 1
         }
+        if vm.wram[WRAM.fieldUnk38] != 0 { redrawFrame(); return }
         frameUpdate()
         actionButton()
         dialogueFrame()
@@ -309,7 +315,29 @@ public final class CTFieldRuntime {
         drainMapCopies()
         vm.palAnimTick()                                            // FdVec_FFF7: PalAnim_TickAll
         objectMotion()
-        if runsScrollTo { scrollToOrFollow() } else { followCamera() }
+        frameCount += 1
+    }
+
+    /// One frame of DefaultHandler's redraw loop: Field_Unk885A, then
+    /// Field_EndOfFrame (the scripts and the objects); once Field_Unk38 is
+    /// clear, the copy (Field_UnkAF4E) and FdVec_FFF7.
+    func redrawFrame() {
+        let mode = vm.wram[WRAM.mapScrollToMode]
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = 0 }
+        vm.recentreStep()
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = mode }
+        camera = vm.cameraPixels
+        vm.frame()
+        for c in vm.audio { audio.append((frameCount, c)) }
+        vm.audio.removeAll()
+        for c in vm.changes { changes.append((frameCount, c)) }
+        vm.changes.removeAll()
+        objectMotion()
+        if vm.wram[WRAM.fieldUnk38] == 0 {
+            vm.copyMapRegion()
+            drainMapCopies()
+            vm.palAnimTick()
+        }
         frameCount += 1
     }
 
@@ -354,7 +382,14 @@ public final class CTFieldRuntime {
             dpad()
         }
         if vm.wram[WRAM.fieldUnk20] != 0 { leaderProbes() }
-        limitLeader()
+        vm.limitLeaderSteps()                                       // Map_Unk9175
+        vm.dropCameraSteps()                                        // Map_Unk99DE
+        let mode = vm.wram[WRAM.mapScrollToMode]
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = 0 }
+        vm.accumulateScroll()                                       // Map_Unk91AC
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = mode }
+        vm.stepScroll()                                             // Map_Unk93E1, layer 1
+        camera = vm.cameraPixels
     }
 
     /// Field_DpadDispatch: ±$10 a frame, ±$20 with run (B, Pad_Unk00F8 bit 1).
@@ -526,25 +561,6 @@ public final class CTFieldRuntime {
             vm.wram[WRAM.mapUnk1D2A] = 0; vm.wram[WRAM.mapUnk1D2B] = 0
         }
         vm.wram[WRAM.mapUnk1D34] = p.moveFlags
-    }
-
-    /// Map_Unk9175: the leader's velocity is the step unless the leader is at
-    /// the map's column / row limits in that direction.
-    func limitLeader() {
-        vm.wram[WRAM.mapUnk1D32] = 0; vm.wram[WRAM.mapUnk1D33] = 0
-        let leader = Int(vm.wram[WRAM.partyObjSlot])
-        guard leader & 0x80 == 0 else { return }
-        let tx = Int(vm.wram[WRAM.objTileX + leader]), ty = Int(vm.wram[WRAM.objTileY + leader])
-        let sx = vm.wram[WRAM.mapUnk1D2E], sy = vm.wram[WRAM.mapUnk1D30]
-        if sx != 0 {
-            let past = sx & 0x80 != 0 ? Int(vm.wram[WRAM.mapLimitLeft]) >= tx : tx >= Int(vm.wram[WRAM.mapLimitRight])
-            if !past { vm.wram[WRAM.mapUnk1D32] = sx }
-        }
-        if sy != 0 {
-            let top = (Int(vm.wram[WRAM.mapLimitTop]) + 1) & 0xFF, bottom = (Int(vm.wram[WRAM.mapLimitBottom]) + 1) & 0xFF
-            let past = sy & 0x80 != 0 ? top >= ty : ty >= bottom
-            if !past { vm.wram[WRAM.mapUnk1D33] = sy }
-        }
     }
 
     /// Field_ActionButton: A (Pad_Unk00F6 bit 7) starts function 1 of the
@@ -855,40 +871,6 @@ public final class CTFieldRuntime {
         let sx = (vm.wram.word(WRAM.objPosX + x) >> 4) - camera.x
         let sy = (vm.wram.word(WRAM.objPosY + x) >> 4) - camera.y
         vm.wram.setWord(WRAM.objScreenX + x, sx & 0x1FF); vm.wram.setWord(WRAM.objScreenY + x, sy & 0x1FF)
-    }
-
-    /// The camera on the leader (pixel = Obj_Pos >> 4), inside the map, and
-    /// Map_TileOriginX/Y and Map_Unk1D0C/1D10 as 8-pixel columns and rows.
-    public func followCamera() {
-        let leader = Int(vm.wram[WRAM.partyObjSlot])
-        if leader & 0x80 == 0 {
-            let px = vm.wram.word(WRAM.objPosX + leader) >> 4, py = vm.wram.word(WRAM.objPosY + leader) >> 4
-            let lim = map.limits
-            let minX = lim.left * 16, maxX = max(minX, (lim.right + 1) * 16 - 256)
-            let minY = lim.top * 16, maxY = max(minY, (lim.bottom + 1) * 16 - 224)
-            camera = (min(max(minX, px - 128), maxX), min(max(minY, py - 120), maxY))
-        }
-        vm.wram.setWord(WRAM.mapTileOriginX, camera.x >> 3); vm.wram.setWord(WRAM.mapTileOriginY, camera.y >> 3)
-        vm.wram.setWord(WRAM.mapUnk1D0C, (camera.x >> 3) + 32); vm.wram.setWord(WRAM.mapUnk1D10, (camera.y >> 3) + 28)
-    }
-
-    /// Map_Unk91AC's scroll-to: while Map_ScrollToMode is set the camera
-    /// steps a pixel a frame on each axis (Map_StepPos/Neg, $10 = 1 pixel)
-    /// until Map_TileOriginX/Y (8-pixel units) equal Map_ScrollToX/Y on a
-    /// 16-pixel boundary, then ScrollTo_Arrived ($02). The target is the
-    /// camera's top-left: `$E7 column, row` puts that tile at the corner.
-    func scrollToOrFollow() {
-        let mode = vm.wram[0x7E1D00]
-        guard mode != 0 || cameraHeld else { followCamera(); return }
-        cameraHeld = true
-        if mode == 1 {
-            let tx = Int(vm.wram[0x7E1D02]) * 8, ty = Int(vm.wram[0x7E1D03]) * 8
-            camera.x += tx > camera.x ? 1 : tx < camera.x ? -1 : 0
-            camera.y += ty > camera.y ? 1 : ty < camera.y ? -1 : 0
-            if camera.x == tx && camera.y == ty { vm.wram[0x7E1D00] = 2 }
-        }
-        vm.wram.setWord(WRAM.mapTileOriginX, camera.x >> 3); vm.wram.setWord(WRAM.mapTileOriginY, camera.y >> 3)
-        vm.wram.setWord(WRAM.mapUnk1D0C, (camera.x >> 3) + 32); vm.wram.setWord(WRAM.mapUnk1D10, (camera.y >> 3) + 28)
     }
 
     // MARK: Inspection
