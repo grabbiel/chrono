@@ -175,7 +175,7 @@ chronoforge music budget built.sfc --songs 2
 **Template** (`CTSongTemplate`). The generated listing has:
 
 - `@samples` from the given numbers (63 on for appended project samples);
-- `@echo` with the chosen EDL, and `@drums none`;
+- `@echo` with the chosen EDL and song volume `$FF`, and `@drums none`;
 - on track 0, a `tempo`, `echo_volume`, `efb_fade` and `fir` header;
 - per track: `sample $20 + slot`, `volume`, `pan`, `octave` and
   `transpose $0A`, then a loop label;
@@ -197,9 +197,8 @@ with the playback ROM's samples and the project's `rom.samples`:
 
 The build refuses a song over either budget (`CTSongBudget`). The rack's
 **Project sample** menu loads a sample that `rom.samples` writes into a slot,
-with its own tuning and ADSR words. Auditions still play the playback ROM's
-samples, so a project sample is heard after a build, through
-`music sample-check` or the SFX Lab's preview.
+with its own tuning and ADSR words. Auditions play it before any build: see
+"Project-sample auditions" below.
 
 **Evidence** (`macos_studio/tools/verify_audio_build.py`, ROM tests in
 `CTSamplePatchTests`). A song from the template, with a note inserted on each
@@ -207,9 +206,123 @@ of its two tracks, is built with a replaced and an appended sample. On the
 built ROM, the S-SMP driver keys both samples on at the inserted notes, and
 the voices' pitch registers are the driver's formula for those notes.
 
-**Not yet:**
+**Song volume.** The `@echo` row's byte 1 is the song command's Arg1, which
+the driver keeps in `Spc_Unk4D` and multiplies into every song voice's
+volume: at `$00` the song is silent. No ROM song uses `$00` and `$FF` is the
+most common value. Templates written before this slice had `@echo $EDL $00`;
+change the second byte to `$FF`. The Validator warns about a `$00`.
 
-- **Drum kits.** The 36-byte `@drum` table is written as listed. A kit editor
-  that auditions each pad is the next slice.
-- **MIDI import.** Quantize to the duration table, map into octaves, and tie
-  across rows.
+## Drum kits
+
+`@drum` rows are the song's `AudioRom_SongExtra` row, sent to ARAM `$F120`
+(36 bytes, 12 pads of 3 bytes). In drum mode (`drums_on`, `$FB`), the driver's
+`Spc_DrumNote` (`driver.asm` `$0720`) takes a note's index (byte / 14, so
+C = pad 0 to B = pad 11) and reads its pad:
+
+- byte 0: the directory entry to play, through `Spc_SetTrackSample`
+  (`$20` + slot for the song's samples; 0 on an unused pad);
+- byte 1: the note, plus the track's transpose − 10 (at the template's
+  `transpose $0A`, the note number itself);
+- byte 2: below `$80`, the pan, doubled into the track's pan as `Spc_SeqPan`
+  does; `$80` or more keeps the track's pan.
+
+In the ROM, 41 songs have a kit: samples `$20–$2A`, notes 0–77, pans below
+`$80`, and no pad past its song's sample list.
+
+`CTDrumKit` reads and writes the 12 rows; `CTSongDocument.drumKit` and
+`setDrumKit` edit them in place. **Instruments** shows the kit under the rack:
+per pad a sample menu (the song's slots, named after their project sample),
+the note, "track's pan" or a pan, how many notes play it, and **Audition**
+(one note in drum mode through the driver). **Add a kit** writes 12 empty rows
+and **Clear kit** empties them. The Validator reports pads whose sample is
+past the song's list or below `$20`, and notes outside C0–B7.
+
+```sh
+chronoforge music kit song02.ctsong                          # the kit as rows
+chronoforge music kit song02.ctsong set 1 '$21' '$50' '$10' --out song02.ctsong
+chronoforge music kit song02.ctsong clear 1 --out song02.ctsong
+chronoforge music drum-check <clean.sfc> <built.sfc> 2 --listing song02.ctsong --steps 600
+```
+
+**Evidence.** `CTDrumKitTrace` runs a song on the driver and compares every
+drum-mode note's key-on with the kit: the voice's SRCN, the note in the
+driver's RAM (`$F3A0+1` per track) and, where the pad sets one, the pan byte
+(`$F280+1`). On the clean ROM, songs `$04`, `$06`, `$0A` and `$0B` match all
+56, 23, 63 and 16 drum notes in 400 steps (`testTheROMsKitsAreSpcDrumNote`;
+`$0C` matches 36 more). `testAnEditedKitBuildsAndPlays` and
+`verify_drums_midi.py` build an edited kit through `rom.songs` and confirm
+the driver keys the edited pad with its sample, note and pan.
+
+## MIDI import
+
+```sh
+chronoforge music import-midi tune.mid --song 5 --project My.ctproj --rom <clean.sfc> \
+    --programs 0:7,33:63 --drums 36:7:60,38:1:72:16 --grid 3 --report import.json
+```
+
+In the Studio: **Music → CT Songs → Import → MIDI File…** opens a sheet with
+the same choices and a live conversion report; **Import** writes
+`audio/songs/<name>.ctsong` and its `rom.songs` row.
+
+Mapping (`CTMIDIImport`):
+
+- **Voices.** Each MIDI channel with notes becomes one track, in channel
+  order. More than 8 channels is refused, listing them. Chords keep their
+  highest note, and a note ends where the next one starts.
+- **Time.** Steps are 24 per quarter note (96 a bar). Starts and ends are
+  rounded to the grid (3 steps by default, 3–96). Lengths are written with
+  the duration table; a note longer than one entry continues as ties, and so
+  does a note that crosses a tempo change. The report gives the largest and
+  mean rounding error in steps and milliseconds. The song is padded to a
+  whole bar and loops (`--no-loop` ends it).
+- **Notes.** The driver's note number is the MIDI key + `--transpose`,
+  written with `octave` and the note names (number = 12 × octave + index at
+  `transpose $0A`); a key outside 0–95 after the transpose is refused, with
+  the list.
+- **Instruments.** Program changes map through an explicit table
+  (`--programs P:S`, a sample number). A program with no entry is refused
+  unless `--default-sample` is given. Channel 10 is drums: `--drums
+  KEY:SAMPLE[:NOTE[:PAN]]` puts each key on a pad and the track in drum mode;
+  an unmapped key is refused.
+- **Tempo.** `Spc_SeqTempo` stores t + t × 20 / 256; each 5.25 ms pass adds
+  it to an 8-bit counter and the song steps on each carry. At 24 steps a
+  quarter, the driver tempo is about 0.5376 × BPM: 120 BPM is `$3D`, which
+  plays 120.9. Each MIDI tempo change becomes a `tempo` row on track 0.
+- **Budgets.** The result is assembled and its samples and sequence checked
+  with `CTSongBudget` as the build would load them; a song past `$4700` or
+  whose samples reach the echo buffer is refused with the numbers.
+
+**Evidence.** `CTMIDIImportTests` covers parsing, the tempo formula,
+voices/notes/programs/drums and each refusal, on MIDI files written by the
+tests. `testAnImportedSongPlaysOnTheDriver` builds an import into a ROM and
+checks the driver's key-ons per voice. `verify_drums_midi.py` writes a
+MIDI file, imports, builds and checks it with `ct_rom_check.py`, and the
+driver keys all 20 of its notes on the steps the file gives, with the kit's
+samples on channel 10.
+
+## Project-sample auditions
+
+The rack's and the kit's **Audition** buttons play through a scratch ROM
+built in memory: `CTROMBuilder.audioScratch` applies only the project's
+`rom.samples` and the one-track audition listing in place of the target song,
+then the SPC transfer loads it into `AKAOAudioEngine` (`CTProjectAudition`).
+Nothing is written to disk. Without `rom.samples`, the audition plays the
+playback ROM as before. `CTProjectAuditionTests` checks that the voice decodes
+the project sample (`CTSampleProbe`), that the stream's ARAM holds its BRR,
+and that no file is written.
+
+## Launch arguments
+
+```sh
+ChronoForgeStudioApp --open my.ctproj --module music --music-new yes
+ChronoForgeStudioApp --open my.ctproj --module music --import-midi tune.mid
+ChronoForgeStudioApp --open my.ctproj --module music --song song02.ctsong --music-view instruments
+```
+
+## Not yet
+
+- The importer keeps one note per channel at a time (the highest of a
+  chord); it does not split chords across free voices.
+- Velocity, pitch bend, controllers and pan are not imported.
+- The Music detail is wider than a 1080-pt window in every view; the right
+  edge is clipped until the window is widened.

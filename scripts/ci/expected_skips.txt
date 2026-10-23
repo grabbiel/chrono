@@ -111,3 +111,8 @@ ChronoForgeMetalTests.PPUFeatureParityTests/testParityMosaic                    
 ChronoForgeMetalTests.PPUFeatureParityTests/testParityOverscanBorder                            may-skip  # Metal device availability on hosted runners
 ChronoForgeMetalTests.PPUFeatureParityTests/testParityRandomFeatureFrames                       may-skip  # Metal device availability on hosted runners
 ChronoForgeCoreTests.CTHelpLineTests/testEveryROMDescriptionFits                                skip      # local ROM
+ChronoForgeCoreTests.CTDrumKitTests/testTheROMsKitsAreSpcDrumNote                           skip      # local ROM
+ChronoForgeCoreTests.CTDrumKitTests/testAnEditedKitBuildsAndPlays                           skip      # local ROM
+ChronoForgeCoreTests.CTMIDIImportTests/testAnImportedSongPlaysOnTheDriver                   skip      # local ROM
+ChronoForgeCoreTests.CTProjectAuditionTests/testTheRackAuditionDecodesTheProjectSample      skip      # local ROM
+ChronoForgeCoreTests.CTProjectAuditionTests/testADrumPadAuditionPlaysTheProjectSample       skip      # local ROM

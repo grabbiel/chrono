@@ -410,7 +410,9 @@ written by the SFX Lab for preview; it can be regenerated. See
   (`ct-song/1`, [song sequences](music_sequences.md)); the two are not converted.
   The Studio's tracker, piano roll, instrument rack and echo designer edit a
   `.ctsong` listing in place and save it after every edit, with undo; nothing
-  else is stored ([music tracker](music_tracker.md)).
+  else is stored ([music tracker](music_tracker.md)). A listing's `@drum` rows are the
+  song's drum kit, and `music import-midi` writes a MIDI file as a new `.ctsong`
+  listing with its `rom.songs` row.
 - **Event DSL (implemented)**: one object slot (`obj 0..15`) per scene, unique
   functions `func 0..15`, and the Studio statements described in `scene_director.md`.
   DSL is authoritative; `.event.json` caches the AST and `{node_id, x, y}` graph
