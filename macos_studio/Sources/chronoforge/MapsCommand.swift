@@ -226,11 +226,13 @@ private func cmdMapsEdit(_ operation: String, _ args: [String]) -> Int32 {
             if !ids.isEmpty {
                 let changed = try CTMapList.set(ids, listed: !flags.contains("--remove"), in: &project)
                 try project.save()
-                print((flags.contains("--remove") ? "took out of" : "put in") + " rom.maps: " +
-                      (changed.isEmpty ? "nothing (already so)" : changed.joined(separator: ", ")))
+                let verb: String = flags.contains("--remove") ? "took out of" : "put in"
+                let what: String = changed.isEmpty ? "nothing (already so)" : changed.joined(separator: ", ")
+                print("\(verb) rom.maps: \(what)")
             }
             let listed = CTMapList.listed(project)
-            print("rom.maps: \(listed.count) maps" + (listed.isEmpty ? "" : " (\(listed.joined(separator: ", ")))"))
+            let names: String = listed.isEmpty ? "" : " (\(listed.joined(separator: ", ")))"
+            print("rom.maps: \(listed.count) maps\(names)")
             if let base = options["--base"] {
                 let b = CTMapList.budget(base: try readROM(base), project: project)
                 if let refusal = b.refusal {
@@ -239,9 +241,13 @@ private func cmdMapsEdit(_ operation: String, _ args: [String]) -> Int32 {
                 }
                 print("a build would leave \(b.freeBytesLeft ?? 0) bytes of free space")
                 if let t = b.treasure {
-                    print("TreasureRom: \(t.records) records (\(t.flagsLeft) of \(CTTreasure.flagCount) flags left) at \(t.address), " +
-                          "\(t.placement)" + (t.from.map { " from \($0)" } ?? "") + ", \(t.renumbered) chests renumbered")
-                    for e in t.evicted ?? [] { print("  moves MapProps entry \(e.entries.map(String.init).joined(separator: ", ")) \(e.from) -> \(e.to)") }
+                    let from: String = t.from.map { (f: String) -> String in " from \(f)" } ?? ""
+                    let flagsLeft: String = "\(t.flagsLeft) of \(CTTreasure.flagCount) flags left"
+                    print("TreasureRom: \(t.records) records (\(flagsLeft)) at \(t.address), \(t.placement)\(from), \(t.renumbered) chests renumbered")
+                    for e in t.evicted ?? [] {
+                        let entries: String = e.entries.map { (n: Int) -> String in String(n) }.joined(separator: ", ")
+                        print("  moves MapProps entry \(entries) \(e.from) -> \(e.to)")
+                    }
                 } else {
                     print("TreasureRom: unchanged")
                 }

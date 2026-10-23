@@ -42,8 +42,9 @@ extension ProjectStore {
             let ids = try CTNewLocation.create(in: &candidate, from: source, number: number, entrance: entrance, list: list)
             try candidate.save()
             project = candidate
-            statusMessage = "created \(ids[0]) from \(source)" + (entrance.map { ", entrance on \($0.map)" } ?? "") +
-                (list ? " (listed in rom.maps)" : "")
+            let entranceText: String = entrance.map { (e: CTNewLocation.Entrance) -> String in ", entrance on \(e.map)" } ?? ""
+            let listText: String = list ? " (listed in rom.maps)" : ""
+            statusMessage = "created \(ids[0]) from \(source)\(entranceText)\(listText)"
             statusIsError = false
             return ids[0]
         } catch {

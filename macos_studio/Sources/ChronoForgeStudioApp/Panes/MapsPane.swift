@@ -108,13 +108,18 @@ struct NewLocationSheet: View {
         let free = CTNewLocation.unused.filter { project.maps[CTMaps.id($0)]?.rom?.createdFrom == nil }
         _number = State(initialValue: free.first ?? CTNewLocation.unused[0])
         // The entrance defaults to a map with an exit into the source, next to that exit, arriving where it does.
-        let into = project.maps.values.sorted { $0.id < $1.id }.lazy.compactMap { m in
-            m.exits.first { $0.map == source }.map { (m, $0) }
-        }.first
+        // A loop with typed lets: CI's older type checker (Xcode 26.6) is slow on long closure chains.
+        var into: (GameMap, GameMap.Exit)? = nil
+        let maps: [GameMap] = project.maps.values.sorted { (a: GameMap, b: GameMap) -> Bool in a.id < b.id }
+        for m in maps {
+            if let e = m.exits.first(where: { (x: GameMap.Exit) -> Bool in x.map == source }) { into = (m, e); break }
+        }
         _entranceMap = State(initialValue: into?.0.id ?? project.maps.keys.sorted().first ?? "")
         if let (m, e) = into {
-            let x = min(m.width - 1, e.x + (e.vertical == true ? 0 : (e.span ?? 0) + 1))
-            let y = min(m.height - 1, e.y + (e.vertical == true ? (e.span ?? 0) + 1 : 0))
+            let past: Int = (e.span ?? 0) + 1
+            let vertical: Bool = e.vertical == true
+            let x: Int = min(m.width - 1, vertical ? e.x : e.x + past)
+            let y: Int = min(m.height - 1, vertical ? e.y + past : e.y)
             _at = State(initialValue: TilePoint(x: x, y: y))
             _to = State(initialValue: TilePoint(x: e.toX, y: e.toY))
             _facing = State(initialValue: e.facing ?? 0)
@@ -129,6 +134,17 @@ struct NewLocationSheet: View {
         return out
     }
 
+    // Helpers apart from body: CI's older type checker (Xcode 26.6) is slow on nested optional closures in a view builder.
+    private func isSource(_ id: String) -> Bool {
+        guard let rom = project.maps[id]?.rom else { return false }
+        return rom.createdFrom == nil
+    }
+
+    private func numberLabel(_ n: Int) -> String {
+        let created: Bool = project.maps[CTMaps.id(n)]?.rom?.createdFrom != nil
+        return created ? "\(n) (created)" : "\(n)"
+    }
+
     var body: some View {
         let ids = project.maps.keys.sorted()
         VStack(alignment: .leading, spacing: 10) {
@@ -137,11 +153,11 @@ struct NewLocationSheet: View {
                  "its chests get flags of their own.").font(.caption).foregroundStyle(.secondary)
             Form {
                 Picker("From", selection: $source) {
-                    ForEach(ids.filter { project.maps[$0]?.rom.map { $0.createdFrom == nil } == true }, id: \.self) { Text($0).tag($0) }
+                    ForEach(ids.filter(isSource), id: \.self) { (id: String) in Text(id).tag(id) }
                 }
                 Picker("Number", selection: $number) {
-                    ForEach(CTNewLocation.unused, id: \.self) { n in
-                        Text("\(n)" + (project.maps[CTMaps.id(n)]?.rom?.createdFrom != nil ? " (created)" : "")).tag(n)
+                    ForEach(CTNewLocation.unused, id: \.self) { (n: Int) in
+                        Text(numberLabel(n)).tag(n)
                     }
                 }
                 Toggle("Entrance on another map", isOn: $withEntrance)
@@ -180,6 +196,24 @@ struct MapBuildSheet: View {
     @State private var budget: CTMapList.Budget?
     @State private var running = false
 
+    // Typed lets: CI's older type checker (Xcode 26.6) is slow on nested ternaries joined with `+` and `?? ""`.
+    static func evictedLine(_ e: CTTreasure.Evicted) -> String {
+        let entries: String = e.entries.map { (n: Int) -> String in String(n) }.joined(separator: ", ")
+        return "moves MapProps entry \(entries) \(e.from) → \(e.to)"
+    }
+
+    static func treasureSummary(_ t: CTTreasure.ReportBlock) -> String {
+        let placed: String
+        switch t.placement {
+        case "moved": placed = "moved to"
+        case "grown": placed = "grown in place at"
+        default: placed = "in place at"
+        }
+        let from: String = t.from.map { (f: String) -> String in " (from \(f))" } ?? ""
+        let flags: String = "\(t.flagsLeft) of \(CTTreasure.flagCount) flags left"
+        return "TreasureRom: \(t.records) records, \(flags), \(placed) \(t.address)\(from), \(t.renumbered) chests renumbered"
+    }
+
     var body: some View {
         let listed = CTMapList.listed(project)
         VStack(alignment: .leading, spacing: 10) {
@@ -214,11 +248,9 @@ struct MapBuildSheet: View {
                         } else {
                             Text("A build would leave \(b.freeBytesLeft ?? 0) bytes of free space.")
                             if let t = b.treasure {
-                                Text("TreasureRom: \(t.records) records, \(t.flagsLeft) of \(CTTreasure.flagCount) flags left, " +
-                                     "\(t.placement == "moved" ? "moved to" : t.placement == "grown" ? "grown in place at" : "in place at") \(t.address)" + (t.from.map { " (from \($0))" } ?? "") +
-                                     ", \(t.renumbered) chests renumbered")
-                                ForEach(t.evicted ?? [], id: \.from) { e in
-                                    Text("moves MapProps entry \(e.entries.map(String.init).joined(separator: ", ")) \(e.from) → \(e.to)")
+                                Text(Self.treasureSummary(t))
+                                ForEach(t.evicted ?? [], id: \.from) { (e: CTTreasure.Evicted) in
+                                    Text(Self.evictedLine(e))
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             } else {

@@ -28,12 +28,19 @@ public enum CTTreasure {
 
     /// Every location's own records as the offset words split them (a redirect list holds its tile-0 record).
     public static func lists(_ rom: [UInt8]) -> [[Record]] {
-        (0..<CTMapROM.locCount).map { i in
-            let first = CTMapROM.u16(rom, CTMapROM.treasureOfs + 2 * i), end = CTMapROM.u16(rom, CTMapROM.treasureOfs + 2 * i + 2)
-            return stride(from: first, to: max(first, end), by: CTMapROM.treasureBytes).map {
-                Record(tile: CTMapROM.u16(rom, CTMapROM.treasureBank + $0), contents: CTMapROM.u16(rom, CTMapROM.treasureBank + $0 + 2))
+        // Loops with typed lets: CI's older type checker (Xcode 26.6) is slow on nested closures with arithmetic.
+        var out: [[Record]] = []
+        for i in 0..<CTMapROM.locCount {
+            let at: Int = CTMapROM.treasureOfs + 2 * i
+            let first: Int = CTMapROM.u16(rom, at), end: Int = CTMapROM.u16(rom, at + 2)
+            var list: [Record] = []
+            for ofs in stride(from: first, to: max(first, end), by: CTMapROM.treasureBytes) {
+                let base: Int = CTMapROM.treasureBank + ofs
+                list.append(Record(tile: CTMapROM.u16(rom, base), contents: CTMapROM.u16(rom, base + 2)))
             }
+            out.append(list)
         }
+        return out
     }
 
     /// Word 0: the offset of the first record, which the numbers count from (Map_TreasureRec0).
@@ -206,7 +213,8 @@ public enum CTTreasure {
         }
         let from = CTMapROM.pc(best.pointer), entries = users[best.pointer]!.sorted()
         let bytes = Array(base[from..<(from + best.packed)])
-        let what = "MapProps entry \(entries.map(String.init).joined(separator: ", ")) (moved for TreasureRom)"
+        let names: String = entries.map { (n: Int) -> String in String(n) }.joined(separator: ", ")
+        let what = "MapProps entry \(names) (moved for TreasureRom)"
         let (to, _) = try CTROMBuilder.placeBlock(bytes, home: nil, space: &space, what: what)
         write(bytes, to, what)
         for e in entries {

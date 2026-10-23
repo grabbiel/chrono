@@ -194,7 +194,8 @@ final class CTTreasureTests: XCTestCase {
         project.maps["loc_109"] = map(109, treasure: [.init(x: 1, y: 1, contents: 1)], list: 302)
         project.maps["loc_302"] = map(302, treasure: [.init(x: 2, y: 2, contents: 1)])
         project.project.rom = .init(maps: ["loc_028", "loc_109"])
-        let messages = Validator.validate(project).filter { $0.gate == 4 }.map(\.description)
+        let gate4: [ValidationIssue] = Validator.validate(project).filter { (v: ValidationIssue) -> Bool in v.gate == 4 }
+        let messages: [String] = gate4.map(\.description)
         for expected in ["a location the game never loads that this build leaves out", "must match them (edit loc_302)"] {
             XCTAssertTrue(messages.contains { $0.contains(expected) }, "\(expected) not in \(messages)")
         }
@@ -217,7 +218,8 @@ final class CTTreasureTests: XCTestCase {
                                  entrance: .init(map: "loc_028", x: 46, y: 9, toX: 6, toY: 6, facing: 11), list: true)
         try CTTreasure.add(&project.maps["loc_448"]!, x: 7, y: 8, contents: .item(0xC4))
         try CTMapList.set(["loc_026"], listed: true, in: &project)
-        XCTAssertEqual(Validator.validate(project).filter { $0.gate == 4 && $0.path.hasPrefix("maps/") }.map(\.description), [])
+        let mapIssues: [ValidationIssue] = Validator.validate(project).filter { (v: ValidationIssue) -> Bool in v.gate == 4 && v.path.hasPrefix("maps/") }
+        XCTAssertEqual(mapIssues.map(\.description), [String]())
         let (built, report) = try CTROMBuilder.build(base: rom, project: project)
         let t = try XCTUnwrap(report.treasureRom)
         XCTAssertEqual(t.placement, "moved")

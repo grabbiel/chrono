@@ -458,7 +458,8 @@ struct MapEditor: View {
         case .empty: kind = .empty; amount = 0
         }
         let flag = chestFlags?[safe: k]
-        return GroupBox("Chest \(k)" + (flag.map { " · flag \($0)" } ?? "")) {
+        let flagText: String = Self.flagSuffix(flag)
+        return GroupBox("Chest \(k)\(flagText)") {
             Form {
                 mono("tile (\(t.x), \(t.y)) · drag it to move it; its flag stays")
                 Picker("Holds", selection: Binding(get: { kind }, set: { new in
@@ -652,8 +653,8 @@ struct MapEditor: View {
             if let t = map.treasure, !t.isEmpty {
                 let flags = chestFlags
                 Section("Treasure (\(t.count))") {
-                    ForEach(Array(t.enumerated()), id: \.offset) { k, c in
-                        mono("(\(c.x), \(c.y)) " + treasureName(c.contents) + (flags?[safe: k].map { " · flag \($0)" } ?? ""))
+                    ForEach(Array(t.enumerated()), id: \.offset) { (k: Int, c: GameMap.Treasure) in
+                        mono(treasureLine(c, flag: flags?[safe: k]))
                     }
                 }
             }
@@ -693,6 +694,18 @@ struct MapEditor: View {
         case .empty: return "nothing"
         case .item(let i): return String(format: "item $%03X", i)
         }
+    }
+
+    // Built with typed lets: CI's older type checker (Xcode 26.6) is slow on `+` with `?? ""` in a view builder.
+    private static func flagSuffix(_ flag: Int?) -> String {
+        guard let flag else { return "" }
+        return " · flag \(flag)"
+    }
+
+    private func treasureLine(_ c: GameMap.Treasure, flag: Int?) -> String {
+        let name: String = treasureName(c.contents)
+        let suffix: String = Self.flagSuffix(flag)
+        return "(\(c.x), \(c.y)) \(name)\(suffix)"
     }
 
     private func mono(_ s: String) -> some View { Text(s).font(.system(.caption, design: .monospaced)) }
