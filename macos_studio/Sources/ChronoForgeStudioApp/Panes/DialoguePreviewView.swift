@@ -2,8 +2,12 @@
 // ROM's font, frame and colours through the PPU (ChronoForgeMetal, or the
 // reference renderer without Metal), page stepping, frame-by-frame playback
 // at the field's own pace (one glyph a frame, waits of 15 frames) scaled by a
-// viewer speed, and warnings for lines past the frame. Reused by the item
-// description editor and the Scene Director's message statements.
+// viewer speed, and warnings for lines past the frame. The box's place as the
+// field picks it (CTBoxPlace: the opcode's, or by the speaker's screen Y), a
+// choice message's cursor stepped with the arrow keys (CTChoice /
+// CTChoiceCursor), and the names and party from the project's characters.
+// Reused by the item description editor and the Scene Director's message
+// statements.
 import SwiftUI
 import AppKit
 import MetalKit
@@ -22,6 +26,20 @@ enum DialogueAssets {
         cache[path] = (rom, codec)
         return (rom, codec)
     }
+
+    private static var maps: [String: PPUFrame] = [:]
+
+    /// A location's field picture with the camera at the map's centre (CTDialogueOverMap), once per project and location.
+    static func map(_ project: CTProject, location: Int) -> PPUFrame? {
+        let key = "\(project.url.path)/\(location)"
+        if let hit = maps[key] { return hit }
+        guard let m = project.maps[CTMaps.id(location)] else { return nil }
+        let x = m.width * 8 - 128
+        let y = m.height * 8 - 112
+        guard let f = try? CTDialogueOverMap.picture(project: project, location: location, cameraX: x, cameraY: y) else { return nil }
+        maps[key] = f
+        return f
+    }
 }
 
 struct DialoguePreviewView: View {
@@ -37,6 +55,16 @@ struct DialoguePreviewView: View {
     var place = 1
     /// Draw at 1x (256 x 224 cropped to the box) or 2x.
     var scale: CGFloat = 2
+    /// A choice opcode's operand (OpC0/OpC3/OpC4): the cursor's first and last lines.
+    var choice: Int? = nil
+    /// Display names by character id (CTDialogueSettings.projectNames); the defaults otherwise.
+    var names: [Int: String] = [:]
+    /// The project whose imported locations can show behind the box.
+    var project: CTProject? = nil
+    /// The location to show behind the box at first (the event pack's, in a scene).
+    var location: Int? = nil
+
+    enum PlaceMode: Hashable { case given, top, bottom, speaker }
 
     @State private var page = 0
     @State private var playing = false
@@ -44,17 +72,40 @@ struct DialoguePreviewView: View {
     @State private var style = 0
     @State private var press = 30
     @State private var player = DialoguePlayer()
+    @State private var placeMode = PlaceMode.given
+    @State private var speakerY = 112.0
+    @State private var choiceOn = false
+    @State private var operand = 0x01
+    @State private var cursor = 0
+    @State private var party = [0, 1, 2]
+    @State private var behind: Int?
+    @FocusState private var focused: Bool
+
+    private var boxPlace: Int {
+        switch placeMode {
+        case .given: return place
+        case .top: return CTBoxPlace.top
+        case .bottom: return CTBoxPlace.bottom
+        case .speaker: return CTBoxPlace.place(unk30: 0, screenY: Int(speakerY))
+        }
+    }
+
+    private var activeChoice: CTChoice? { choiceOn ? CTChoice(operand: operand) : nil }
 
     private struct Built {
         var layout: CTDialogueLayout?
         var box: CTDialogueBox?
+        var map: PPUFrame?
         var problem: String?
     }
 
     private func build() -> Built {
         guard let romPath else { return Built(problem: "Choose a ROM (Music or Scenes) to preview the dialogue box") }
         guard let assets = DialogueAssets.load(romPath) else { return Built(problem: "\(romPath): not a Chrono Trigger ROM") }
-        let settings = CTDialogueSettings.placeholder(press: press, place: place)
+        var settings = CTDialogueSettings.placeholder(press: press, place: boxPlace)
+        if let codec = assets.codec {
+            settings = CTDialogueSettings.named(names, codec: codec, party: party, press: press, place: boxPlace)
+        }
         do {
             let layout: CTDialogueLayout
             switch source {
@@ -65,7 +116,9 @@ struct DialoguePreviewView: View {
                 let at = CTDialogueLayout.messageAddress(rom: assets.rom, table: table, index: index)
                 layout = try CTDialogueLayout(mem: CTDialogueMemory(rom: assets.rom), text: at, settings: settings)
             }
-            return Built(layout: layout, box: CTDialogueBox(rom: assets.rom, style: style))
+            var map: PPUFrame?
+            if let project, let behind { map = DialogueAssets.map(project, location: behind) }
+            return Built(layout: layout, box: CTDialogueBox(rom: assets.rom, style: style), map: map)
         } catch {
             return Built(problem: String(describing: error))
         }
@@ -78,8 +131,14 @@ struct DialoguePreviewView: View {
                 let pages = layout.pageCount
                 let shown = min(page, pages - 1)
                 DialogueBoxPicture(layout: layout, box: box, frame: layout.pageFrame(shown) ?? 0, playing: playing,
-                                   speed: speed, player: player, scale: scale)
+                                   speed: speed, player: player, scale: scale, cursor: activeChoice == nil ? nil : cursor,
+                                   map: built.map)
                     .frame(width: 256 * scale, height: CGFloat(CTDialogueROM.bandLines) * scale)
+                    .focusable()
+                    .focused($focused)
+                    .onTapGesture { focused = true }
+                    .onKeyPress(.downArrow) { stepChoice(.down, pages: pages) }
+                    .onKeyPress(.upArrow) { stepChoice(.up, pages: pages) }
                 HStack(spacing: 6) {
                     Button { page = max(0, shown - 1) } label: { Image(systemName: "chevron.left") }
                         .disabled(shown == 0)
@@ -105,12 +164,104 @@ struct DialoguePreviewView: View {
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 }
                 .font(.caption)
+                placeAndChoice(pages: pages)
                 overflowWarnings(layout)
             } else {
                 Text(built.problem ?? "").font(.caption).foregroundStyle(.secondary)
             }
         }
         .onChange(of: source) { _, _ in page = 0; playing = false }
+        .onAppear {
+            if behind == nil { behind = location }
+            if let choice {
+                choiceOn = true
+                operand = choice & 0x0F
+                cursor = CTChoice(operand: choice).first
+            }
+        }
+    }
+
+    private func stepChoice(_ key: CTChoice.Key, pages: Int) -> KeyPress.Result {
+        guard let c = activeChoice else { return .ignored }
+        cursor = c.step(cursor, key)
+        page = pages - 1
+        playing = false
+        return .handled
+    }
+
+    private func nameOf(_ id: Int) -> String { names[id] ?? CTDialogueSettings.defaultNames[id] }
+
+    // The choice and location helpers below keep the view's expressions short for CI's older
+    // type checker (Xcode 26.6).
+    private func setFirst(_ first: Int, of c: CTChoice) {
+        let last: Int = max(first, c.last)
+        operand = first << 2 | last
+        cursor = first
+    }
+
+    private func setLast(_ last: Int, of c: CTChoice) {
+        let first: Int = min(c.first, last)
+        operand = first << 2 | last
+        cursor = first
+    }
+
+    private func locationLabel(_ n: Int, in project: CTProject) -> String {
+        let label: String = String(format: "Location $%03X", n)
+        guard let map = project.maps[CTMaps.id(n)] else { return label }
+        return label + " " + map.name
+    }
+
+    @ViewBuilder private func placeAndChoice(pages: Int) -> some View {
+        HStack(spacing: 6) {
+            Picker("Place", selection: $placeMode) {
+                Text(place == CTBoxPlace.top ? "As set (top)" : "As set (bottom)").tag(PlaceMode.given)
+                Text("Top").tag(PlaceMode.top)
+                Text("Bottom").tag(PlaceMode.bottom)
+                Text("By speaker").tag(PlaceMode.speaker)
+            }.frame(width: 170)
+                .help("OpC1/OpC3 put the box at the top, OpC2/OpC4 at the bottom; OpBB/OpC0 by the speaker's screen Y")
+            if placeMode == .speaker {
+                Slider(value: $speakerY, in: 0...223, step: 1).frame(width: 110)
+                Text("Y \(Int(speakerY)) → \(boxPlace == CTBoxPlace.top ? "top" : "bottom")").monospacedDigit()
+            }
+            Toggle("Choice", isOn: $choiceOn).toggleStyle(.checkbox)
+                .onChange(of: choiceOn) { _, on in
+                    if on { cursor = CTChoice(operand: operand).first; page = pages - 1; focused = true }
+                }
+            if let c = activeChoice {
+                Picker("", selection: Binding(get: { c.first }, set: { (v: Int) in setFirst(v, of: c) })) {
+                    ForEach(0..<4, id: \.self) { Text("from line \($0 + 1)").tag($0) }
+                }.frame(width: 110).labelsHidden()
+                Picker("", selection: Binding(get: { c.last }, set: { (v: Int) in setLast(v, of: c) })) {
+                    ForEach(0..<4, id: \.self) { Text("to line \($0 + 1)").tag($0) }
+                }.frame(width: 100).labelsHidden()
+                Text("cursor line \(cursor + 1) · ↑↓ to move").foregroundStyle(.secondary).monospacedDigit()
+            }
+        }
+        .font(.caption)
+        if let project {
+            let locations = CTDialogueOverMap.locations(project)
+            Picker("Behind", selection: $behind) {
+                Text("Backdrop").tag(Int?.none)
+                ForEach(locations, id: \.self) { n in
+                    Text(locationLabel(n, in: project))
+                        .tag(Int?.some(n))
+                }
+            }.frame(width: 230)
+                .help(locations.isEmpty ? "Import locations (Maps) to show the field behind the box"
+                                        : "The location's field picture (camera at its centre) behind the box")
+                .font(.caption)
+        }
+        HStack(spacing: 6) {
+            Text("Party").foregroundStyle(.secondary)
+            ForEach(0..<3, id: \.self) { slot in
+                Picker("", selection: Binding(get: { party[slot] }, set: { party[slot] = $0 })) {
+                    ForEach(0..<7, id: \.self) { Text(nameOf($0)).tag($0) }
+                }.frame(width: 100).labelsHidden()
+            }
+        }
+        .font(.caption)
+        .help("The names party codes $1B-$1D draw; names come from the project's characters")
     }
 
     @ViewBuilder private func overflowWarnings(_ layout: CTDialogueLayout) -> some View {
@@ -139,6 +290,8 @@ private struct DialogueBoxPicture: NSViewRepresentable {
     let speed: Double
     let player: DialoguePlayer
     let scale: CGFloat
+    var cursor: Int?
+    var map: PPUFrame?
 
     final class Coordinator {
         var key: String = ""
@@ -176,12 +329,18 @@ private struct DialogueBoxPicture: NSViewRepresentable {
         host.wantsLayer = true
         host.layer?.masksToBounds = true
         let blank = c.blank!
-        let picture: (Int) -> PPUFrame = { n in
+        let mem = box.mem
+        let cursorFrom = cursor == nil ? nil : CTChoiceCursor.firstFrame(layout)
+        let picture: (Int) -> PPUFrame = { [cursor, map] n in
+            if let map { return box.frame(layout, at: n, over: map, cursor: cursor) }
             var f = blank
             let t = min(max(0, n), layout.frames.count - 1)
             CTDialogueBox.storeText(&f, layout, through: t)
             let s = layout.frames[t]
             CTDialogueBox.applyBand(&f, open: s.open, place: s.place)
+            if let cursor, let from = cursorFrom, t >= from {
+                CTChoiceCursor.apply(&f, row: cursor, mem: mem)
+            }
             return f
         }
         if let view = sub as? SNESPPUView {

@@ -101,3 +101,4 @@ ChronoForgeCoreTests.CTSceneRunTests/testABattleNamesItsEnemiesFromTheirObjects 
 ChronoForgeCoreTests.CTSceneRunTests/testScrollToMovesTheCameraToItsTopLeftTile                 skip      # local ROM
 ChronoForgeCoreTests.CTSceneRunTests/testADirectionPathEndsWhereTheHandlerMovesTheObject        skip      # local ROM
 ChronoForgeCoreTests.CTEnemySpritePatchTests/testImportThenBuildIsIdentical                 skip      # local ROM
+ChronoForgeCoreTests.CTHelpLineTests/testEveryROMDescriptionFits                                skip      # local ROM

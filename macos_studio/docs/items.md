@@ -221,9 +221,13 @@ With a text profile, it also compiles each description.
   - the category's record B fields; the accessory's status bits and battle flags are shown by bit number;
   - target mode, name and description, with the description's live dictionary analysis
     (bytes, raw bytes, entries used; [text codec](text_codec.md)) when the project has a text profile;
+  - **In the menu**: the description in the menu's help line as `Menu_DrawDescText` draws it
+    (BG3 rows 2-3, palette 4) through the PPU, live as you type, with a fits / overflows
+    indicator: one line, no 8-bit pen wrap, nothing past column 31 and no runaway tile loop
+    ([dialogue box](dialogue.md#the-menus-help-line)). Names come from the project's characters;
   - **In a dialogue box**: the description through the field's dialogue box (ROM font,
-    widths, frame, pacing, overflow warnings; [dialogue box](dialogue.md)) when a ROM is chosen.
-    The game draws descriptions in the menu's help line, so this is a fit check, not that line;
+    widths, frame, pacing, overflow warnings; [dialogue box](dialogue.md)) when a ROM is chosen,
+    with the place, choice, party and a location behind it;
 - **Preview**: the selected item in an imported character's slot, through `CTEquipStats`;
 - **Stat boosts**: ItemBoosts, a toggle per stat in the stat order and the amount.
 

@@ -44,7 +44,7 @@ No ROM bytes are kept here: everything is read from the user's ROM.
 
     ct_dialogue.py font [--rom PATH]                     the font and window as JSON (counts and digests)
     ct_dialogue.py layout <table:index> [--rom PATH]     one message's layout and pacing (numbers only)
-    ct_dialogue.py check [--rom PATH] [--run]            every evidence claim (exit 1 on a failure)
+    ct_dialogue.py check [--rom PATH] [--run]            every evidence claim, ct_helpline and ct_boxchoice included (exit 1 on a failure)
     ct_dialogue.py verify-cli <chronoforge> [--rom PATH] the Swift CLI's font and layouts against this decode
     ct_dialogue.py vectors (--out | --check) P           synthetic vectors for the Swift twin
 """
@@ -892,13 +892,14 @@ class RomRunner:
                                 callee_steps=10 ** 8)
         self.steps = 0
 
-    def run(self, entry, memory, d=0, m=True, x=False, limit=2_000_000, strict=True, trace=None):
+    def run(self, entry, memory, d=0, m=True, x=False, limit=2_000_000, strict=True, trace=None, a=0, db=0):
         """Run from `entry` to its return; `memory` ({address: byte}) is read and
-        updated (`strict`: a byte written from unknown inputs is an error)."""
+        updated (`strict`: a byte written from unknown inputs is an error).
+        `a` and `db` are the entry's A (low byte) and data bank."""
         absint, machine = self.absint, self.machine
         s = absint.State()
-        s.pc, s.a, s.b, s.x, s.y = entry, 0, 0, 0, 0
-        s.d, s.db, s.m, s.xf, s.c = d, 0, m, x, False
+        s.pc, s.a, s.b, s.x, s.y = entry, a, 0, 0, 0
+        s.d, s.db, s.m, s.xf, s.c = d, db, m, x, False
         s.z = s.n = s.v = False
         s.sp, s.spt, s.mem, s.memt, s.frames = [], [], {}, {}, []
         s.at = s.xt = s.yt = s.ft = absint.E
@@ -1318,7 +1319,21 @@ def main():
     claims = asm_claims() + code_claims(rom) + data_claims(rom)
     if args.run:
         claims += run_claims(rom, messages=args.messages)
+    claims += traced_claims(rom, args.run)
     return report(claims)
+
+
+def traced_claims(rom, run):
+    """The traces built on this decoder: the menu help line (ct_helpline.py)
+    and the box's place and choice cursor (ct_boxchoice.py)."""
+    import ct_boxchoice
+    import ct_helpline
+    out = []
+    for m in (ct_helpline, ct_boxchoice):
+        out += m.asm_claims() + m.code_claims(rom) + m.data_claims(rom)
+        if run:
+            out += m.run_claims(rom)
+    return out
 
 
 if __name__ == "__main__":

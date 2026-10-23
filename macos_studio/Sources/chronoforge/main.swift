@@ -267,7 +267,7 @@ default:
       chronoforge validate <ctproj>
       chronoforge text <profile|encode|decode|message|build|verify-corpus> <input>
                        [--profile profile.json] [--out file]
-      chronoforge text <preview|font|fit> <rom> ...              (the in-game dialogue box)
+      chronoforge text <preview|font|fit> <rom> ...              (the in-game dialogue box; --help-line: the menu's)
       chronoforge event <list|disasm|asm|verify-rom|lower> ...   (CT event packs)
       chronoforge rom <build|info|locations> ...                 (.sfc builder)
       chronoforge characters <import|show|curve> ...             (playable-character records)
