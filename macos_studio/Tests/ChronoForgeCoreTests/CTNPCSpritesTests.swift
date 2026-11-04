@@ -135,6 +135,27 @@ final class CTNPCSpritesTests: XCTestCase {
         XCTAssertEqual(CTNPCSpriteROM.fieldStep(SpriteDef.Animation(id: "e", frames: [], durations: []), at: 9), 0)
     }
 
+    func testFieldStepHoldsFirstStepForMalformedTiming() {
+        let malformed = [
+            SpriteDef.Animation(id: "missing", frames: [5, 6], durations: []),
+            SpriteDef.Animation(id: "short", frames: [5, 6], durations: [3]),
+            SpriteDef.Animation(id: "long", frames: [5, 6], durations: [3, 2, 1]),
+            SpriteDef.Animation(id: "zero", frames: [5, 6], durations: [3, 0]),
+            SpriteDef.Animation(id: "negative", frames: [5, 6], durations: [3, -1]),
+            SpriteDef.Animation(id: "oversized", frames: [5, 6], durations: [3, 256]),
+            SpriteDef.Animation(id: "negativeMarker", frames: [5, 6], durations: [3, 2], markerDuration: -5),
+            SpriteDef.Animation(id: "oversizedMarker", frames: [5, 6], durations: [3, 2], markerDuration: 256)
+        ]
+        for animation in malformed {
+            for tick in [-1, 0, 1, 2, 9] {
+                XCTAssertEqual(CTNPCSpriteROM.fieldStep(animation, at: tick), 0, "\(animation.id), tick \(tick)")
+            }
+        }
+        // Byte-sized durations and markers remain valid at their upper bound.
+        let valid = SpriteDef.Animation(id: "max", frames: [5, 6], durations: [255, 255], markerDuration: 255)
+        XCTAssertEqual(CTNPCSpriteROM.fieldStep(valid, at: 1), 1)
+    }
+
     func testSpriteDefShape() throws {
         let (_, image) = try vectors()
         XCTAssertEqual(CTNPCSpriteROM.tile(slot: 0x19), 0x188)

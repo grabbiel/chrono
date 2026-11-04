@@ -331,10 +331,15 @@ public enum CTNPCSpriteROM {
     /// 0), the $FF marker shows the first step again for its duration, and the
     /// list then repeats.
     public static func fieldStep(_ a: SpriteDef.Animation, at ticks: Int) -> Int {
-        guard !a.frames.isEmpty, a.durations.prefix(a.frames.count).allSatisfy({ $0 > 0 }) else { return 0 }
+        // Project JSON can reach the preview before validation. Invalid timing
+        // holds the first step instead of producing a zero/negative cycle.
+        let marker = a.markerDuration ?? 0
+        guard !a.frames.isEmpty, a.durations.count == a.frames.count,
+              a.durations.allSatisfy({ (1...255).contains($0) }),
+              (0...255).contains(marker) else { return 0 }
         var clock = FieldClock(animation: a)
         // From the first tick on, the state repeats every cycle (the durations and the marker's).
-        let cycle = a.durations.prefix(a.frames.count).reduce(0, +) + (a.markerDuration ?? 0)
+        let cycle = a.durations.reduce(0, +) + marker
         let n = ticks <= 1 ? max(0, ticks) : 1 + (ticks - 1) % cycle
         for _ in 0..<n { clock.tick() }
         return clock.column >= a.frames.count ? 0 : clock.column
