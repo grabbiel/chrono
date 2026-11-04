@@ -219,4 +219,3 @@ def test_probe_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_pat
     assert sorted(report) == sorted(vm.PROBE_ROUTINES)
     for name, row in report.items():
         assert row["agree"] == row["cases"] == 20 * vm.ROUTINE_CASE_SCALE.get(name, 1), name
-

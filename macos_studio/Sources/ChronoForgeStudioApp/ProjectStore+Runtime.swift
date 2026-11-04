@@ -27,9 +27,9 @@ final class RuntimeSession {
     var party: [UInt8] = [0, 0x80, 0x80]
     /// Play the song the field asks for (Audio_CmdPlayMusic); off stops it.
     var musicOn = LaunchArguments.value("--play-music") != "off" { didSet { syncMusic() } }
-    /// The song this session started, while it plays, and every title it gave the engine.
+    /// The song this session requested and its identity in the shared engine.
     private(set) var playing: Int?
-    private var titles: Set<String> = []
+    private var musicRequest: UUID?
     private var baseKey: (x: Int, y: Int, revision: Int)?
     private var baseFrame: PPUFrame?
     private var boxKey: Int?
@@ -70,20 +70,21 @@ final class RuntimeSession {
         guard song != playing else { return }
         playing = song
         let rom = rom, title = String(format: "loc_%03d: song $%02X", location, song)
-        titles.insert(title)
+        let request = UUID()
+        musicRequest = request
         Task { [weak self] in
-            guard let self, self.musicOn, self.playing == song else { return }   // muted or changed meanwhile
-            await self.store.audio.play(title) { try SPCStream.ctSong(rom: rom, song: song) }
+            guard let self, self.musicOn, self.musicRequest == request else { return }
+            await self.store.audio.play(title, owner: request) { try SPCStream.ctSong(rom: rom, song: song) }
         }
     }
 
     /// Stops our song, or our load still in flight (not a song another pane
     /// started since): `stop()` also discards a pending load.
     func stopMusic() {
-        guard playing != nil else { return }
         playing = nil
-        let ours = store.audio.nowPlaying.map { titles.contains($0) } ?? true
-        if ours || store.audio.isLoading { store.audio.stop() }
+        guard let request = musicRequest else { return }
+        musicRequest = nil
+        store.audio.stop(ifOwnedBy: request)
     }
 
     private func loadPicture() {

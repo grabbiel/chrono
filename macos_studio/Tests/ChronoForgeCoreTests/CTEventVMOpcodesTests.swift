@@ -194,6 +194,29 @@ final class CTEventVMOpcodesTests: XCTestCase {
         XCTAssertEqual(v.wram[WRAM.fieldAnimB + 12], 0)                   // past the target: ended
     }
 
+    func testLoadingALocationStopsThePreviousPaletteAnimations() throws {
+        let v = try vm([])
+        // Active fades in both script-allocated and reserved records. Colour 4
+        // is in the preserved row 0, so a stale record visibly changes it.
+        let record: [UInt8] = [0x50, 4, 1, 0x40, 0, 1, 0, 0x80, 0, 0x12, 0x34, 0x56]
+        for k in 0..<WRAM.fieldAnimBCount {
+            let at = WRAM.fieldAnimB + k * WRAM.fieldAnimBSize
+            for (i, b) in record.enumerated() { v.wram[at + i] = b }
+        }
+        v.wram.setWord(WRAM.palBuf + 8, 0x7FFF)
+        v.loadLocationPalette(0)
+        for k in 0..<WRAM.fieldAnimBCount {
+            let at = WRAM.fieldAnimB + k * WRAM.fieldAnimBSize
+            XCTAssertEqual(v.wram[at], 0)
+            XCTAssertEqual((1..<WRAM.fieldAnimBSize).map { v.wram[at + $0] }, Array(record.dropFirst()))
+        }
+        let colours = (0..<0x200).map { v.wram[WRAM.palCgramBuf + $0] }
+        v.palAnimTick()
+        v.palAnimTick()
+        XCTAssertEqual((0..<0x200).map { v.wram[WRAM.palCgramBuf + $0] }, colours)
+        XCTAssertTrue(v.paletteWrites.isEmpty)
+    }
+
     func testPaletteSlotsAreClaimedSharedAndGivenBack() throws {
         let v = try vm([])
         for s in 0..<8 { v.wram[WRAM.objPalSlot + s] = 0x80 }
@@ -259,4 +282,3 @@ final class CTEventVMOpcodesTests: XCTestCase {
         XCTAssertEqual(v.wram[WRAM.objVelY], 0x10)                        // $F0 > $80: down, as the ROM reads it
     }
 }
-

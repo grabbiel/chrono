@@ -412,6 +412,11 @@ extension CTEventVM {
     /// LocLoad_Unk7084 and Pal_LoadUnkRow0's copy: colours 1-15 of Pal_Buf rows
     /// 1-7 from LocPal_Rom entry `palette`, then all of Pal_Buf to Pal_CgramBuf.
     public func loadLocationPalette(_ palette: Int) {
+        // LoadLocation calls FieldFD_LoadAnimSetB ($FD:E292), replacing records
+        // 0-5 and clearing the kinds of 6-11. Until the location's own records
+        // are loaded, stop every old animation so a warp cannot carry it into
+        // the new palette. As PalAnim_StopAll ($FD:E275) does, keep other bytes.
+        for k in 0..<WRAM.fieldAnimBCount { wram[animB(k * WRAM.fieldAnimBSize, 0)] = 0 }
         let src = Self.locPalRom + Self.locPalSetBytes * palette
         for row in 0..<7 {
             for i in 0..<0x1E { wram[WRAM.palBuf + 0x22 + 0x20 * row + i] = read(src + 0x1E * row + i) }
