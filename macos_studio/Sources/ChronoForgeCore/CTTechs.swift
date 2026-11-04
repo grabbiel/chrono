@@ -15,12 +15,14 @@ public struct TechSystemDef: Codable, Equatable, Sendable {
     public var tpCost: [[Int]]                 // 7 x 8: tech points for each character's single k
     public var combos: [Combo]                 // the ComboTechs records
     public var learned: Learned                // the new-game state
-    public var userSets: [[Int]]               // read-only: 52 x 3 character ids, 255 = none
+    public var userSets: [[Int]]               // 52 x 3 character ids, 255 = none; a combination's sets follow its members
     public var areas: [[Area]]                 // read-only: area number -> its entries (0 = none)
+    /// Read-only: the rock triples $70-$74 (absent in projects imported before them).
+    public var rocks: [Rock]? = nil
 
     public struct Tech: Codable, Equatable, Sendable, Identifiable {
         public var id: Int
-        public var name: String                // read-only (TechNames; never written)
+        public var name: String                // TechNames: written when it differs from the base's (CTTechText)
         public var icon: Int?                  // read-only: the name's icon byte ($2F on magic)
         public var kind: String                // read-only: none | single | double | triple
         public var targetMode: Int             // TechInfo byte 0 bits 6-0: BattleTgt_ModeTable handler (0-$20)
@@ -34,6 +36,8 @@ public struct TechSystemDef: Codable, Equatable, Sendable {
         public var parts: [Int]                // TechRec bytes 5-7: user k's part number, bit 7 = none
         public var modifiers: [Int]            // TechRec bytes 8-10: user k's modifier record
         public var anim: Anim
+        /// The menu's help line (MenuRom_TechTextTable, dialogue codec); nil keeps the base's.
+        public var description: String? = nil
     }
     public struct Anim: Codable, Equatable, Sendable {
         public var script: Int                 // PcTechScripts number (< 128)
@@ -85,11 +89,14 @@ public struct TechSystemDef: Codable, Equatable, Sendable {
     /// A ComboTechs record: its members' bits ($80 >> id), first id and,
     /// per tech, the members' required single counts (255 for a pair's third).
     public struct Combo: Codable, Equatable, Sendable {
-        public var mask: Int                   // read-only
+        public var mask: Int                   // the members' bits; changed by CTTechCombos.repurpose
         public var first: Int                  // read-only
         public var requirements: [[Int]]       // count read-only; values 1-8
-        public init(mask: Int, first: Int, requirements: [[Int]]) {
-            self.mask = mask; self.first = first; self.requirements = requirements
+        /// Per tech, per member (ids ascending): the field menu's MpCost index
+        /// (TechMenuTiles / TechLineTiles). nil keeps the base's.
+        public var menuCosts: [[Int]]? = nil
+        public init(mask: Int, first: Int, requirements: [[Int]], menuCosts: [[Int]]? = nil) {
+            self.mask = mask; self.first = first; self.requirements = requirements; self.menuCosts = menuCosts
         }
         public var members: [Int] { CTTechROM.members(mask) }
     }
@@ -101,6 +108,13 @@ public struct TechSystemDef: Codable, Equatable, Sendable {
         public init(counts: [Int], bits1: [Int], comboBits: [Int]) {
             self.counts = counts; self.bits1 = bits1; self.comboBits = comboBits
         }
+    }
+    /// A rock combination (BankFF_UnkF958, Menu_Unk82E1): its members' bits
+    /// (ComboMembers) and the 1-based Menu_TechBits numbers of the three singles it needs.
+    public struct Rock: Codable, Equatable, Sendable {
+        public var mask: Int
+        public var needs: [Int]
+        public init(mask: Int, needs: [Int]) { self.mask = mask; self.needs = needs }
     }
     public struct Area: Codable, Equatable, Sendable {
         public var shape: Int                  // BattleSys_AreaTable type 0-6
@@ -202,6 +216,7 @@ public enum CTTechROM {
                                anim: .init(script: Int(act[0]), gfxA: Int(act[1]), gfxB: Int(act[2]), frames: Int(act[3]),
                                            pal: Int(act[4]), obj: Int(act[5]), arg: Int(act[6]))))
         }
+        if let codec { CTTechText.fillDescriptions(rom: rom, codec: codec, techs: &techs) }
         let parts = (0..<partCount).map { p in
             TechSystemDef.Part(id: p, mp: Int(rom[mpCostPC + p]),
                                effect: .init(bytes: Array(rom[(effectsPC + effectSize * p)..<(effectsPC + effectSize * (p + 1))])))
@@ -215,11 +230,15 @@ public enum CTTechROM {
                                 requirements: (0..<Int(rom[at + 2])).map { k in (0..<3).map { Int(rom[req + 3 * k + $0]) } }))
             at += comboSize
         }
+        let userSetRows = (0..<userSetCount).map { s in (0..<3).map { Int(rom[userSetsPC + 3 * s + $0]) } }
+        for i in combos.indices {
+            combos[i].menuCosts = CTTechCombos.decodeMenuCosts(rom: rom, record: i, combo: combos[i], userSets: userSetRows)
+        }
         let state = rom[statePC..<(statePC + stateSize)].map(Int.init)
         let n = CTCharacterROM.count
         let learned = TechSystemDef.Learned(counts: Array(state[0..<n]), bits1: Array(state[n..<(2 * n)]),
                                             comboBits: Array(state[(2 * n)...]))
-        let userSets = (0..<userSetCount).map { s in (0..<3).map { Int(rom[userSetsPC + 3 * s + $0]) } }
+        let userSets = userSetRows
         var areas: [[TechSystemDef.Area]] = [[]]
         for a in 1..<areaCount {
             let rec = 0x0C0000 + word(rom, areaPtrsPC + 2 * a)
@@ -228,7 +247,7 @@ public enum CTTechROM {
             })
         }
         return TechSystemDef(techs: techs, parts: parts, tpCost: tpCost, combos: combos, learned: learned,
-                             userSets: userSets, areas: areas)
+                             userSets: userSets, areas: areas, rocks: CTTechCombos.decodeRocks(rom: rom))
     }
 
     // MARK: Checks
@@ -277,13 +296,15 @@ public enum CTTechROM {
         try need(l.bits1.count == CTCharacterROM.count && zip(l.bits1, l.counts).allSatisfy { $0 == topBits($1) },
                  "learned single bits \(l.bits1) must be each count's top bits")
         try need(l.comboBits.count == comboBytes, "learned comboBits need \(comboBytes) bytes")
+        try CTTechCombos.check(s)
         for (i, b) in l.comboBits.enumerated() {
             let allowed = i < s.combos.count ? topBits(s.combos[i].requirements.count) : i >= doubleRecords ? 0x80 : 0
             try need(b & ~allowed == 0, String(format: "learned combination byte %d: $%02X sets a bit past its techs", i, b))
         }
     }
 
-    /// The read-only fields must be the base ROM's (names aside: never written).
+    /// The read-only fields must be the base ROM's; combinations and user
+    /// sets follow CTTechCombos' rules (names and descriptions: CTTechText).
     public static func check(_ s: TechSystemDef, against base: TechSystemDef) throws {
         func need(_ ok: Bool, _ what: @autoclosure () -> String) throws { if !ok { throw CTROMBuildError("techs: \(what())") } }
         try need(s.techs.count == base.techs.count, "need techs 0-$74 in order")
@@ -295,12 +316,7 @@ public enum CTTechROM {
             try need(a.gfxA == x.gfxA && a.gfxB == x.gfxB && a.pal == x.pal && a.obj == x.obj && a.arg == x.arg,
                      "\(name): only the animation's script and frames are writable")
         }
-        try need(s.combos.count == base.combos.count, "the combination records are read-only (\(base.combos.count) records)")
-        for (c, b) in zip(s.combos, base.combos) {
-            try need(c.mask == b.mask && c.first == b.first && c.requirements.count == b.requirements.count,
-                     String(format: "combination $%02X: members, first tech and count are read-only", b.first))
-        }
-        try need(s.userSets == base.userSets, "user sets are read-only")
+        try CTTechCombos.check(s, against: base)
         try need(s.areas == base.areas, "areas are read-only")
     }
 
@@ -330,6 +346,7 @@ public enum CTTechROM {
             let req = 0x0C0000 + word(rom, combosPC + comboSize * i + 3)
             out.append((req, c.requirements.joined().map { UInt8($0) }, String(format: "combination $%02X requirements", c.first)))
         }
+        out += CTTechCombos.writes(s, rom: rom)
         let l = s.learned
         out.append((statePC, (l.counts + l.bits1 + l.comboBits).map { UInt8($0) }, "new-game tech state"))
         for c in 0..<CTCharacterROM.count {
@@ -342,7 +359,8 @@ public enum CTTechROM {
 
     /// Whether a report write's `what` is one of `writes`'.
     public static func isTechWrite(_ what: String) -> Bool {
-        ["tech $", "part ", "TechTpCost", "combination $", "new-game tech state"].contains { what.hasPrefix($0) }
+        ["tech $", "part ", "TechTpCost", "combination $", "new-game tech state", "user set ", "tech descriptions"]
+            .contains { what.hasPrefix($0) }
             || what.hasPrefix("record ") && what.hasSuffix(" all-singles bit")
     }
 

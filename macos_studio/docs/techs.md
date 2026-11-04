@@ -1,4 +1,4 @@
-# Techs (Character & Party Architect, slice 2)
+# Techs (Character & Party Architect, slices 2 and 5)
 
 The tech system covers the single, double and triple techs, their parts and
 targets, the combination table, the tech points and the new-game tech state.
@@ -8,7 +8,12 @@ Each part is decoded with evidence, imported into a project, edited in
 The Python reference, which also runs every claim's check, is
 `re_workspace/tools/ct_techs.py`. The Swift twins are:
 - `CTTechs.swift`: `TechSystemDef`, the codec `CTTechROM`, and the rule `CTTechPoints`;
-- `CTTechTargets.swift`: target modes and area geometry.
+- `CTTechTargets.swift`: target modes and area geometry;
+- `CTTechCombos.swift`: combinations as the battle and field menus see them,
+  the capacity, repurposing a record (slice 5);
+- `CTTechText.swift`: names and descriptions (slice 5).
+
+Slice 5's Python reference is `re_workspace/tools/ct_tech_combos.py`.
 
 No ROM data is stored in the repository. The import reads your ROM into your
 project's `tech_system.json`, and the tests use synthetic tables.
@@ -218,6 +223,118 @@ fills the project. The matrix shows:
 The header shows the range check and a **Write techs to ROM** toggle
 (`rom.techs`). **Build ROM…** writes the build.
 
+## Combinations end to end (slice 5)
+
+A dual or triple tech is reached by four routines, each run in ChronoRET's
+interpreter over every combination record of the ROM by
+`ct_tech_combos.py check --run` (the counts are the runs it makes):
+
+| Path | Routines | Runs |
+|---|---|---|
+| Battle menu | `BattleSys_UnkCA1A` (doubles $39–$65: 3 ids per state byte, at most 6 entries, partner `$F0` &#124; the other slot), `BattleSys_UnkCCCB` (triples $66–$74 from entry 18), `StoreMpCost` (the `$A2`/`$A3` accessory cuts) | 900 |
+| Learning | `AwardTechPoints` → `BuildComboMasks` → `LearnComboTechs` | 175 |
+| Field menu | the pair and trio lists, drawn from the menu's own copies | 780 |
+| Rocks | `Menu_Unk834D` → `BankFF_UnkF958` (the `$04A4` flags) → `Menu_Unk82E1` | 40 |
+
+Each run compares the routine's output with the model in `ct_tech_combos.py`
+(`model_battle_entries`, `model_field`, the tech-point rule). Mutation runs
+(a damaged table, a damaged model) fail, so the runs are not vacuous. 33 data
+claims and the code and ChronoRET-source claims hold.
+
+**The field menu keeps its own copies.** The battle reads ComboTechs; the field
+menu reads separate tables in bank `$CC`:
+- `MenuRom_TechByteMembers` ($CC:2963): the member mask of each state byte.
+  Bytes 7–21 are the pair records. The routine reads 37 bytes; bytes 22–36
+  overlap `MenuRom_TechLineBits` ($CC:2979, the trio records' masks) and then
+  `MenuRom_ComboMembers`.
+- `MenuRom_TechMenuTiles` ($CC:28DB): 6 bytes per pair record, the MpCost
+  index of each member for its 3 techs.
+- `MenuRom_TechLineTiles` ($CC:2935): 3 bytes per trio record.
+- `MenuRom_TechMenuRec` ($CC:24B3) is not a table of its own: it is the user
+  sets from set 6 on. Pair record i's two cost columns are user set 7 + i's
+  first two ids, in that set's order.
+
+In the ROM, the field menu's MP equals the battle's MP for 117 of the 120
+members. It differs on techs $5E, $67 and $6A, where the menu's index is not
+the battle part. The project keeps the menu's indexes (`menuCosts`) as they are,
+and the Studio marks the members that differ.
+
+**Learning.** `LearnComboTechs` never tests the `$7F:01E0` unlock for a
+combination: a combination whose TechRec has bit 7 set is never learned.
+The Validator warns about it.
+
+**Rocks.** The five triples $70–$74 come from the rocks. `MenuRom_ComboNeeds`
+($CC:2953) holds 3 singles per rock and `MenuRom_ComboMembers` ($CC:2983) the
+members. At every menu exit, `Menu_Unk82E1` zeroes the 5 state bytes ($2857)
+and sets `$80` when a member wears accessory `$AE + r`. They are read-only
+(`rocks` in the project).
+
+### Capacity: no new combination
+
+The tech state holds 30 combination bytes. The first 15 are the pair records:
+`BattleSys_UnkCA1A` and `Menu_TechFirstIds` fix 3 ids per byte, so they cover
+the 45 doubles $39–$65, all used. The other 15 are one triple each, $66–$74.
+Records 0–24 use 25 bytes. Bytes 25–29 ($70–$74) are the rocks, which
+`Menu_Unk82E1` rewrites, so a 26th record has no byte to keep it learned. There
+is no free id either: $75 is past the last.
+
+So the builder refuses a 26th record, or a record past the rocks, naming this
+limit. A combination is made by **repurposing** an existing record instead:
+`CTTechCombos.repurpose` sets its members and moves the user sets with them.
+A pair stays a pair, and a trio stays a trio.
+
+### Editing a combination
+
+Writable now:
+- each record's members, which are written to ComboTechs, the field menu's
+  member byte, the TechRec member bytes and the record's user set (the
+  "combination $XX members", "menu members" and "user set N" writes);
+- each member's battle part (TechRec, through the parts editor) and MP (the
+  part's MpCost);
+- the field menu's MP index ("menu MP");
+- the requirements (needed singles) as before.
+
+`CTTechCombos.check` refuses:
+- more than 25 records;
+- a mask with a bit past character 6;
+- a pair in a trio's place, or the reverse;
+- two records with the same members;
+- a first id or count that differs from the base;
+- changed members without their user set;
+- a user set shared by two records;
+- user set 0;
+- any change to the rocks.
+
+### Names
+
+`TechNames` ($CC:15C4) has 11 bytes per id. Magic names start with the icon
+`$2F`; the rest are glyphs, `$FF` blank and `$EF` padding.
+`Menu_TechDrawName` draws all 11 tiles and `TextWin_ExtTechName` stops at
+`$EF`. So a name is at most 11 glyphs, or 10 after the icon, and contains no
+`$EF`. A changed name is written in place ("tech $XX name") with its icon kept.
+A name that does not fit, or has a character with no glyph, is refused with its
+length and room. The Studio shows "used/room tiles fits" or "overflows" as you
+type.
+
+### Descriptions
+
+`MenuRom_TechTextTable` ($CC:3A09) holds 121 bank-`$CC` pointers: tech ids
+0–$74, then the menu's page titles. Both `BattleCD_ShowTechInfo` and
+`Menu_TechTextSetup` read it. The strings are at $CC:3B0D–$CC:43AE, in the
+dialogue codec.
+
+The import decodes each tech's description (`description`). When one changes,
+the builder repacks the whole table in its own span:
+- unchanged strings keep their bytes;
+- identical strings share one copy;
+- the rest of the span is zero-filled;
+- the 18 bytes between the table and the strings ($CC:3AFB) are untouched.
+
+These are the "tech descriptions" and "tech descriptions text" writes. A table
+that no longer fits is refused with its size. The Studio's help line edits the
+description and shows it live through `Menu_TechDescText`'s rows, with fits or
+overflows. Revert brings back the ROM's text.
+
 ## Building
 
 With `rom.techs`, the builder writes each writable field in place over the base
@@ -231,7 +348,9 @@ ROM's tables:
 - the 44-byte new-game state;
 - each record's +$02 bit 4, set when the new-game count is 8.
 
-Every other byte, including names, user sets, records, areas, modifiers and
+Slice 5 adds the names, the description table, and each combination's members
+with its field-menu copies and user set ([above](#combinations-end-to-end-slice-5)).
+Every other byte, including the other user sets, the rocks, areas, modifiers and
 the word after TechTpCost, stays the base ROM's. So importing and building an
 unmodified ROM gives the clean ROM byte for byte, with no write. Each changed
 span is its own report write, for example `tech $02 target`, `part 1 MP`,
@@ -254,8 +373,10 @@ The builder (and `CTTechROM.check`) refuses:
 - a new-game count outside 0–8, single bits that are not the count's top bits,
   or a combination bit past its record's techs;
 - any read-only field that differs from the base ROM's: kind, user set, flags,
-  attributes, the animation's other bytes, the combination records' members,
-  first id and count, user sets or areas.
+  attributes, the animation's other bytes, the combination records' first id
+  and count, the user sets of singles, the rocks or areas;
+- a combination edit that `CTTechCombos.check` refuses, a name that does not
+  fit, or a description that does not compile or fit.
 
 `chronoforge validate` (gate 4) runs the same range check. It reports
 `rom.techs` without `tech_system.json` as an error, and warns when a
@@ -293,12 +414,28 @@ character's +$2D is not its next single's cost.
   the report and checks ranges, unchanged read-only bytes, the combination
   records and the new-game state, and +$02.
 
+- `re_workspace/tests/test_tech_combos.py` (slice 5): ROM-free, the helpers
+  and the id layout; local, every claim and the four interpreter run sets.
+- `CTTechCombosTests` (slice 5): ROM-free, the menu copies' round trip,
+  repurposing (exactly 6 bytes change), refusals, names; local, the unchanged
+  build, and a repurposed, renamed and described build whose help line is
+  drawn from the built ROM.
+- `verify_tech_build.py` also repurposes record 14, edits a menu MP index,
+  renames tech 1 and describes tech 2. It expects 10 writes, runs the battle
+  menu, learn and field-menu routines on the built ROM, has the checker reject
+  7 more damaged copies (members, menu copies, names, the description table)
+  and the CLI refuse 5 more edits.
+- `ct_rom_check.py` decodes the combinations, names and descriptions of the
+  built ROM independently (`ct_tech_combos.build_problems`) and adds their
+  write zones.
+
 ## Limitations
 
 - There is no emulator run. The evidence is the ROM's code, its data and its
   own routine executed, not a booted game.
-- Tech names, user sets, combination records, areas and modifier records are
-  read-only. New techs, new combinations and renames are not supported.
+- Areas and modifier records are read-only. New techs and new combinations are
+  not supported (see the capacity); a record is repurposed instead. The rocks
+  are read-only.
 - The effect bytes are edited raw. Only type, stat pair and power are decoded;
   the per-type meaning of the rest is partial.
 - The line area's strip and box are inferred geometry. The Studio's preview uses
@@ -306,5 +443,6 @@ character's +$2D is not its next single's cost.
 - The preview's scanned side follows the target, an approximation of the
   side the target-mode handler sets. Its triangle is exact, where the routine
   compares 8-bit angles, so an enemy on an edge may differ.
-- The Studio pane is compiled, not UI-tested. Its logic (the codec, the checks,
-  the rule and the zones) is in Core and tested there.
+- The Studio pane is checked at window level only: `--module Characters
+  --tech 63` opens the matrix on a tech's editor. Its logic (the codec, the
+  checks, the rule and the zones) is in Core and tested there.

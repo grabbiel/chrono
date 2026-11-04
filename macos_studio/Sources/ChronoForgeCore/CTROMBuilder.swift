@@ -376,6 +376,12 @@ public enum CTROMBuilder {
             try CTTechROM.check(techs)
             try CTTechROM.check(techs, against: CTTechROM.decode(rom: rom, codec: nil))
         }
+        // Tech names and descriptions: written only when one differs from the base's (CTTechText).
+        var techTextWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
+        if let techs {
+            let codec = try CTTextCodec(profile: textProfile ?? CTTextProfile.fromROM(Data(rom)))
+            techTextWrites = try CTTechText.writes(techs, rom: rom, codec: codec)
+        }
         var seenEnemies = Set<Int>(), seenEnemyIDs = Set<String>()
         var enemyWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
         for e in enemyRequests {
@@ -615,6 +621,7 @@ public enum CTROMBuilder {
         if let techs {
             for w in CTTechROM.writes(techs, rom: base) { write(w.bytes, at: w.pc, w.what) }
         }
+        for w in techTextWrites { write(w.bytes, at: w.pc, w.what) }
         // Items: records, names and ItemBoosts in place; the descriptions repacked in their own span.
         for w in itemWrites { write(w.bytes, at: w.pc, w.what) }
         // Enemies: the stat and reward records field by field, the name in place (docs/enemies.md).

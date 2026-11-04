@@ -331,7 +331,7 @@ this file, and does not write `expToLevel`.
 ## `tech_system.json`
 ```json
 { "schema": "ct-techs/1",
-  "techs": [ { "id": 1, "name": "…", "kind": "single", "targetMode": 0, "fieldMenu": false, "area": 0,
+  "techs": [ { "id": 1, "name": "…", "description": "…", "kind": "single", "targetMode": 0, "fieldMenu": false, "area": 0,
                "userSet": 0, "needsUnlock": false, "flags": 0, "element": "…", "attr": 0,
                "parts": [0, 128, 128], "modifiers": [0, 0, 0],
                "anim": { "script": 0, "gfxA": 0, "gfxB": 0, "frames": 0, "pal": 0, "obj": 0, "arg": 0 } },
@@ -340,16 +340,23 @@ this file, and does not write `expToLevel`.
                "formula": 0, "defence": 0, "flags": 0, "flags2": 0, "power": 0, "immunity": 0, "arg11": 0 } },
              "… parts 0-71" ],
   "tpCost": [[0, "… 8 per character"], "… 7 rows"],
-  "combos": [ { "mask": 0, "first": 0, "requirements": [[0, 0, 0], "… one row per tech"] } ],
+  "combos": [ { "mask": 0, "first": 0, "requirements": [[0, 0, 0], "… one row per tech"],
+                "menuCosts": [[0, 0], "… one row per tech"] } ],
   "learned": { "counts": [0, "… 7"], "bits1": [0, "… 7"], "comboBits": [0, "… 30"] },
   "userSets": [[0, 0, 0], "… 52 sets"],
-  "areas": [[], [ { "shape": 0, "param": 0, "size": 0 } ], "… areas 0-$0B"] }
+  "areas": [[], [ { "shape": 0, "param": 0, "size": 0 } ], "… areas 0-$0B"],
+  "rocks": [ { "mask": 0, "needs": [0, 0, 0] }, "… 5" ] }
 ```
 (Values elided; `chronoforge characters techs import` fills them from your ROM.)
-`name` and `icon` are never written. `kind`, `userSet`, `flags`, `attr`, the
-animation's graphics bytes, the combination records' `mask`, `first` and row
-count, `userSets` and `areas` are read-only: the builder refuses values that differ
-from the base ROM's. `element`
+`name` is written when it differs from the ROM's (11 tiles, 10 after the
+icon); `icon` is never written. `description` (optional; absent in older
+projects) is repacked into the description table when one differs.
+`menuCosts` (optional) is the field menu's MpCost index per member.
+A combination's `mask` may change by repurposing the record, together with
+its user set (see [techs](techs.md)); `rocks` (optional) are read-only.
+`kind`, the user sets of singles, `flags`, `attr`, the animation's graphics
+bytes, the records' `first` and row count, and `areas` are read-only: the
+builder refuses values that differ from the base ROM's. `element`
 is absent for none. See [techs](techs.md) for each field's meaning and evidence.
 
 ## `items/<id>.json` and `item_tables.json`

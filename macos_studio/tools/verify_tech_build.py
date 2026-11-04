@@ -12,7 +12,14 @@ new-game state) are built and checked by re_workspace/tools/ct_rom_check.py;
 the game's own AwardTechPoints, run in ChronoRET's interpreter over the built
 ROM, must learn as the rule says on the edited tables. The checker must
 reject damaged copies and the CLI must refuse out-of-range and read-only
-edits. Needs the user's ROM, the venv and refs/ChronoRET.
+edits. Then a combination is repurposed onto a pair no record has, another
+gets new field-menu MP and parts, a tech is renamed and given a description:
+the build passes the checker, and on the built ROM the battle menu's list
+builder, AwardTechPoints (BuildComboMasks, LearnComboTechs) and the field
+menu's BankFF_UnkF813 and list routines, run in the interpreter, equal the
+model for every combination; the checker rejects damaged combination, name
+and description bytes and the CLI refuses a new combination. Needs the
+user's ROM, the venv and refs/ChronoRET.
 """
 import json
 import shutil
@@ -30,6 +37,7 @@ fixture = package / 'Tests/ChronoForgeCoreTests/Resources/MyGame.ctproj'
 sys.path.insert(0, str(workspace / 'tools'))
 import ct_event_packs as packs  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
+import ct_tech_combos as ctc  # noqa: E402
 import ct_techs as ct  # noqa: E402
 
 
@@ -136,7 +144,8 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-techs-') as directory:
 
     # Edits.
     path = project / 'tech_system.json'
-    s = json.loads(path.read_text())
+    pristine = path.read_text()
+    s = json.loads(pristine)
     techs = s['techs']
     cyclone, slash = 1, 2
     techs[slash]['targetMode'] = (techs[slash]['targetMode'] + 1) % ct.TARGET_MODES
@@ -251,4 +260,87 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-techs-') as directory:
     for change, message in refusals:
         refused(change, message)
     print(f'techs: {len(refusals)} out-of-range or read-only edits refused')
+
+    # Combinations, names and descriptions.
+    if not all(t.get('description') for t in json.loads(pristine)['techs'][1:]):
+        fail('the import has no tech descriptions')
+    s = json.loads(pristine)
+    record, new_members = 14, [2, 6]                     # a pair record onto a pair with no record (magus)
+    rec = s['combos'][record]
+    old_members = ct.members(rec['mask'])
+    remap = dict(zip(old_members, new_members))
+    sets = {s['techs'][rec['first'] + k]['userSet'] for k in range(len(rec['requirements']))} | {7 + record}
+    for n in sets:
+        s['userSets'][n] = [remap.get(c, c) for c in s['userSets'][n]]
+    rec['mask'] = ctc.mask_of(new_members)
+    rec['requirements'][1] = [3, 2, 255]
+    magus_single = 1 + 8 * 6
+    first = s['techs'][rec['first']]
+    users = s['userSets'][first['userSet']]
+    first['parts'][users.index(6)] = magus_single | (first['parts'][users.index(6)] & 0x80)
+    rec['menuCosts'][0][new_members.index(6)] = magus_single
+    other = s['combos'][3]
+    other['menuCosts'][1][0] = (other['menuCosts'][1][0] + 1) % ct.PARTS
+    s['techs'][1]['name'] = 'Zap'
+    s['techs'][2]['description'] = 'Cuts a line.'
+    path.write_text(json.dumps(s, indent=2))
+    print(run(cli, 'rom', 'build', project, '--base', rom, '--out', out, '--report', report), end='')
+    doc = json.loads(report.read_text())
+    written = sorted(w['what'] for w in doc['writes'] if w['what'] != 'checksum')
+    name = f'combination ${rec["first"]:02X}'
+    expect = sorted([f'{name} members', f'{name} menu members', f'{name} menu MP', f'{name} requirements',
+                     f'combination ${other["first"]:02X} menu MP', f'tech ${rec["first"]:02X} parts',
+                     'tech $01 name', 'tech descriptions', 'tech descriptions text']
+                    + [f'user set {n}' for n in sorted(sets)])
+    if written != expect:
+        fail(f'combination writes {written}, expected {expect}')
+    print(run(python, workspace / 'tools/ct_rom_check.py', out, report), end='')
+    built = out.read_bytes()
+    model = ctc.model(built)
+    if model[record]['members'] != new_members or model[record]['techs'][0]['members'][1]['menu_index'] != magus_single:
+        fail('the built ROM does not decode to the repurposed record')
+    print(f'techs: a repurposed and an edited combination, a name and a description ({len(expect)} writes) '
+          'checked by ct_rom_check.py')
+
+    # The game's own list builders and learn path on the built ROM.
+    party = (2, 6, 0)
+    doubles, _ = ctc.model_battle_entries(built, party, 1, [0xE0] * 15, [0x80] * 15, [0, 0, 0])
+    listed = [e[0] for e in doubles]
+    if listed[:3] != [rec['first'] + k for k in range(3)]:
+        fail(f'the repurposed doubles are not in magus\' battle menu: {listed}')
+    if ctc.model_battle_entries(clean, party, 1, [0xE0] * 15, [0x80] * 15, [0, 0, 0])[0]:
+        fail('magus already lists doubles on the clean ROM')
+    results = ctc.battle_menu_runs(built) + ctc.learn_runs(built) + ctc.field_menu_runs(built)
+    for claim, ok, detail in results:
+        if not ok:
+            fail(f'{claim}: {detail}')
+        print(f'techs: built ROM: {claim}')
+
+    def claim_mask(d):
+        d['techs']['combos'][record]['mask'] = ctc.mask_of(old_members)
+    combo_cases = ((dict(where=ct.COMBOS_PC + ct.COMBO_SIZE * record, bit=0x0A, change=claim_mask),
+                    "user set does not hold exactly the members"),
+                   (dict(where=ctc.BYTE_MEMBERS_PC + 7 + record), "the field menu's members byte"),
+                   (dict(where=ctc.MENU_TILES_PC + 6 * 3 + 2), "MP indexes are not the reported ones"),
+                   (dict(where=ctc.COMBO_MEMBERS_PC), 'not in a report write'),
+                   (dict(where=ct.TECH_NAMES_PC + ct.NAME_SIZE * 1 + 1, bit=0xEF ^ built[ct.TECH_NAMES_PC + 12]),
+                    'the name is not glyphs then $EF padding'),
+                   (dict(where=ctc.DESC_TABLE_PC + 2 * ctc.DESC_STRINGS), 'not in a report write'),
+                   (dict(where=ctc.DESC_TABLE_PC + 1, bit=0x40), "description pointer leaves the strings' span"))
+    for kwargs, message in combo_cases:
+        result = damaged(**kwargs)
+        if result.returncode == 0 or message not in result.stdout + result.stderr:
+            fail(f'damage {kwargs} not reported as "{message}": {result.stdout}{result.stderr}')
+    print(f'techs: {len(combo_cases)} damaged combination, name and description copies rejected by the checker')
+
+    def extra_record(s):
+        s['combos'].append(dict(s['combos'][24], first=0x70))
+    combo_refusals = ((extra_record, 'the most is 25: the tech state holds 30 combination bytes'),
+                      (lambda s: s['combos'][1].update(mask=s['combos'][0]['mask']), 'same members'),
+                      (lambda s: s['combos'][2].update(mask=0x82), 'user set'),
+                      (lambda s: s['userSets'].__setitem__(0, [1, 255, 255]), 'user set 0 is read-only'),
+                      (lambda s: s['techs'][5].update(name='Twelve glyph'), 'the menu draws 11 tiles'))
+    for change, message in combo_refusals:
+        refused(change, message)
+    print(f'techs: {len(combo_refusals)} combination and name edits refused')
 print('techs: CLI import, tech-point runs and build checked independently')
