@@ -119,6 +119,53 @@ final class CTTechCombosTests: XCTestCase {
         }
         XCTAssertThrowsError(try CTTechText.encodeName("a{gEF}", icon: nil))
         XCTAssertEqual(CTTechText.nameWidth("Abc", icon: 0x2F)?.room, 10)
+        XCTAssertEqual(CTTechText.nameWidth(String(repeating: "a", count: 12), icon: nil)?.used, 12)
+        XCTAssertEqual(CTTechText.nameWidth("{gF5}Ab", icon: nil)?.used, 3)
+        XCTAssertNil(CTTechText.nameWidth("雪", icon: nil))
+        XCTAssertEqual(try CTTechText.encodeName("", icon: nil), [UInt8](repeating: 0xEF, count: 11))
+        XCTAssertEqual(try CTTechText.encodeName("", icon: 0x2F), [0x2F] + [UInt8](repeating: 0xEF, count: 10))
+    }
+
+    func testDescriptionControlsAndRepackPreserveZeroOperands() throws {
+        let codec = CTTextCodec(validatedDictionary: [[UInt8]](repeating: [0xFE, 0xFE], count: 128))
+        let text = "A{tech}B{wide 0100}{wide 0200}{wait 00}C"
+        let encoded = try codec.compileMessage(text)
+        XCTAssertEqual(encoded, [0xA0, 0x12, 0, 0xA1, 1, 0, 2, 0, 3, 0, 0xA2, 0])
+        var rom = syntheticROM()
+        for n in 0..<CTTechText.strings {
+            rom[CTTechText.tablePC + 2 * n] = UInt8(CTTechText.bodyPC & 0xFF)
+            rom[CTTechText.tablePC + 2 * n + 1] = UInt8((CTTechText.bodyPC >> 8) & 0xFF)
+        }
+        rom.replaceSubrange(CTTechText.bodyPC..<(CTTechText.bodyPC + encoded.count), with: encoded)
+        let original = Array(encoded.dropLast())
+        XCTAssertEqual(CTTechText.descriptionBytes(rom: rom)[2], original)
+        var s = try CTTechROM.decode(rom: rom, codec: nil)
+        CTTechText.fillDescriptions(rom: rom, codec: codec, techs: &s.techs)
+        XCTAssertEqual(s.techs[2].description, text)
+        XCTAssertNil(try CTTechText.descriptionTable(s, rom: rom, codec: codec))
+        // Editing another description must preserve the complete original stream when repacking.
+        s.techs[1].description = "Changed"
+        let packed = try XCTUnwrap(CTTechText.descriptionTable(s, rom: rom, codec: codec))
+        let tableSize = 2 * CTTechText.strings
+        var built = rom
+        built.replaceSubrange(CTTechText.tablePC..<(CTTechText.tablePC + tableSize), with: packed.prefix(tableSize))
+        built.replaceSubrange(CTTechText.bodyPC..<CTTechText.bodyEnd, with: packed.dropFirst(tableSize))
+        let descriptions = CTTechText.descriptionBytes(rom: built)
+        XCTAssertEqual(descriptions[2], original)
+        XCTAssertEqual(descriptions[1], Array(try codec.compileMessage("Changed").dropLast()))
+        XCTAssertEqual(Array(built[(CTTechText.tablePC + tableSize)..<CTTechText.bodyPC]),
+                       Array(rom[(CTTechText.tablePC + tableSize)..<CTTechText.bodyPC]))
+    }
+
+    func testDescriptionRequiresTerminatorAfterTheLastOperand() {
+        for tail: [UInt8] in [[0x12], [0x12, 0], [0xA0]] {
+            var rom = [UInt8](repeating: 0, count: CTTechText.bodyEnd)
+            let at = CTTechText.bodyEnd - tail.count
+            rom[CTTechText.tablePC] = UInt8(at & 0xFF)
+            rom[CTTechText.tablePC + 1] = UInt8((at >> 8) & 0xFF)
+            rom.replaceSubrange(at..<CTTechText.bodyEnd, with: tail)
+            XCTAssertNil(CTTechText.descriptionBytes(rom: rom)[0], "\(tail)")
+        }
     }
 
     // MARK: Local ROM

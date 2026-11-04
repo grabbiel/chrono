@@ -31,7 +31,17 @@ public enum CTTechText {
     /// The 11 bytes of `name` after `icon`: blanks $FF, {gXX} for a raw glyph,
     /// $EF-padded. Throws past the menu's 11 tiles or on an unknown glyph.
     public static func encodeName(_ name: String, icon: Int?) throws -> [UInt8] {
-        var out: [UInt8] = icon.map { [UInt8($0)] } ?? []
+        let out = (icon.map { [UInt8($0)] } ?? []) + (try nameGlyphBytes(name))
+        let room = nameTiles - (icon == nil ? 0 : 1)
+        guard out.count <= nameTiles else {
+            throw CTROMBuildError("tech name \(String(reflecting: name)) is \(out.count - nameTiles + room) glyphs; " +
+                                  "the menu draws \(nameTiles) tiles (\(room) after the icon)")
+        }
+        return out + [UInt8](repeating: pad, count: nameTiles - out.count)
+    }
+
+    private static func nameGlyphBytes(_ name: String) throws -> [UInt8] {
+        var out: [UInt8] = []
         let chars = Array(name)
         var i = 0
         while i < chars.count {
@@ -44,18 +54,13 @@ public enum CTTechText {
             else { throw CTROMBuildError("tech name \(String(reflecting: name)): no glyph for \(String(reflecting: String(chars[i])))") }
             i += 1
         }
-        let room = nameTiles - (icon == nil ? 0 : 1)
-        guard out.count <= nameTiles else {
-            throw CTROMBuildError("tech name \(String(reflecting: name)) is \(out.count - nameTiles + room) glyphs; " +
-                                  "the menu draws \(nameTiles) tiles (\(room) after the icon)")
-        }
-        return out + [UInt8](repeating: pad, count: nameTiles - out.count)
+        return out
     }
 
     /// Glyphs a name takes and the room it has (for the Studio's fits / overflows).
     public static func nameWidth(_ name: String, icon: Int?) -> (used: Int, room: Int)? {
-        guard let bytes = try? encodeName(String(name.prefix(64)), icon: nil) else { return nil }
-        return (bytes.filter { $0 != pad }.count, nameTiles - (icon == nil ? 0 : 1))
+        guard let bytes = try? nameGlyphBytes(name) else { return nil }
+        return (bytes.count, nameTiles - (icon == nil ? 0 : 1))
     }
 
     // MARK: Descriptions
@@ -67,11 +72,17 @@ public enum CTTechText {
         for n in 0..<strings {
             let lo: Int = Int(rom[tablePC + 2 * n]), hi: Int = Int(rom[tablePC + 2 * n + 1])
             let at: Int = (0x0C0000 + lo) | hi << 8
-            if at >= bodyPC, at < bodyEnd, let end = rom[at..<bodyEnd].firstIndex(of: 0) {
-                out.append(Array(rom[at..<end]))
-            } else {
-                out.append(nil)
+            var bytes: [UInt8]? = nil
+            if at >= bodyPC, at < bodyEnd, bodyEnd <= rom.count {
+                var end = at
+                while end < bodyEnd {
+                    let code = rom[end]
+                    if code == 0 { bytes = Array(rom[at..<end]); break }
+                    // CTTextCodec.decode: wide glyphs, wait and extension each consume one operand.
+                    end += [1, 2, 3, 0x12].contains(code) ? 2 : 1
+                }
             }
+            out.append(bytes)
         }
         return out
     }

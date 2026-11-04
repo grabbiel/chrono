@@ -580,8 +580,17 @@ def description_bytes(rom):
     out = []
     for n in range(DESC_STRINGS):
         at = pc(0xCC, T.u(rom, DESC_TABLE_PC + 2 * n, 2))
-        end = rom.find(b"\x00", at, DESC_BODY_END) if DESC_BODY_PC <= at < DESC_BODY_END else -1
-        out.append(None if end < 0 else bytes(rom[at:end]))
+        text = None
+        if DESC_BODY_PC <= at < DESC_BODY_END <= len(rom):
+            end = at
+            while end < DESC_BODY_END:
+                code = rom[end]
+                if code == 0:
+                    text = bytes(rom[at:end])
+                    break
+                # TextWin/CTTextCodec: wide glyphs, wait and extension take one operand.
+                end += 2 if code in (1, 2, 3, 0x12) else 1
+        out.append(text)
     return out
 
 
@@ -647,7 +656,8 @@ def build_problems(clean, built, report):
             continue
         body = raw[1:] if raw[0] < 0xA0 and raw[0] not in (NAME_PAD, T.NONE) else raw
         glyphs = body.rstrip(bytes([NAME_PAD]))
-        if NAME_PAD in glyphs or not glyphs:
+        # An empty name is valid: the writer emits only padding (after any icon).
+        if NAME_PAD in glyphs:
             out.append(f"tech ${t:02X}: the name is not glyphs then $EF padding")
         if raw[0] != clean[T.TECH_NAMES_PC + T.NAME_SIZE * t] and clean[T.TECH_NAMES_PC + T.NAME_SIZE * t] < 0xA0:
             out.append(f"tech ${t:02X}: the name's icon changed")

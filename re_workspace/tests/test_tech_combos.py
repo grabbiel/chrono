@@ -25,6 +25,39 @@ def test_helpers_and_id_layout():
     assert cc.FIRST_ROCK + cc.ROCKS == ct.TECHS
 
 
+def test_description_zero_operands_and_bounded_termination():
+    rom = bytearray(cc.DESC_BODY_END)
+    at = cc.DESC_BODY_PC
+    rom[cc.DESC_TABLE_PC:cc.DESC_TABLE_PC + 2] = (at & 0xFFFF).to_bytes(2, "little")
+    # A, {tech}, B, two wide glyphs, {wait 00}, C, END: each control has one operand.
+    text = bytes([0xA0, 0x12, 0, 0xA1, 1, 0, 2, 0, 3, 0, 0xA2])
+    rom[at:at + len(text) + 1] = text + b"\0"
+    assert cc.description_bytes(rom)[0] == text
+    for tail in (b"\x12", b"\x12\x00", b"\xA0"):
+        at = cc.DESC_BODY_END - len(tail)
+        rom[cc.DESC_TABLE_PC:cc.DESC_TABLE_PC + 2] = (at & 0xFFFF).to_bytes(2, "little")
+        rom[at:cc.DESC_BODY_END] = tail
+        assert cc.description_bytes(rom)[0] is None
+
+
+def test_checker_accepts_empty_names_but_rejects_internal_padding():
+    clean = bytearray(0x400000)
+    clean[ct.COMBOS_PC] = 0xFF  # Synthetic empty combination table.
+    at = ct.TECH_NAMES_PC + ct.NAME_SIZE
+    clean[at:at + ct.NAME_SIZE] = bytes([0xA0] + [cc.NAME_PAD] * 10)
+    report = {"techs": {"combos": [], "userSets": ct.user_sets(clean)}}
+    for icon in (None, 0x2F):
+        base = bytearray(clean)
+        if icon is not None:
+            base[at:at + ct.NAME_SIZE] = bytes([icon, 0xA0] + [cc.NAME_PAD] * 9)
+        built = bytearray(base)
+        built[at:at + ct.NAME_SIZE] = bytes(([icon] if icon is not None else []) +
+                                           [cc.NAME_PAD] * (ct.NAME_SIZE - (icon is not None)))
+        assert cc.build_problems(base, built, report) == []
+        built[at + 3] = 0xA1  # A glyph after padding remains invalid.
+        assert any("name is not glyphs then $EF padding" in p for p in cc.build_problems(base, built, report))
+
+
 @pytest.fixture(scope="module")
 def rom(rom_path):
     return ct.read_rom(rom_path)
