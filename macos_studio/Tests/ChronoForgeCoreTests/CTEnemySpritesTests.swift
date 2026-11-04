@@ -153,8 +153,9 @@ final class CTEnemySpritesTests: XCTestCase {
         XCTAssertEqual(CTEnemySpriteROM.restFrame(s), 0)
     }
 
-    /// Local ROM: every enemy of layouts 0-2 imports, saves, validates and
-    /// draws its rest frame; layout 3 is left out; an unedited one builds without a write.
+    /// Local ROM: every enemy imports, saves, validates and draws its rest
+    /// frame; layout 3 comes in as the field shows it and the build refuses
+    /// it; an unedited one builds without a write.
     func testImportEveryEnemy() throws {
         let rom = [UInt8](try Repo.romData())
         let raw = rom.count == CTROMBuilder.romSize + 512 ? Array(rom.dropFirst(512)) : rom
@@ -162,23 +163,32 @@ final class CTEnemySpritesTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.copyItem(at: fixtureURL(), to: dir)
         var project = try CTProject.load(from: dir)
-        let (ids, skipped) = try CTEnemySpriteROM.importSprites(rom: rom, into: &project)
-        XCTAssertEqual(ids.count + skipped.count, CTEnemySpriteROM.ids)
-        XCTAssertEqual(skipped, [111, 147, 215])
+        let (ids, fieldOnly) = try CTEnemySpriteROM.importSprites(rom: rom, into: &project)
+        XCTAssertEqual(ids.count, CTEnemySpriteROM.ids)
+        XCTAssertEqual(fieldOnly, [111, 147, 215])
         try project.save()
         let loaded = try CTProject.load(from: dir)
         let issues = Validator.validate(loaded).filter { $0.path.hasPrefix("sprites/") }
         XCTAssertTrue(issues.isEmpty, "\(issues.prefix(5))")
-        var layouts = [0, 0, 0]
+        var layouts = [0, 0, 0, 0]
         for id in ids {
             let s = try XCTUnwrap(loaded.sprites[id])
             layouts[s.rom?.layout ?? 0] += 1
         }
-        XCTAssertEqual(layouts, [150, 77, 25])
-        for i in [0, 26, 117, 200, 253] {
+        XCTAssertEqual(layouts, [150, 77, 25, 3])
+        let large = try XCTUnwrap(loaded.sprites["enemy_111"])
+        XCTAssertEqual(large.frames.count, 1)
+        XCTAssertEqual(large.frames[0].cells?.count, 96)
+        var wantTiles: [Int] = []
+        for k in 0..<24 { wantTiles.append(32 * (k / 8) + 2 * (k % 8)) }
+        XCTAssertEqual(large.frames[0].tiles.map(\.tile), wantTiles)
+        XCTAssertTrue(large.frames[0].tiles.allSatisfy { $0.pal == 1 && $0.priority == 2 && $0.size16 })
+        XCTAssertEqual(large.stream, .init(columns: 16, rows: 6, baseTile: 0x40))
+        XCTAssertTrue(large.animations.isEmpty)
+        for i in [0, 26, 111, 117, 147, 200, 253] {
             let d = try CTEnemySpriteROM.decode(rom: raw, id: i)
             let s = try XCTUnwrap(loaded.sprites[CTEnemySpriteROM.id(i)])
-            XCTAssertEqual(s.frames.count, d.frames.count)
+            XCTAssertEqual(s.frames.count, d.layout == CTEnemySpriteROM.large ? 1 : d.frames.count)
             let sheet = SpriteSheet.tiles(try PNG.readIndexed(url: loaded.fileURL(relative: s.sheet)))
             let o = SpriteScene.Options()
             let rgba = PPUReferenceRenderer.render(SpriteScene.frame(s, frame: CTEnemySpriteROM.restFrame(s), sheet: sheet,
@@ -197,5 +207,7 @@ final class CTEnemySpritesTests: XCTestCase {
         let (built, report) = try CTROMBuilder.build(base: raw, project: building)
         XCTAssertEqual(built, raw)
         XCTAssertEqual(report.enemySprites?.map(\.set), [0])
+        building.project.rom = Project.ROMBuild(sprites: ["enemy_147"])
+        XCTAssertTrue(Validator.validate(building).contains { $0.message.contains("only frame layouts 0-2") })
     }
 }

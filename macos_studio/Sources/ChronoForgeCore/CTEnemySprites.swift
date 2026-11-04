@@ -1,6 +1,7 @@
 // CTEnemySprites.swift — the enemies' battle sprites (RomE4_EnemySprRec
 // $E4:F600, 10 bytes per record): graphics, frames in frame layouts 0-2,
-// palettes and animations, and their import into a project.
+// palettes and animations, and their import into a project; layout 3 as the
+// field shows it (Spr_LoadLargeObj), read-only.
 //
 // The twin of the enemy section of re_workspace/tools/ct_sprites.py, which
 // holds the evidence (the field's Evt_Op83_InitEnemySprite and FieldBtl_SaveObj,
@@ -21,6 +22,13 @@ public enum CTEnemySpriteROM {
     public static let layouts: [(columns: Int, rows: Int, recordBytes: Int, objs: Int)] =
         [(8, 2, 40, 4), (16, 2, 80, 8), (8, 6, 120, 12), (96, 1, 240, 24)]
     public static let assembled = 0..<3
+    /// Layout 3 on the field (Evt_Op83 -> Spr_LoadLargeObj): the first frame
+    /// record's 96 words go in order to OBJ tiles $40-$9F (16 per VRAM row),
+    /// OBJ n shows slot tile 32 (n / 8) + 2 (n % 8), attribute $22 (priority 2,
+    /// palette 1), and no frame builder runs for it, so that frame is all it shows.
+    public static let large = 3
+    public static let largeGrid = (columns: 16, rows: 6)
+    public static let largePalette = 1, largePriority = 2
 
     public static func id(_ i: Int) -> String { String(format: "enemy_%03d", i) }
 
@@ -142,6 +150,7 @@ public enum CTEnemySpriteROM {
     /// at OBJ tile $40, and OBJ n (16x16) of pair p, column q shows slot tile
     /// 32p + 2q. Animations naming a frame past the block are left out.
     public static func spriteDef(_ d: DecodedEnemy, id: String) -> SpriteDef {
+        if d.layout == large { return largeSpriteDef(d, id: id) }
         let shape = layouts[d.layout]
         var frames: [SpriteDef.Frame] = []
         for f in d.frames {
@@ -169,6 +178,35 @@ public enum CTEnemySpriteROM {
         return s
     }
 
+    /// A layout-3 record as the field shows it: frame 0 only, its 96 cells
+    /// on a 16 x 6 grid at OBJ tile $40, 24 OBJs in palette 1 (palettes 0 and
+    /// 1 both hold the record's colours), no animations. The write-back
+    /// refuses it (no battle assembly).
+    static func largeSpriteDef(_ d: DecodedEnemy, id: String) -> SpriteDef {
+        var frames: [SpriteDef.Frame] = []
+        if let f = d.frames.first {
+            var objs: [SpriteDef.OAMTile] = []
+            for (n, p) in f.pieces.enumerated() {
+                objs.append(SpriteDef.OAMTile(x: p.x, y: p.y, tile: 32 * (n / 8) + 2 * (n % 8), pal: largePalette,
+                                              size16: true, priority: largePriority))
+            }
+            frames.append(SpriteDef.Frame(tiles: objs, cells: f.cells))
+        }
+        var source = SpriteDef.ROMSource(family: family, set: d.id, tiles: CTSpriteROM.snes(d.tilesAt), tileCount: d.tiles.count,
+                                         frames: CTSpriteROM.snes(d.framesAt), frameCount: frames.count,
+                                         palette: CTSpriteROM.snes(d.paletteAt), frameIds: CTSpriteROM.snes(d.frameIdsAt),
+                                         durations: CTSpriteROM.snes(d.durationsAt), rows: d.rows)
+        source.layout = large
+        source.packed = d.packed
+        if d.packed { source.packedBytes = d.packedBytes }
+        let palette: [String] = ([0] + d.palette + [0, 0, 0]).map { BGR555(word: $0).hex }
+        var s = SpriteDef(id: id, sheet: "sprites/\(id).png", bpp: 4, frames: frames, animations: [],
+                          palettes: [palette, palette],
+                          stream: .init(columns: largeGrid.columns, rows: largeGrid.rows, baseTile: slotTile), rom: source)
+        s.battle = battle(d.record)
+        return s
+    }
+
     /// The record's battle fields (+4 bits 2-7, +5 to +9) as the project keeps them.
     public static func battle(_ r: Record) -> SpriteDef.Battle {
         SpriteDef.Battle(flags: r.flags, screenOffsetX: r.screenOffsetX, screenOffsetY: r.screenOffsetY,
@@ -182,24 +220,24 @@ public enum CTEnemySpriteROM {
                                palette: palette.map { BGR555(word: $0) })
     }
 
-    /// The enemies' sprites (records 0-254 in frame layouts 0-2, or `wanted`)
-    /// into `project` as sprites/enemy_NNN.*: the PNG now, the JSON on the
-    /// project's next save. A sprite already imported from the same record is
-    /// replaced (frames keep their hitbox and weapon); an enemy character of
-    /// that id without a sprite gets it. Returns the ids and the records left
-    /// out (layout 3).
+    /// The enemies' sprites (records 0-254, or `wanted`) into `project` as
+    /// sprites/enemy_NNN.*: the PNG now, the JSON on the project's next save.
+    /// A sprite already imported from the same record is replaced (frames keep
+    /// their hitbox and weapon); an enemy character of that id without a
+    /// sprite gets it. Returns the ids and the layout-3 records among them
+    /// (imported as the field shows them, read-only).
     @discardableResult
     public static func importSprites(rom input: [UInt8], into project: inout CTProject,
-                                     ids wanted: [Int]? = nil) throws -> (ids: [String], skipped: [Int]) {
+                                     ids wanted: [Int]? = nil) throws -> (ids: [String], fieldOnly: [Int]) {
         var rom = input
         if rom.count == CTROMBuilder.romSize + 512 { rom.removeFirst(512) }
         guard rom.count == CTROMBuilder.romSize, CTEventPack.sha256(rom) == CTTextProfile.romHash else {
             throw CTROMBuildError("sprites import needs the unmodified Chrono Trigger US 1.0 ROM (SHA-256 06d1c2b0…829a9)")
         }
-        var out: [String] = [], skipped: [Int] = []
+        var out: [String] = [], fieldOnly: [Int] = []
         for i in wanted ?? Array(0..<ids) {
             guard (0..<ids).contains(i) else { throw CTROMBuildError("enemy sprite \(i) is not 0-254") }
-            guard assembled.contains(record(rom, i).size) else { skipped.append(i); continue }
+            if record(rom, i).size == large { fieldOnly.append(i) }
             let d = try decode(rom: rom, id: i)
             let key = project.sprites.first { $0.value.rom?.family == family && $0.value.rom?.set == i }?.key ?? id(i)
             var s = spriteDef(d, id: key)
@@ -217,7 +255,7 @@ public enum CTEnemySpriteROM {
             if let owner, project.characters[owner]?.sprite == nil { project.characters[owner]?.sprite = key }
             out.append(key)
         }
-        return (out, skipped)
+        return (out, fieldOnly)
     }
 
     /// The battle sprite of an enemy character: its `sprite`, else the

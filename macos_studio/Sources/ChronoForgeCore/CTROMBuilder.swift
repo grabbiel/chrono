@@ -150,6 +150,7 @@ public enum CTROMBuilder {
         public var enemyScripts: [CTEnemyAIPatch.ReportScript]? = nil // absent: no script written
         public var sprites: [CTSpritePatch.ReportSprite]? = nil   // absent: none requested
         public var enemySprites: [CTEnemySpritePatch.ReportSprite]? = nil // absent: no ct-enemy sprite requested
+        public var npcSprites: [CTNPCSpritePatch.ReportSprite]? = nil     // absent: no ct-npc sprite requested
         public var spriteWarnings: [String]? = nil                 // absent: none (stale enemy views of PC parts)
         public var samples: [CTSamplePatch.ReportSample]? = nil   // absent: none requested
         public var sampleTables: CTSamplePatch.ReportTables? = nil // absent: the tables were not moved
@@ -272,7 +273,15 @@ public enum CTROMBuilder {
         let samples = try spec.samples.map { try sampleRequest($0, project: project, inside: inside) }
         return try build(base: base, requests: requests, songs: songs, characters: characters, techs: techs,
                          items: items, maps: maps, tilesets: tilesets, enemies: enemies, sprites: sprites,
-                         samples: samples, textProfile: project.textProfile)
+                         samples: samples, textProfile: project.textProfile, npcViews: npcViews(project))
+    }
+
+    /// The NPC records the project has a ct-npc sprite of (spriteWarnings names
+    /// those a PC write-back changes the look of).
+    static func npcViews(_ project: CTProject) -> Set<Int> {
+        var out = Set<Int>()
+        for s in project.sprites.values where s.rom?.family == CTNPCSpritePatch.family { out.insert(s.rom!.set) }
+        return out
     }
 
     /// A `rom.samples` entry as the bytes and words to write: the sidecar's
@@ -340,7 +349,7 @@ public enum CTROMBuilder {
                              items: ItemsRequest? = nil, maps: [GameMap] = [], tilesets: [CTTilesetPatch.Request] = [],
                              enemies enemyRequests: [EnemyRequest] = [], sprites spriteRequests: [CTSpritePatch.Request] = [],
                              samples sampleRequests: [CTSamplePatch.Request] = [],
-                             textProfile: CTTextProfile?) throws -> (rom: [UInt8], report: Report) {
+                             textProfile: CTTextProfile?, npcViews: Set<Int> = []) throws -> (rom: [UInt8], report: Report) {
         var rom = input
         if rom.count == romSize + 512 { rom.removeFirst(512) }
         guard rom.count == romSize, CTEventPack.sha256(rom) == CTTextProfile.romHash else {
@@ -387,8 +396,12 @@ public enum CTROMBuilder {
             enemyWrites += try CTEnemyROM.writes(e.enemy, id: e.id, name: e.name, base: rom)
         }
         // Sprites: checked and decoded back before anything is written (docs/sprites.md).
+        // ct-enemy and ct-npc go through one sharer pass (CTEnemySpritePatch.applyAll); the rest are PC sets.
         let enemySpriteRequests = spriteRequests.filter { $0.sprite.rom?.family == CTEnemySpritePatch.family }
-        let pcSpriteRequests = spriteRequests.filter { $0.sprite.rom?.family != CTEnemySpritePatch.family }
+        let npcSpriteRequests = spriteRequests.filter { $0.sprite.rom?.family == CTNPCSpritePatch.family }
+        let pcSpriteRequests = spriteRequests.filter { r in
+            r.sprite.rom?.family != CTEnemySpritePatch.family && r.sprite.rom?.family != CTNPCSpritePatch.family
+        }
         let (spriteWrites, spriteReport) = try CTSpritePatch.writes(pcSpriteRequests, base: rom)
         var itemWrites: [(pc: Int, bytes: [UInt8], what: String)] = []
         if let items {
@@ -463,10 +476,12 @@ public enum CTROMBuilder {
         for w in spriteWrites { afterPCSprites.replaceSubrange(w.pc..<(w.pc + w.bytes.count), with: w.bytes) }
         var pcListed: [Int: String] = [:]
         for r in spriteReport { pcListed[r.set] = r.id }
-        let enemySpriteReport = try CTEnemySpritePatch.apply(
-            enemySpriteRequests, base: base, built: afterPCSprites, pcListed: pcListed, space: &space,
+        let (enemySpriteReport, npcSpriteReport) = try CTEnemySpritePatch.applyAll(
+            enemySpriteRequests + npcSpriteRequests, base: base, built: afterPCSprites, pcListed: pcListed, space: &space,
             write: { write($0, at: $1, $2) }, relocated: { relocated($0, from: $1, to: $2, bytes: $3) })
-        let spriteWarnings = CTEnemySpritePatch.staleViews(spriteReport, base: base, listed: Set(enemySpriteReport.map(\.set)))
+        var spriteWarnings = CTEnemySpritePatch.staleViews(spriteReport, base: base, listed: Set(enemySpriteReport.map(\.set)))
+        let npcListed = Set(npcSpriteReport.map(\.set))
+        spriteWarnings += CTNPCSpritePatch.staleViews(spriteReport, base: base, views: npcViews.subtracting(npcListed))
 
         // Message tables first: their addresses go inside the packs.
         let codec = try textProfile.map { try CTTextCodec(profile: $0) }
@@ -662,6 +677,7 @@ public enum CTROMBuilder {
         report.enemyScripts = scriptReport.isEmpty ? nil : scriptReport
         report.sprites = pcSpriteRequests.isEmpty ? nil : spriteReport
         report.enemySprites = enemySpriteRequests.isEmpty ? nil : enemySpriteReport
+        report.npcSprites = npcSpriteRequests.isEmpty ? nil : npcSpriteReport
         report.spriteWarnings = spriteWarnings.isEmpty ? nil : spriteWarnings
         report.samples = sampleRequests.isEmpty ? nil : sampleReport
         report.sampleTables = sampleTables

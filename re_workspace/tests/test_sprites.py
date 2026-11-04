@@ -326,9 +326,9 @@ def test_measured_entries_are_raw_tile_blocks():
     image, _ = synthetic_enemy_image()
     assert cs.measured_entries(image) == list(range(cs.SETS))          # record $F8 shows PC set 0
     image = bytearray(image)
-    image[cs.pc(cs.SPR_REC + cs.SPR_REC_BYTES * 7)] = 11
+    image[cs.pc(cs.SPR_REC + cs.SPR_REC_BYTES * 7)] = 11                 # an NPC record: $82 unpacks its graphics
     image[cs.pc(cs.ENEMY_SPR + cs.ENEMY_SPR_BYTES * 0xF9)] = 12
-    assert cs.measured_entries(bytes(image)) == list(range(cs.SETS)) + [11, 12]
+    assert cs.measured_entries(bytes(image)) == list(range(cs.SETS)) + [12]
 
 
 def test_enemy_spans_cover_the_write_back():
@@ -346,3 +346,47 @@ def test_enemy_spans_cover_the_write_back():
         assert cs.pc(cs.u24(image, cs.TILES_PTR + 3 * cs.enemy_record(image, i)["gfx"])) == s.start
         data, _, end = __import__("ct_tilesets").unpack_bytes(image[s.start:s.start + 0x10000])
         assert end == len(s) and len(data) == 32 * (30, 50)[i]
+
+
+# --- Battle palettes and weapon colours ---------------------------------------------------
+
+def test_weapon_colours_follow_the_index_table():
+    # Synthetic: weapon 3 -> colour record 2; set 0's record names weapon 3.
+    image = bytearray(cs.ROM_SIZE)
+    image[cs.pc(cs.WEAPON_COLOUR_IDX) + 3] = 2
+    at = cs.pc(cs.WEAPON_COLOURS) + cs.WEAPON_COLOUR_BYTES * 2
+    image[at:at + 6] = bytes([0x1F, 0x00, 0xE0, 0x03, 0x00, 0x7C])
+    image[cs.pc(cs.PC_RECORDS) + cs.PC_WEAPON] = 3
+    assert cs.weapon_colours(bytes(image), 3) == (2, [0x001F, 0x03E0, 0x7C00])
+    b = cs.pc_battle(bytes(image), 0)
+    assert b["partyPalettes"] == [5, 6, 7] and b["weapon"] == 3 and b["weaponColourRecord"] == 2
+    assert b["weaponColours"] == ["0x001F", "0x03E0", "0x7C00"]
+    assert (b["screenOffsetX"], b["screenOffsetY"], b["halfWidth"], b["height"]) == (0, -16, 8, 8)
+
+
+def test_battle_palette_claims(rom, chronoret):
+    claims = cs.asm_claims(chronoret, routines=cs.BATTLE_ASM_CLAIMS, constants=cs.BATTLE_CONSTANT_CLAIMS)
+    assert len(claims) == len(cs.BATTLE_ASM_CLAIMS) + len(cs.BATTLE_CONSTANT_CLAIMS)
+    claims += cs.battle_code_claims(rom) + cs.battle_data_claims(rom)
+    assert not failed(claims)
+    assert all(cs.pc_battle(rom, c)["weaponColourRecord"] < cs.WEAPON_RECORDS for c in range(cs.SETS))
+
+
+# --- Layout 3: the field's one large frame ------------------------------------------------
+
+def test_large_objs_take_three_rows_of_eight_16x16_tiles():
+    assert [cs.large_obj_tile(n) for n in (0, 7, 8, 23)] == [0, 14, 32, 78]
+    assert (cs.LARGE_PALETTE, cs.LARGE_PRIORITY) == (1, 2)
+    assert cs.LARGE_COLUMNS * cs.LARGE_ROWS == cs.LAYOUTS[cs.LARGE][0] * cs.LAYOUTS[cs.LARGE][1]
+
+
+def test_large_claims(rom, chronoret):
+    claims = cs.asm_claims(chronoret, routines=cs.LARGE_ASM_CLAIMS, constants=cs.LARGE_CONSTANT_CLAIMS)
+    assert len(claims) == len(cs.LARGE_ASM_CLAIMS) + len(cs.LARGE_CONSTANT_CLAIMS)
+    claims += cs.large_code_claims(rom) + cs.large_data_claims(rom)
+    assert not failed(claims)
+
+
+def test_field_loads_the_large_records_as_decoded(rom, chronoret):
+    claims = cs.large_run_claims(rom, ref=chronoret)
+    assert len(claims) == 3 and not failed(claims)

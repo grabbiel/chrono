@@ -10,17 +10,18 @@ struct SpritesPane: View {
     @State private var selection: String? = LaunchArguments.value("--select")   // e.g. --module Sprites --select enemy_059
     @State private var importROM = false
     @State private var revision = 0          // re-seeds the editor after an import
-    @State private var family = LaunchArguments.value("--family").flatMap { Family(rawValue: $0) } ?? .all   // --family Enemy
+    @State private var family = LaunchArguments.value("--family").flatMap { Family(rawValue: $0) } ?? .all   // --family Enemy | NPC
 
     /// The sprite list's filter by ROM family.
     enum Family: String, CaseIterable, Identifiable {
-        case all = "All", pc = "PC", enemy = "Enemy", other = "Other"
+        case all = "All", pc = "PC", enemy = "Enemy", npc = "NPC", other = "Other"
         var id: String { rawValue }
         func keeps(_ s: SpriteDef) -> Bool {
             switch self {
             case .all: return true
             case .pc: return s.rom?.family == CTSpritePatch.family
             case .enemy: return s.rom?.family == CTEnemySpritePatch.family
+            case .npc: return s.rom?.family == CTNPCSpriteROM.family
             case .other: return s.rom == nil
             }
         }
@@ -40,7 +41,7 @@ struct SpritesPane: View {
                 ForEach(Family.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            .help("Show all sprites, the playable characters', the enemies' or the project's own")
+            .help("Show all sprites, the playable characters', the enemies', the field NPCs' or the project's own")
             Button(project.sprites.values.contains { $0.rom != nil } ? "Reimport Sprites from ROM…"
                                                                        : "Import Sprites from ROM…") { importROM = true }
         }
