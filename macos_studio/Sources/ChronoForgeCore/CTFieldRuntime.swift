@@ -4,18 +4,22 @@
 //
 //   Field_SceneChangeTick  a pending warp (SceneFlag_Warp) loads Loc_Dest*
 //   Field_FrameUpdate      the D-pad step (Field_DpadDispatch), the leader's
-//                          probes (Map_Unk8A6D's four straight cases), the
+//                          probes and corner slides (Map_Unk8A6D), the
 //                          tile effects (Map_StepTileEffects: level, exits,
-//                          push) and the column/row limits (Map_Unk9175)
+//                          push; CTFieldProbes.swift), the column/row
+//                          limits (Map_Unk9175) and
+//                          the camera (Map_Unk99DE, Map_Unk91AC, layer 1 of
+//                          Map_Unk93E1: CTFieldScroll.swift)
+//   DefaultHandler         a map redraw ($E5) steps the camera to a 16-pixel
+//                          boundary (Field_Unk885A) before its copy
 //   Field_ActionButton     A in front of an object starts its function 1
 //   Field_Unk1F87          the dialogue box, paced by CTDialogueLayout
 //   Field_EndOfFrame       the scripts (Vblank_Unk59D9 + every queued object),
 //                          then each object's motion and view (Vblank_UnkA810)
 //
 // What is not modelled is named where it is skipped (`limitations`), so the
-// runtime never pretends: Map_Unk8A6D's corner slides and diagonal cases,
-// the camera's scroll accumulators (Map_Unk91AC: the camera here centres on
-// the leader inside the map's limits), Evt_PushTarget, battles, menus.
+// runtime never pretends: layers 2 and 3's scroll, Evt_PushTarget,
+// battles, menus.
 import Foundation
 
 extension WRAM {
@@ -106,7 +110,7 @@ public final class CTFieldRuntime {
     public private(set) var gameMap: GameMap
     public private(set) var props: CTTilePropsPlane?
     public private(set) var frameCount = 0
-    /// The camera's top-left in pixels.
+    /// The camera's top-left in pixels (CTEventVM.cameraPixels after the frame's scroll).
     public private(set) var camera = (x: 0, y: 0)
     public private(set) var held: CTFieldInput = []
     public private(set) var pressed: CTFieldInput = []
@@ -124,25 +128,33 @@ public final class CTFieldRuntime {
     public private(set) var dialogue: (layout: CTDialogueLayout, frame: Int)?
     /// Sound-driver commands, oldest first (drained from the VM each frame).
     public private(set) var audio: [(frame: Int, command: CTEventVM.AudioCommand)] = []
+    /// Party, inventory and gold changes, oldest first (drained from the VM each frame).
+    public private(set) var changes: [(frame: Int, change: CTEventVM.StateChange)] = []
+    /// The map cells region copies changed since the location loaded, by layer (row << 8 | column).
+    public private(set) var mapEdits: [Int: Set<Int>] = [:]
+    /// Counts the region copies drained, so a cached picture of the map knows to rebuild.
+    public private(set) var mapRevision = 0
     /// Packs to run instead of the ROM's, by location (an edited scene).
     public var packOverrides: [Int: CTEventPack] = [:]
-    /// Opt-in: run `$E7`'s scroll-to (Map_Unk91AC) instead of centring on
-    /// the leader while Map_ScrollToMode is set; after one the camera stays.
+    /// Opt-in: run Map_Unk91AC's scroll-to, so `$E7` moves the camera and
+    /// arrives. Off, Map_ScrollToMode stays as `$E7` set it and the opcode
+    /// waits (as `runtime run` and `scene vm --no-scroll` have it).
     public var runsScrollTo = false
-    private var cameraHeld = false
-    /// Opt-in: a loop count of 3 or more drops by two at a row's end, as
-    /// Obj_AnimTickAndQueue does (DEC, DEC, STA); off, by one (the model so
-    /// far). ct_scene_run.py durations shows the ROM's way.
-    public var romAnimLoops = false
+    /// A loop count of 3 or more drops by two at a row's end, as
+    /// Obj_AnimTickAndQueue does (DEC, DEC, STA; ct_scene_run.py durations:
+    /// 24 of 24 animation cases). Off only to replay traces taken before
+    /// 2026-10-23, when the model took one off.
+    public var romAnimLoops = true
 
     public static let limitations = [
-        "leader probes: Map_Unk8A6D's four straight cases without the corner slides; a diagonal runs the X case then the Y case",
-        "camera: centred on the leader inside the map's limits, not Map_Unk91AC's scroll accumulators",
+        "camera: layer 1 only (Map_Unk93E1's layers 2 and 3, their own steps and the edge builders are not run); the redraw's own frames after Field_Unk885A (Field_BuildC800Mode*) are not counted",
         "Evt_PushTarget (pushing objects) and treasure opening are not run",
         "the dialogue box's own code (Field_Unk1F87) is CTDialogueLayout's; the D-pad is held while the box is open; a choice answers its first line",
         "the frame-build queue (ObjQ_Head/Tail) is drained every frame, so every object's animation advances",
         "Party_LeaderAnim: no idle rows (Party_AnimIdle) and no shape-$1E stair row; followers hold their place (Party_UnkA26B/A2CE not run)",
-        "battles, menus, fades and palettes are not run",
+        "battles, menus and fades are not run",
+        "palettes: the location's own animation records (FieldFD_LoadAnimSetB) and Pal_Buf row 0 are not loaded; the picture takes the background from the project's palette and only the colours the palette opcodes wrote from Pal_CgramBuf",
+        "after a party or item-count command, Menu_RunCommand's refresh (Menu_Unk834D: weapon records, BankFF_UnkF958, Menu_Unk82E1) is not run",
     ]
 
     /// `wram`: carried over (a warp keeps it); nil starts from zeroes with the
@@ -159,6 +171,7 @@ public final class CTFieldRuntime {
         vm = CTEventVM(pack: try CTEventPack(bytes: [0]), rom: rom, wram: wram ?? WRAMModel())
         if wram == nil {
             for k in 0..<3 { vm.wram[WRAM.partyMembers + k] = k < party.count ? party[k] : 0x80 }
+            for k in 3..<9 { vm.wram[WRAM.menuPartyOrder + k] = 0x80 }   // the reserve: empty places
             setEntry(x: (map.limits.left + map.limits.right) / 2, y: (map.limits.top + map.limits.bottom) / 2, facing: 1)
         }
         vm.party = { [unowned self] in self.partyRequest($0) }
@@ -179,18 +192,24 @@ public final class CTFieldRuntime {
         var w = vm.wram
         w.setWord(WRAM.locId, location)
         initLoadState(&w)
+        audioSetup(&w)                                              // LoadLocation's sound step
+        for a in WRAM.mapPage..<(WRAM.mapPage + 0x100) { w[a] = 0 }  // LocLoad_ClearPage1D00
         try loadMap(&w)
         vm.wram = w
+        vm.exitRecords = map.exits.map(\.raw)
+        vm.loadLocationPalette(map.header.palette)                 // LocLoad_Unk7084, Pal_LoadUnkRow0's copy
         let entry = try CTEventROM.entries(rom: rom)
         let events = map.header.events
         guard events < entry.count else { throw CTEventError("location \(location): no event pack \(events)") }
         let pack = try packOverrides[location] ?? CTEventPack(bytes: CTEventROM.unpack(rom: rom, entry: entry[events]))
         for a in 0..<16 { vm.wram[WRAM.evtUnk0920 + a] = 0xFF }     // Evt_ClearUnk0920
         vm.load(pack: pack)
+        vm.seedPartyBlocks()                                        // LocLoad_InitUnk7F3700
         vm.initObjects()
         runObj0Func1()
-        initEntryTile()
-        followCamera()
+        vm.initEntryTile()                                          // Map_InitEntryTile
+        vm.initOrigin()                                             // LocLoad_DrawMap's Map_InitOrigin
+        camera = vm.cameraPixels
     }
 
     /// Evt_RunObj0Func1: object 0's function 1 to its $00, at once (the
@@ -224,10 +243,36 @@ public final class CTFieldRuntime {
         for s in [WRAM.partyObjSlot, WRAM.partyObjSlot1, WRAM.partyObjSlot2] { w[s] = 0x80 }
     }
 
+    /// LocLoad_AudioSetup: with Audio_Unk7F01ED set, Audio_CmdPlayMusic with
+    /// Menu_Config1E; else Audio_CmdUnk81 (0, $FF, $FF), then the location's
+    /// music (LocRom.Music, bit 7: no change), kept in Menu_Config1E and
+    /// played. The commands join `audio` at the load's frame.
+    func audioSetup(_ w: inout WRAMModel) {
+        func send(_ id: UInt8) {
+            w[0x7E1E00] = id                                        // Audio_CmdId
+            audio.append((frameCount, CTEventVM.AudioCommand(id: id, arg0: w[0x7E1E01], arg1: w[0x7E1E02], arg2: w[0x7E1E03])))
+        }
+        var track = w[0x7E29AE]                                     // Menu_Config1E
+        if w[0x7F01ED] == 0 {                                       // Audio_Unk7F01ED
+            w[0x7E1E01] = 0; w[0x7E1E02] = 0xFF; w[0x7E1E03] = 0xFF
+            send(0x81)                                              // Audio_CmdUnk81
+            let music = UInt8(map.header.music & 0xFF)
+            if music & 0x80 != 0 { return }
+            w[0x7E29AE] = music
+            track = music
+        }
+        w[0x7E1E01] = track
+        send(0x10)                                                  // Audio_CmdPlayMusic
+    }
+
     /// Map_InitMasksAndLimits and the tile planes: Map_TileHiBits/AttrA/AttrB
     /// from the props image, Map_TileExitIdx (Map_LoadExitTiles) and
-    /// Map_TreasureIdx, each row << 8 | column.
+    /// Map_TreasureIdx, each row << 8 | column; Map_ExitRec0 the location's
+    /// ExitRom offset (the records themselves are the map's: `exitRecords`).
     func loadMap(_ w: inout WRAMModel) throws {
+        let ptr = 0x250000 + 2 * (location & 0x1FF)
+        let lo: Int = Int(rom[ptr]), hi: Int = Int(rom[ptr + 1])
+        w.setWord(WRAM.mapExitRec0, lo | hi << 8)
         let (col, row) = map.masks[0]
         w[WRAM.mapColMask1] = UInt8(col); w[WRAM.mapRowMask1] = UInt8(row)
         w[WRAM.mapLimitLeft] = UInt8(map.limits.left & 0xFF); w[WRAM.mapLimitTop] = UInt8(map.limits.top & 0xFF)
@@ -237,6 +282,13 @@ public final class CTFieldRuntime {
                 let i = r * WRAM.mapRowStride + c
                 w[WRAM.mapTileHiBits + i] = 0; w[WRAM.mapTileAttrA + i] = 0; w[WRAM.mapTileAttrB + i] = 0
                 w[WRAM.mapTileExitIdx + i] = 0x80; w[WRAM.mapTreasureIdx + i] = 0x80
+            }
+        }
+        for (k, plane) in [WRAM.mapLayer1Tiles, WRAM.mapLayer2Tiles, WRAM.mapLayer3Tiles].enumerated() {
+            guard let tiles = map.props.planes[k + 1] else { continue }
+            let size = map.props.sizes[k]
+            for r in 0..<min(64, size.height) {
+                for c in 0..<min(64, size.width) { w[plane + r * WRAM.mapRowStride + c] = UInt8(tiles[r * size.width + c] & 0xFF) }
             }
         }
         if let p = props {
@@ -254,35 +306,51 @@ public final class CTFieldRuntime {
         }
     }
 
-    /// Map_InitEntryTile: Field_Unk55 from the leader's entry tile (level 0 → 1).
-    func initEntryTile() {
-        let w = vm.wram
-        let tile = w.word(WRAM.locEntryX) & w.word(WRAM.mapColMask1)
-        let p = probeLevel(tile: tile, x: 0x80, y: 0xFF, step: 0)
-        vm.wram[WRAM.fieldUnk55] = p.level == 0 ? 1 : UInt8(p.level)
-        vm.wram[WRAM.mapUnk1D34] = p.moveFlags
-        for (k, s) in [WRAM.partyObjSlot, WRAM.partyObjSlot1, WRAM.partyObjSlot2].enumerated() {
-            let slot = Int(w[s])
-            if slot & 0x80 != 0 { continue }
-            vm.wram[WRAM.objPrioLow + slot] = p.prio
-            vm.wram[WRAM.objPrioHigh + slot] = k == 0 ? p.prioHi : p.prio
-        }
-    }
-
     // MARK: One frame
 
     public func step(input: CTFieldInput) throws {
         pressed = input.subtracting(held)
         held = input
         if vm.wram[WRAM.fieldSceneFlags] & 0x80 != 0 { try warp(); return }
+        if vm.wram[WRAM.fieldSceneFlags] & 0x20 != 0 {                 // DefaultHandler: SceneFlag_MapRedraw
+            vm.wram[WRAM.fieldSceneFlags] &= ~0x20
+            vm.wram[WRAM.fieldUnk38] = 1
+        }
+        if vm.wram[WRAM.fieldUnk38] != 0 { redrawFrame(); return }
         frameUpdate()
         actionButton()
         dialogueFrame()
         vm.frame()
         for c in vm.audio { audio.append((frameCount, c)) }
         vm.audio.removeAll()
+        for c in vm.changes { changes.append((frameCount, c)) }
+        vm.changes.removeAll()
+        drainMapCopies()
+        vm.palAnimTick()                                            // FdVec_FFF7: PalAnim_TickAll
         objectMotion()
-        if runsScrollTo { scrollToOrFollow() } else { followCamera() }
+        frameCount += 1
+    }
+
+    /// One frame of DefaultHandler's redraw loop: Field_Unk885A, then
+    /// Field_EndOfFrame (the scripts and the objects); once Field_Unk38 is
+    /// clear, the copy (Field_UnkAF4E) and FdVec_FFF7.
+    func redrawFrame() {
+        let mode = vm.wram[WRAM.mapScrollToMode]
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = 0 }
+        vm.recentreStep()
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = mode }
+        camera = vm.cameraPixels
+        vm.frame()
+        for c in vm.audio { audio.append((frameCount, c)) }
+        vm.audio.removeAll()
+        for c in vm.changes { changes.append((frameCount, c)) }
+        vm.changes.removeAll()
+        objectMotion()
+        if vm.wram[WRAM.fieldUnk38] == 0 {
+            vm.copyMapRegion()
+            drainMapCopies()
+            vm.palAnimTick()
+        }
         frameCount += 1
     }
 
@@ -308,6 +376,7 @@ public final class CTFieldRuntime {
             throw CTEventError("warp to \(dest): not a field location (overworld or a special destination)")
         }
         location = dest
+        mapEdits = [:]
         map = try CTMapROM.decode(rom, dest)
         gameMap = CTMaps.gameMap(map)
         props = gameMap.tileProps.flatMap(CTTilePropsPlane.init)
@@ -326,7 +395,14 @@ public final class CTFieldRuntime {
             dpad()
         }
         if vm.wram[WRAM.fieldUnk20] != 0 { leaderProbes() }
-        limitLeader()
+        vm.limitLeaderSteps()                                       // Map_Unk9175
+        vm.dropCameraSteps()                                        // Map_Unk99DE
+        let mode = vm.wram[WRAM.mapScrollToMode]
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = 0 }
+        vm.accumulateScroll()                                       // Map_Unk91AC
+        if !runsScrollTo { vm.wram[WRAM.mapScrollToMode] = mode }
+        vm.stepScroll()                                             // Map_Unk93E1, layer 1
+        camera = vm.cameraPixels
     }
 
     /// Field_DpadDispatch: ±$10 a frame, ±$20 with run (B, Pad_Unk00F8 bit 1).
@@ -353,170 +429,12 @@ public final class CTFieldRuntime {
 
     static func signed(_ b: UInt8) -> Int { Int(Int8(bitPattern: b)) }
 
-    /// Map_Unk8A6D's straight cases: the object in the way (Map_ProbeHitsObj),
-    /// two tile probes across the leading edge, then Map_StepTileEffects.
+    /// Map_Unk8A6D (CTFieldProbes.swift): the leader's box against objects
+    /// and tiles, its corner slides, then Map_StepTileEffects. No leader
+    /// (slot $80) probes nothing here; the ROM would read slot $80.
     func leaderProbes() {
-        let leader = Int(vm.wram[WRAM.partyObjSlot])
-        guard leader & 0x80 == 0 else { return }
-        let lx = vm.wram.word(WRAM.objPosX + leader), ly = vm.wram.word(WRAM.objPosY + leader)
-        let halfW = 0x70, midY = 0x40, height = 0x70
-        let sx = Self.signed(vm.wram[WRAM.mapUnk1D2E])
-        if sx != 0 {
-            let edge = sx > 0 ? lx + halfW + sx : lx + sx - halfW
-            let free = !hitsObject(x: edge, y: ly - midY) && !probeBlocked(x: edge, y: ly) && !probeBlocked(x: edge, y: ly - height)
-            if free { stepTileEffects(lx: lx, ly: ly, dx: sx, dy: 0) } else { vm.wram[WRAM.mapUnk1D2E] = 0 }
-        }
-        let sy = Self.signed(vm.wram[WRAM.mapUnk1D30])
-        if sy != 0 {
-            let x = lx + Self.signed(vm.wram[WRAM.mapUnk1D2E])
-            let edge = sy > 0 ? ly + sy : ly - height + sy
-            let free = !hitsObject(x: x, y: edge) && !probeBlocked(x: x - halfW, y: edge) && !probeBlocked(x: x + halfW, y: edge)
-            if free {
-                stepTileEffects(lx: lx, ly: ly, dx: Self.signed(vm.wram[WRAM.mapUnk1D2E]), dy: sy)
-            } else {
-                vm.wram[WRAM.mapUnk1D30] = 0
-            }
-        }
-    }
-
-    /// Map_ProbeHitsObj: Field_UnkEB the last in-view, non-party object near
-    /// the probe (within $E0 both ways), C=1 when it is solid.
-    func hitsObject(x: Int, y: Int) -> Bool {
-        let w = vm.wram
-        let party = [WRAM.partyObjSlot, WRAM.partyObjSlot1, WRAM.partyObjSlot2].map { Int(w[$0]) }
-        var slot = 2 * Int(w[WRAM.evtObjCount])
-        while slot > 0 {
-            defer { slot -= 2 }
-            guard w[WRAM.objUnk0F00 + slot] != 0, w[WRAM.objUnk1100 + slot] & 0x80 == 0, !party.contains(slot) else { continue }
-            vm.wram[WRAM.fieldUnkEB] = UInt8(slot)
-            let dx = abs(w.word(WRAM.objPosX + slot) - x), dy = abs(w.word(WRAM.objPosY + slot) - y)
-            guard dx < 0xE0, dy < 0xE0 else { continue }
-            return w[WRAM.objUnk1B01 + slot] & 1 != 0
-        }
-        vm.wram[WRAM.fieldUnkEB] = 0x80
-        return false
-    }
-
-    struct Probe { var level: Int, noLevel: Bool, prio: UInt8, prioHi: UInt8, moveFlags: UInt8 }
-
-    func tileIndex(x: Int, y: Int) -> Int {
-        ((y & 0xFF00) | (x >> 8 & 0xFF)) & vm.wram.word(WRAM.mapColMask1)
-    }
-
-    /// Map_Unk8A6D's .test_probe: a treasure tile blocks, else the level test.
-    func probeBlocked(x: Int, y: Int) -> Bool {
-        let tile = tileIndex(x: x & 0xFFFF, y: y & 0xFFFF)
-        if vm.wram[WRAM.mapTreasureIdx + tile] & 0x80 == 0 { return true }
-        return levelBlocked(probeLevel(tile: tile, x: x & 0xFF, y: y & 0xFF, step: 0))
-    }
-
-    /// Map_ProbeTileLevel: the half the probe's pixel falls in (the slope
-    /// tables Map_SlopeShift/Base/Side at $C0:9BF5, read from the ROM), its
-    /// level, "no level" bit and OAM priorities.
-    func probeLevel(tile: Int, x: Int, y: Int, step: Int) -> Probe {
-        let hi = vm.wram[WRAM.mapTileHiBits + tile], a = vm.wram[WRAM.mapTileAttrA + tile], b = vm.wram[WRAM.mapTileAttrB + tile]
-        var halfB = false, flags: UInt8 = 0
-        let shape = Int(hi >> 2)
-        if shape == 1 {
-            halfB = true
-        } else if shape >= 2 {
-            let s = shape - 2
-            if s < 0x16 {
-                let shift = Int(rom[0x009BF5 + s]), base = Int(rom[0x009C0B + s]), side = Int(rom[0x009C21 + s])
-                var v = x >> (shift & 0x7F)
-                if shift & 0x80 != 0 { v ^= 0xFF }
-                let test = (base + v - (y >> 2)) & 0xFF
-                halfB = (side ^ test) & 0x80 != 0
-            } else {
-                let xLow = x & 0x80 == 0, yLow = y & 0x80 == 0       // BPL: the left / top half
-                switch s {
-                case 0x16: halfB = xLow
-                case 0x17: halfB = yLow
-                case 0x18: halfB = xLow && !yLow
-                case 0x19: halfB = !xLow && !yLow
-                case 0x1A: halfB = !xLow && yLow
-                case 0x1B: halfB = xLow && yLow
-                case 0x1C: flags = 0x04
-                default: break
-                }
-            }
-        }
-        let prio = (a >> 2) & 0x10 | 0x20, prioHi = (b >> 2) & 0x10 | 0x20
-        if halfB { return Probe(level: Int(b & 0x18) >> 3, noLevel: b & 0x20 != 0, prio: prio, prioHi: prioHi, moveFlags: flags) }
-        return Probe(level: Int(b & 3), noLevel: b & 4 != 0, prio: prio, prioHi: prioHi, moveFlags: flags)
-    }
-
-    /// Map_ProbeLevelBlocked against Field_Unk55.
-    func levelBlocked(_ p: Probe) -> Bool {
-        let cur = Int(vm.wram[WRAM.fieldUnk55])
-        if p.noLevel { return cur == 3 }
-        if p.level == 0 { return true }
-        return !(p.level == 3 || p.level == cur || cur == 3)
-    }
-
-    /// Map_StepTileEffects at the leader's foot plus the step: blocked stops
-    /// both steps; else an exit sets Loc_Dest* and SceneFlag_Warp, the level
-    /// and priorities follow the tile, and a pushing tile sets the push step.
-    func stepTileEffects(lx: Int, ly: Int, dx: Int, dy: Int) {
-        let px = (lx + dx) & 0xFFFF, py = (ly + dy) & 0xFFFF
-        let tile = tileIndex(x: px, y: py)
-        var p = probeLevel(tile: tile, x: px & 0xFF, y: py & 0xFF, step: dy)
-        if p.moveFlags & 0x04 != 0, dy != 0 { vm.wram[WRAM.mapUnk1D30] = dy > 0 ? 0x10 : 0xF0 }
-        if levelBlocked(p) { vm.wram[WRAM.mapUnk1D2E] = 0; vm.wram[WRAM.mapUnk1D30] = 0; return }
-        if vm.wram[WRAM.fieldSceneFlags] & 0x80 == 0 {
-            let idx = vm.wram[WRAM.mapTileExitIdx + tile]
-            if idx & 0x80 == 0, Int(idx) < map.exits.count {
-                let e = map.exits[Int(idx)], tx = px >> 8, ty = py >> 8
-                let take = e.x == tx ? abs(e.y - ty) < 0x3F : e.y == ty
-                if take {
-                    let raw = e.raw
-                    vm.wram[WRAM.locDestFacing] = (raw[4] >> 1) & 0x0F | raw[4] & 0x80
-                    vm.wram[WRAM.locDestId] = raw[3]; vm.wram[WRAM.locDestId + 1] = raw[4] & 1
-                    vm.wram[WRAM.locDestX] = raw[5]; vm.wram[WRAM.locDestX + 1] = raw[6]
-                    vm.wram[WRAM.fieldSceneFlags] |= 0x80
-                }
-            }
-        }
-        if !p.noLevel {
-            vm.wram[WRAM.fieldUnk55] = UInt8(p.level)
-            let leader = Int(vm.wram[WRAM.partyObjSlot])
-            vm.wram[WRAM.objPrioLow + leader] = p.prio; vm.wram[WRAM.objPrioHigh + leader] = p.prioHi
-        }
-        let a = vm.wram[WRAM.mapTileAttrA + tile]
-        let speed = Int(a >> 2 & 3)
-        if speed != 0 {
-            p.moveFlags |= 0x08
-            let amount = UInt8([0, 0x08, 0x10, 0x20][speed])
-            let neg = 0 &- amount
-            switch a & 3 {
-            case 0: vm.wram[WRAM.mapUnk1D2B] = neg; vm.wram[WRAM.mapUnk1D2A] = 0
-            case 1: vm.wram[WRAM.mapUnk1D2B] = amount; vm.wram[WRAM.mapUnk1D2A] = 0
-            case 2: vm.wram[WRAM.mapUnk1D2A] = neg; vm.wram[WRAM.mapUnk1D2B] = 0
-            default: vm.wram[WRAM.mapUnk1D2A] = amount; vm.wram[WRAM.mapUnk1D2B] = 0
-            }
-        } else {
-            vm.wram[WRAM.mapUnk1D2A] = 0; vm.wram[WRAM.mapUnk1D2B] = 0
-        }
-        vm.wram[WRAM.mapUnk1D34] = p.moveFlags
-    }
-
-    /// Map_Unk9175: the leader's velocity is the step unless the leader is at
-    /// the map's column / row limits in that direction.
-    func limitLeader() {
-        vm.wram[WRAM.mapUnk1D32] = 0; vm.wram[WRAM.mapUnk1D33] = 0
-        let leader = Int(vm.wram[WRAM.partyObjSlot])
-        guard leader & 0x80 == 0 else { return }
-        let tx = Int(vm.wram[WRAM.objTileX + leader]), ty = Int(vm.wram[WRAM.objTileY + leader])
-        let sx = vm.wram[WRAM.mapUnk1D2E], sy = vm.wram[WRAM.mapUnk1D30]
-        if sx != 0 {
-            let past = sx & 0x80 != 0 ? Int(vm.wram[WRAM.mapLimitLeft]) >= tx : tx >= Int(vm.wram[WRAM.mapLimitRight])
-            if !past { vm.wram[WRAM.mapUnk1D32] = sx }
-        }
-        if sy != 0 {
-            let top = (Int(vm.wram[WRAM.mapLimitTop]) + 1) & 0xFF, bottom = (Int(vm.wram[WRAM.mapLimitBottom]) + 1) & 0xFF
-            let past = sy & 0x80 != 0 ? top >= ty : ty >= bottom
-            if !past { vm.wram[WRAM.mapUnk1D33] = sy }
-        }
+        guard vm.wram[WRAM.partyObjSlot] & 0x80 == 0 else { return }
+        vm.leaderProbes()
     }
 
     /// Field_ActionButton: A (Pad_Unk00F6 bit 7) starts function 1 of the
@@ -760,7 +678,8 @@ public final class CTFieldRuntime {
     }
 
     /// Obj_UpdateInView: inside the window an object is active (Obj_Unk0F00
-    /// bit 7, its animation reset on entry); leaving it, a message's speaker
+    /// bit 7, its animation reset and a palette slot claimed on entry);
+    /// leaving it, the slot goes back and a message's speaker
     /// (ObjX_LeaveView) closes the box (Field_Unk29 = $0D).
     func updateInView(_ x: Int) -> Bool {
         let kind = vm.wram[WRAM.objUnk1100 + x], u = vm.wram[WRAM.objUnk1A81 + x]
@@ -772,11 +691,13 @@ public final class CTFieldRuntime {
                 vm.wram[WRAM.objUnk0F00 + x] = 0x80
                 vm.wram[WRAM.objAnimColumn + x] = 0; vm.wram[WRAM.objAnimTimer + x] = 0
                 vm.wram[WRAM.objState + x] = 0; vm.wram[WRAM.objLastFrame + x] = 0xFF
+                vm.claimPaletteSlot()                                  // Obj_Unk7170
             }
             return true
         }
         if vm.wram[WRAM.objUnk0F00 + x] & 0x80 != 0 {
             vm.wram[WRAM.objUnk0F00 + x] = 0
+            vm.releasePaletteSlot()                                    // Obj_Unk734C
             if vm.wram[WRAM.objXLeaveView + x] != 0, vm.wram[WRAM.fieldUnk30] == 0 { vm.wram[WRAM.fieldUnk29] = 0x0D }
         }
         if vm.wram[WRAM.objXAnimLoops + x] != 0 { vm.wram[WRAM.objXAnimLoops + x] = 2 }
@@ -826,40 +747,6 @@ public final class CTFieldRuntime {
         vm.wram.setWord(WRAM.objScreenX + x, sx & 0x1FF); vm.wram.setWord(WRAM.objScreenY + x, sy & 0x1FF)
     }
 
-    /// The camera on the leader (pixel = Obj_Pos >> 4), inside the map, and
-    /// Map_TileOriginX/Y and Map_Unk1D0C/1D10 as 8-pixel columns and rows.
-    public func followCamera() {
-        let leader = Int(vm.wram[WRAM.partyObjSlot])
-        if leader & 0x80 == 0 {
-            let px = vm.wram.word(WRAM.objPosX + leader) >> 4, py = vm.wram.word(WRAM.objPosY + leader) >> 4
-            let lim = map.limits
-            let minX = lim.left * 16, maxX = max(minX, (lim.right + 1) * 16 - 256)
-            let minY = lim.top * 16, maxY = max(minY, (lim.bottom + 1) * 16 - 224)
-            camera = (min(max(minX, px - 128), maxX), min(max(minY, py - 120), maxY))
-        }
-        vm.wram.setWord(WRAM.mapTileOriginX, camera.x >> 3); vm.wram.setWord(WRAM.mapTileOriginY, camera.y >> 3)
-        vm.wram.setWord(WRAM.mapUnk1D0C, (camera.x >> 3) + 32); vm.wram.setWord(WRAM.mapUnk1D10, (camera.y >> 3) + 28)
-    }
-
-    /// Map_Unk91AC's scroll-to: while Map_ScrollToMode is set the camera
-    /// steps a pixel a frame on each axis (Map_StepPos/Neg, $10 = 1 pixel)
-    /// until Map_TileOriginX/Y (8-pixel units) equal Map_ScrollToX/Y on a
-    /// 16-pixel boundary, then ScrollTo_Arrived ($02). The target is the
-    /// camera's top-left: `$E7 column, row` puts that tile at the corner.
-    func scrollToOrFollow() {
-        let mode = vm.wram[0x7E1D00]
-        guard mode != 0 || cameraHeld else { followCamera(); return }
-        cameraHeld = true
-        if mode == 1 {
-            let tx = Int(vm.wram[0x7E1D02]) * 8, ty = Int(vm.wram[0x7E1D03]) * 8
-            camera.x += tx > camera.x ? 1 : tx < camera.x ? -1 : 0
-            camera.y += ty > camera.y ? 1 : ty < camera.y ? -1 : 0
-            if camera.x == tx && camera.y == ty { vm.wram[0x7E1D00] = 2 }
-        }
-        vm.wram.setWord(WRAM.mapTileOriginX, camera.x >> 3); vm.wram.setWord(WRAM.mapTileOriginY, camera.y >> 3)
-        vm.wram.setWord(WRAM.mapUnk1D0C, (camera.x >> 3) + 32); vm.wram.setWord(WRAM.mapUnk1D10, (camera.y >> 3) + 28)
-    }
-
     // MARK: Inspection
 
     public struct ObjectState: Codable, Equatable, Sendable {
@@ -890,13 +777,77 @@ public final class CTFieldRuntime {
     public struct Summary: Codable, Equatable, Sendable {
         public var location: Int, frames: Int, objects: [ObjectState], messages: [Message], warps: [Warp]
         public var audio: Int, leader: Int?, level: Int
+        /// The track the last Audio_CmdPlayMusic asked for (nil: none yet).
+        public var music: Int?
+        /// Menu_PartyOrder (9 places, nil empty), the gold, and the opcodes' party / item / gold changes.
+        public var partyOrder: [Int?], gold: Int, changes: [String]
         public var limitations: [String]
+    }
+
+    func drainMapCopies() {
+        for copy in vm.mapCopies {
+            for layer in copy.layers { mapEdits[layer, default: []].formUnion(copy.cells) }
+            mapRevision += 1
+        }
+        vm.mapCopies.removeAll()
+    }
+
+    /// `m` (the location's map) with the cells region copies changed read back
+    /// from the WRAM planes: layer 1 Map_TileProps | Map_TileHiBits bit 0 << 8,
+    /// layer 2 Map_Layer2Tiles | bit 1 << 8, layer 3 Map_Layer3Tiles.
+    public func liveMap(_ m: GameMap) -> GameMap {
+        guard !mapEdits.isEmpty else { return m }
+        var out = m
+        for (i, layer) in m.layers.enumerated() {
+            guard let cells = mapEdits[layer.bg], (1...3).contains(layer.bg) else { continue }
+            let width = layer.width ?? m.width, height = layer.height ?? m.height
+            let plane = [WRAM.mapLayer1Tiles, WRAM.mapLayer2Tiles, WRAM.mapLayer3Tiles][layer.bg - 1]
+            for cell in cells {
+                let r = cell >> 8, c = cell & 0xFF
+                guard c < min(64, width), r < min(64, height), r * width + c < layer.metatiles.count else { continue }
+                let at = r * WRAM.mapRowStride + c
+                var tile = Int(vm.wram[plane + at])
+                if layer.bg < 3 { tile |= Int(vm.wram[WRAM.mapTileHiBits + at] >> (layer.bg - 1) & 1) << 8 }
+                out.layers[i].metatiles[r * width + c] = tile
+            }
+        }
+        return out
+    }
+
+    /// Menu_PartyOrder: the active party (0-2) and the reserve (3-8); nil where a place is empty.
+    public var partyOrder: [Int?] {
+        (0..<9).map { k -> Int? in
+            let c = vm.wram[WRAM.menuPartyOrder + k]
+            return c & 0x80 != 0 ? nil : Int(c)
+        }
+    }
+
+    /// The track the last Audio_CmdPlayMusic asked for (LocLoad_AudioSetup
+    /// or `$EA`), nil before one.
+    public var music: Int? {
+        audio.last { $0.command.id == 0x10 }.map { Int($0.command.arg0) }
+    }
+
+    /// The 24-bit gold (Battle_Gold).
+    public var gold: Int { Int(vm.wram[WRAM.goldHi]) << 16 | vm.wram.word(WRAM.gold) }
+
+    /// The held items (Battle_InvIds / Battle_InvCounts), id and count, in entry order.
+    public var inventory: [(item: Int, count: Int)] {
+        (0..<0x100).compactMap { k -> (item: Int, count: Int)? in
+            let id = vm.wram[WRAM.invIds + k]
+            return id == 0 ? nil : (Int(id), Int(vm.wram[WRAM.invCounts + k]))
+        }
     }
 
     public func summary() -> Summary {
         let leader = Int(vm.wram[WRAM.partyObjSlot])
         return Summary(location: location, frames: frameCount, objects: (0..<vm.pack.objectCount).map(objectState),
                        messages: messages, warps: warps, audio: audio.count, leader: leader & 0x80 == 0 ? leader / 2 : nil,
-                       level: Int(vm.wram[WRAM.fieldUnk55]), limitations: Self.limitations)
+                       level: Int(vm.wram[WRAM.fieldUnk55]), music: music, partyOrder: partyOrder, gold: gold,
+                       changes: changes.map { c in
+                           String(format: "frame %d obj %d $%04X %02X: %@", c.frame, c.change.slot / 2, c.change.offset,
+                                  Int(c.change.opcode), c.change.what)
+                       },
+                       limitations: Self.limitations)
     }
 }

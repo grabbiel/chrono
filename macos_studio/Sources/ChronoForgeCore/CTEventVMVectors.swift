@@ -4,14 +4,24 @@
 //
 // cases.json: {"packs": {"<label>": "<hex>"}, "cases": [{"id": n, "pack":
 // "<label>", "y": offset, "regions": [[address, "<hex>"], ...]}]}: the pack
-// is at $7F:2000, the regions over a zeroed WRAM, Obj_Cur among them.
+// is at $7F:2000, the regions over a zeroed WRAM, Obj_Cur among them. A case
+// with "routine" runs that field routine instead of the opcode at y:
+// "palAnimTick" (PalAnim_TickAll), "palClaim" (Obj_Unk7170, carry = claimed;
+// reason "skipped" when it does nothing) or "palRelease" (Obj_Unk734C), and
+// the camera's (CTFieldScroll.swift): "mapInitOrigin", "mapInitOriginX/Y",
+// "mapLeaderSteps" (Map_Unk9175), "mapCameraSteps" (Map_Unk99DE),
+// "mapScrollAcc" (Map_Unk91AC), "mapScroll1XInc/XDec/YInc/YDec" and
+// "mapRecentre" (Field_Unk885A), and the leader's collision
+// (CTFieldProbes.swift): "mapLeaderProbes" (Map_Unk8A6D), "mapHitsObj"
+// (Map_ProbeHitsObj, carry = solid), "mapStepEffects" (Map_StepTileEffects)
+// and "mapEntryTile" (Map_InitEntryTile).
 // results.json: {"families": {name: [opcode]}, "results": [{"id", "kind": "go"|"halted"|"unmodelled", "x", "carry",
 // "reason", "mem": {"<address>": byte}}], mem holding the final value of each
 // WRAM byte the model wrote.}
 import Foundation
 
 public enum CTEventVMVectors {
-    struct Case: Decodable { let id: Int; let pack: String; let y: Int; let regions: [[Region]] }
+    struct Case: Decodable { let id: Int; let pack: String; let y: Int; let regions: [[Region]]; let routine: String? }
     enum Region: Decodable {
         case address(Int), hex(String)
         init(from decoder: Decoder) throws {
@@ -61,12 +71,37 @@ public enum CTEventVMVectors {
                 for (i, b) in bytes(hex: hex).enumerated() { vm.wram[at + i] = b }
             }
             vm.wram.recording = true
-            let outcome = vm.execute(at: c.y)
+            var reason: String?
+            let outcome: CTEventVM.Outcome
+            switch c.routine {
+            case nil: outcome = vm.execute(at: c.y)
+            case "palAnimTick": vm.palAnimTick(); outcome = .go(x: 0, carry: false)
+            case "palRelease": vm.releasePaletteSlot(); outcome = .go(x: 0, carry: false)
+            case "palClaim":
+                let claimed = vm.claimPaletteSlot()
+                if claimed == nil { reason = "skipped" }
+                outcome = .go(x: 0, carry: claimed ?? false)
+            case "mapInitOriginX": vm.initOriginX(); outcome = .go(x: 0, carry: false)
+            case "mapInitOriginY": vm.initOriginY(); outcome = .go(x: 0, carry: false)
+            case "mapInitOrigin": vm.initOrigin(); outcome = .go(x: 0, carry: false)
+            case "mapLeaderSteps": vm.limitLeaderSteps(); outcome = .go(x: 0, carry: false)
+            case "mapCameraSteps": vm.dropCameraSteps(); outcome = .go(x: 0, carry: false)
+            case "mapScrollAcc": vm.accumulateScroll(); outcome = .go(x: 0, carry: false)
+            case "mapScroll1XInc", "mapScroll1XDec", "mapScroll1YInc", "mapScroll1YDec":
+                let r = c.routine!
+                vm.scroll1(axis: r.contains("X") ? 0 : 1, rising: r.hasSuffix("Inc")); outcome = .go(x: 0, carry: false)
+            case "mapRecentre": vm.recentreStep(); outcome = .go(x: 0, carry: false)
+            case "mapLeaderProbes": vm.leaderProbes(); outcome = .go(x: 0, carry: false)
+            case "mapStepEffects": vm.stepTileEffects(); outcome = .go(x: 0, carry: false)
+            case "mapHitsObj": outcome = .go(x: 0, carry: vm.probeHitsObj())
+            case "mapEntryTile": vm.initEntryTile(); outcome = .go(x: 0, carry: false)
+            default: throw CTEventError("case \(c.id): no routine \(c.routine ?? "")")
+            }
             var mem: [String: Int] = [:]
             for (a, v) in vm.wram.writtenValues { mem[String(a)] = Int(v) }
             switch outcome {
             case .go(let x, let carry):
-                results.append(Result(id: c.id, kind: "go", x: x, carry: carry, reason: nil, mem: mem))
+                results.append(Result(id: c.id, kind: "go", x: x, carry: carry, reason: reason, mem: mem))
             case .halted(let why):
                 results.append(Result(id: c.id, kind: "halted", x: nil, carry: nil, reason: why, mem: mem))
             case .unmodelled(let why):

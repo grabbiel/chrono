@@ -1,5 +1,7 @@
 // CTEventVM+Movement.swift — the movement opcodes ($92 WalkDir, $9C MoveDir,
-// $96 WalkToTile, $A0 MoveToTile) and the routines they share, as the ROM has
+// $9D MoveDirVar, $96 WalkToTile, $97 WalkToTileVar, $A0 MoveToTile, $A1
+// MoveToTileVar, $9A WalkTowardTile, $94/$95 WalkToObj/Pc, $98/$99
+// WalkTowardObj/Pc, $9E/$9F MoveToObj/Pc, $7A ArcToTile) and the routines they share, as the ROM has
 // them: Obj_CalcDirection (Rom_AngleTable), Obj_SetVelocityChecked (the
 // Rom_SineTable256 step, the probe of the tile it leads to, the random turn
 // off a blocked tile), Evt_FindSolidObjInFront, Obj_Unk305D (centring on a
@@ -217,11 +219,31 @@ extension CTEventVM {
         return .go(x: y, carry: false)
     }
 
-    /// Evt_Op96_WalkToTile and Evt_OpA0_MoveToTile.
-    func walkToTile(_ y: Int, animate: Bool) -> Outcome {
+    /// The low byte of event word `a` (Evt_Unk7F0200 + a x 2), the $97 / $9D / $A1 operands.
+    func eventByte(_ a: Int) -> UInt8 { wram[WRAM.eventWord(a & 0xFF)] }
+
+    /// Evt_Op9D_MoveDirVar: Evt_Op9C_MoveDir with the direction and frames from event words.
+    func moveDirectionVar(_ y: Int) -> Outcome {
+        let c = objCur
+        if wram[WRAM.objUnk1A80 + c] != 0 {
+            if wram[WRAM.objMoveFrames + c] != 0 { return .go(x: y, carry: false) }
+            wram[WRAM.objUnk1A80 + c] = 0
+            return .go(x: y + 3, carry: true)
+        }
+        wram.setWord(Self.objDirection, Int(eventByte(data(y + 1))))
+        wram[WRAM.objMoveFrames + c] = eventByte(data(y + 2))
+        wram[WRAM.objXUnk7F0B00 + c] = 0x80                           // ObjX_Unk7F0B00Dir
+        wram[WRAM.objUnk1A80 + c] &+= 1
+        wram.setWord(WRAM.evtOpSavedPos, y)
+        setVelocityChecked()
+        return .go(x: y, carry: false)
+    }
+
+    /// Evt_Op96_WalkToTile and Evt_OpA0_MoveToTile; $97 and $A1 give the tile from event words.
+    func walkToTile(_ y: Int, animate: Bool, tile: (x: UInt8, y: UInt8)? = nil) -> Outcome {
         let c = objCur
         if wram[WRAM.objMoveFrames + c] != 0 { return .go(x: y, carry: false) }
-        let toX = UInt8(data(y + 1)), toY = UInt8(data(y + 2))
+        let toX = tile?.x ?? UInt8(data(y + 1)), toY = tile?.y ?? UInt8(data(y + 2))
         let fromX = wram[WRAM.objTileX + c], fromY = wram[WRAM.objTileY + c]
         wram[0x7E01F2] = toX; wram[0x7E01F3] = toY; wram[0x7E01F0] = fromX; wram[0x7E01F1] = fromY
         if fromX == toX && fromY == toY {
@@ -247,37 +269,72 @@ extension CTEventVM {
         return .go(x: y, carry: false)
     }
 
-    /// Obj_Unk30B3: a $10 step onto the object in ObjFront_Other (its Obj_PosX/Y on the $10 grid); false when there.
+    /// Evt_Op9A_WalkTowardTile: one step of `frames` toward the tile (Obj_Unk1A80
+    /// set while it runs), ending when it is done or the object has arrived.
+    func walkTowardTile(_ y: Int) -> Outcome {
+        let c = objCur
+        if wram[WRAM.objUnk1A80 + c] != 0 {
+            if wram[WRAM.objMoveFrames + c] != 0 { return .go(x: y, carry: false) }
+            return arrivedToward(y, length: 4)
+        }
+        let toX = UInt8(data(y + 1)), toY = UInt8(data(y + 2))
+        let fromX = wram[WRAM.objTileX + c], fromY = wram[WRAM.objTileY + c]
+        wram[0x7E01F2] = toX; wram[0x7E01F3] = toY; wram[0x7E01F0] = fromX; wram[0x7E01F1] = fromY
+        if fromX == toX && fromY == toY {
+            if wram[WRAM.objUnk1C81 + c] & 0x01 != 0, centreOnTile() {
+                setMoveAnim()
+                return .go(x: y, carry: false)
+            }
+            return arrivedToward(y, length: 4)
+        }
+        return stepToward(y, fromX: fromX, fromY: fromY, toX: toX, toY: toY, framesAt: y + 3)
+    }
+
+    /// The end of a timed step ($98, $99, $9A): Obj_Unk1A80 = 0, Obj_SetStandAnim.
+    func arrivedToward(_ y: Int, length: Int) -> Outcome {
+        wram[WRAM.objUnk1A80 + objCur] = 0
+        setStandAnim()
+        return .go(x: y + length, carry: true)
+    }
+
+    /// Obj_Unk30B3: a $10 step onto the object in ObjFront_Other (its Obj_PosX/Y on
+    /// the $10 grid); false when there. In the ROM's order: Y is read after
+    /// Obj_VelX is set, so a target slot of Obj_Cur + $7F or $80 (an empty
+    /// party place, $80) reads Obj_Cur's new step as its Y.
     func stepOntoObject(_ other: Int) -> Bool {
         let c = objCur
         wram[WRAM.objVelX + c] = 0
         wram[WRAM.objVelY + c] = 0
         let cx = wram.word(WRAM.objPosX + c) & 0xFFF0, ox = wram.word(WRAM.objPosX + other) & 0xFFF0
+        if cx != ox { wram[WRAM.objVelX + c] = ox > cx ? 0x10 : 0xF0 }
         let cy = wram.word(WRAM.objPosY + c) & 0xFFF0, oy = wram.word(WRAM.objPosY + other) & 0xFFF0
         if cx == ox && cy == oy { return false }
-        if cx != ox { wram[WRAM.objVelX + c] = ox > cx ? 0x10 : 0xF0 }
         if cy != oy { wram[WRAM.objVelY + c] = oy > cy ? 0x10 : 0xF0 }
         wram[WRAM.objMoveFrames + c] = 1
         wram[WRAM.objXUnk7F0B00 + c] = 1
         return true
     }
 
-    /// One step toward a tile: Obj_CalcDirection, the facing, Evt_BlockedTurn
-    /// when a solid object is in front, then Obj_Unk1000 frames at the new velocity.
-    func stepToward(_ y: Int, fromX: UInt8, fromY: UInt8, toX: UInt8, toY: UInt8) -> Outcome {
+    /// One step toward a tile: Obj_CalcDirection, the facing (when `animate`),
+    /// Evt_BlockedTurn when a solid object is in front, then Obj_Unk1000 frames
+    /// at the new velocity, or the operand's frames (`frames` read at Y +
+    /// length - 1, with Obj_Unk1A80 + 1) for the timed steps.
+    func stepToward(_ y: Int, fromX: UInt8, fromY: UInt8, toX: UInt8, toY: UInt8, animate: Bool = true,
+                    framesAt: Int? = nil) -> Outcome {
         let c = objCur
         calcDirection(fromX: fromX, fromY: fromY, toX: toX, toY: toY)
-        wram[WRAM.objFacing + c] = dirToFacing(direction)
+        if animate { wram[WRAM.objFacing + c] = dirToFacing(direction) }
         if findSolidObjectInFront(y: y) {
             direction += 0x30
-            wram[WRAM.objFacing + c] = dirToFacing(direction)
+            if animate { wram[WRAM.objFacing + c] = dirToFacing(direction) }
         }
-        let period = wram[WRAM.objUnk1000 + c]
+        let period = framesAt.map { UInt8(data($0)) } ?? wram[WRAM.objUnk1000 + c]
         wram[WRAM.objMoveFrames + c] = period
         wram[WRAM.objXUnk7F0B00 + c] = period
+        if framesAt != nil { wram[WRAM.objUnk1A80 + c] &+= 1 }
         wram.setWord(WRAM.evtOpSavedPos, y)
         setVelocityChecked()
-        setMoveAnim()
+        if animate { setMoveAnim() }
         return .go(x: y, carry: false)
     }
 
@@ -302,6 +359,90 @@ extension CTEventVM {
         }
         setStandAnim()
         return .go(x: y + 2, carry: true)
+    }
+
+    /// Evt_Op98_WalkTowardObj / Evt_Op99_WalkTowardPc through Evt_Op98_Body: one
+    /// step of the operand's frames toward the target (Obj_Unk1A80 set while it runs).
+    func walkTowardObject(_ y: Int, target t: Int) -> Outcome {
+        let c = objCur
+        if wram[WRAM.objUnk1100 + t] & 0x80 == 0 {
+            let toX = wram[WRAM.objTileX + t], toY = wram[WRAM.objTileY + t]
+            wram.setWord(0x7E01E9, t)                                  // ObjFront_Other
+            let fromX = wram[WRAM.objTileX + c], fromY = wram[WRAM.objTileY + c]
+            wram[0x7E01F2] = toX; wram[0x7E01F3] = toY; wram[0x7E01F0] = fromX; wram[0x7E01F1] = fromY
+            if !(near(fromY, toY) && near(fromX, toX)) {
+                return stepToward(y, fromX: fromX, fromY: fromY, toX: toX, toY: toY, framesAt: y + 2)
+            }
+            if wram[WRAM.objUnk1C81 + c] & 0x02 != 0, stepOntoObject(t) {
+                setMoveAnim()
+                return .go(x: y, carry: false)
+            }
+        }
+        return arrivedToward(y, length: 3)
+    }
+
+    /// Evt_Op9E_MoveToObj / Evt_Op9F_MoveToPc through Evt_Op9E_Body: as
+    /// Evt_Op94_WalkToObj without the facing and the animations.
+    func moveToObject(_ y: Int, target t: Int) -> Outcome {
+        let c = objCur
+        if wram[WRAM.objUnk1100 + t] & 0x80 == 0 {
+            let toX = wram[WRAM.objTileX + t], toY = wram[WRAM.objTileY + t]
+            wram.setWord(0x7E01E9, t)
+            let fromX = wram[WRAM.objTileX + c], fromY = wram[WRAM.objTileY + c]
+            wram[0x7E01F2] = toX; wram[0x7E01F3] = toY; wram[0x7E01F0] = fromX; wram[0x7E01F1] = fromY
+            if !(near(fromY, toY) && near(fromX, toX)) {
+                return stepToward(y, fromX: fromX, fromY: fromY, toX: toX, toY: toY, animate: false)
+            }
+            if wram[WRAM.objUnk1C81 + c] & 0x02 != 0, stepOntoObject(t) { return .go(x: y, carry: false) }
+        }
+        return .go(x: y + 2, carry: true)
+    }
+
+    /// Obj_SetVelocity (no tile probe): Obj_VelX/Y from Obj_Speed and
+    /// Obj_Direction, sign-extended into Obj_VelXHi / Obj_VelYHi.
+    func setVelocity() {
+        let c = Int(wram[WRAM.objCur])
+        let speed = wram[WRAM.objSpeed + c]
+        let vy = velocityPart(speed: speed, angle: direction), vx = velocityPart(speed: speed, angle: direction + 0x40)
+        wram[0x7E01DB] = vy                                            // ObjVel_Y
+        wram[WRAM.objVelY + c] = vy; wram[WRAM.objVelYHi + c] = vy & 0x80 != 0 ? 0xFF : 0
+        wram[WRAM.objVelX + c] = vx; wram[WRAM.objVelX + c + 1] = vx & 0x80 != 0 ? 0xFF : 0
+    }
+
+    /// The hardware divider's low quotient byte: dividend / divisor (divisor 0: $FF).
+    static func quotientLow(_ dividend: Int, _ divisor: UInt8) -> UInt8 {
+        divisor == 0 ? 0xFF : UInt8((dividend / Int(divisor)) & 0xFF)
+    }
+
+    /// Evt_Op7A_ArcToTile: an arc (Obj_ArcMode) to the tile. The frames are
+    /// |dx| x 256 / |Obj_VelX| (low byte), else |dy| x 256 / |Obj_VelY|, else g;
+    /// Obj_VelY (16-bit) -= frames x g / 2 so the arc lands; Obj_ArcGravity = g.
+    func arcToTile(_ y: Int) -> Outcome {
+        let c = objCur
+        if wram[WRAM.objUnk1A80 + c] != 0 {
+            if wram[WRAM.objMoveFrames + c] != 0 { return .go(x: y, carry: false) }
+            wram[WRAM.objUnk1A80 + c] = 0; wram[WRAM.objArcMode + c] = 0
+            return .go(x: y + 4, carry: true)
+        }
+        wram.setWord(WRAM.evtOpSavedPos, y)
+        let toX = UInt8(data(y + 1)), toY = UInt8(data(y + 2)), g = UInt8(data(y + 3))
+        let fromX = wram[WRAM.objTileX + c], fromY = wram[WRAM.objTileY + c]
+        wram[0x7E01F2] = toX; wram[0x7E01F3] = toY; wram[0x7E01F0] = fromX; wram[0x7E01F1] = fromY
+        calcDirection(fromX: fromX, fromY: fromY, toX: toX, toY: toY)
+        setVelocity()
+        func magnitude(_ v: UInt8) -> UInt8 { v & 0x80 != 0 ? 0 &- v : v }
+        var frames = g
+        if toX != fromX, wram[WRAM.objVelX + c] != 0 {
+            frames = Self.quotientLow(Int(toX >= fromX ? toX &- fromX : fromX &- toX) << 8, magnitude(wram[WRAM.objVelX + c]))
+        } else if toY != fromY, wram[WRAM.objVelY + c] != 0 {
+            frames = Self.quotientLow(Int(toY >= fromY ? toY &- fromY : fromY &- toY) << 8, magnitude(wram[WRAM.objVelY + c]))
+        }
+        wram[WRAM.objMoveFrames + c] = frames
+        wram[WRAM.objArcGravity + c] = g
+        let lift = (Int(frames) * Int(g)) >> 1
+        wram.setWord(WRAM.objVelY + c, (wram.word(WRAM.objVelY + c) - lift) & 0xFFFF)
+        wram[WRAM.objUnk1A80 + c] = 1; wram[WRAM.objArcMode + c] = 1
+        return .go(x: y, carry: false)
     }
 
     /// Evt_Op8F_FollowPc: toward a party member until next to it or well inside the screen.

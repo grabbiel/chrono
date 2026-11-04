@@ -13,29 +13,47 @@ each opcode it models is run two ways on the same concrete WRAM and compared.
 The operand sets are the ones the ROM's packs use (every distinct instruction,
 or a seeded sample of them), each over seeded random states of the object
 tables, the story bytes and event words, the call-level save table, the
-field's direct page, the pad latches and the tile attributes. A case agrees
+field's direct page, the pad latches and the tile attributes (for the item
+and party opcodes also the inventory, the gold, Menu_PartyOrder and the
+party palette rows). A case agrees
 when both give the same X (where the script goes on), the same carry (on in
 this run or not) and the same final value at every WRAM byte either wrote,
 leaving out the handlers' DP scratch ($01C1-$01EA, $01EE-$01F7). A handler
 that never returns (Sys_HaltWithColor, a loop with no end) must be `halted`
-in the model. The interpreter is run with the entry carry clear and set; a
-handler whose results differ by it is reported, not compared.
+in the model. The interpreter is run with the entry carry clear and set. A
+handler that only hands the entry carry back (no SEC/CLC: $D0, $D1, $D3, and
+$D4/$D6 when nothing is compared) is compared on the clear run, since
+Evt_RunObjScriptSteps enters every handler with C=0 (its ASL of the opcode
+byte); a handler whose results differ by it otherwise is reported, not
+compared.
 
 Nothing from the ROM is written out: the report holds counts, opcodes and
 offsets. The packs and states pass to the CLI through a temporary file.
 
   ct_event_vm.py check [--cli PATH] [--per-op N] [--states K] [--ops 12,13]
-                       [--json report.json]
+                       [--jobs J] [--json report.json]
+
+The ROM-handler runs are spread over J worker processes (default: the CPU
+count), each with its own interpreter; the report does not depend on J.
   ct_event_vm.py unmodelled [--cli PATH]
+  ct_event_vm.py routines [--cases N] [--jobs J] [--json report.json]
+
+`routines` does the same for the field routines the runtime runs around the
+opcodes, on seeded random states: PalAnim_TickAll ($FD:E39C, every
+FieldAnimB record; its DP scratch $0500C-$051A left out), Obj_Unk7170 (a
+palette slot claimed as an object comes into view; with the carry) and
+Obj_Unk734C (given back as it leaves).
 """
 
 import argparse
 import json
+import os
 import random
 import subprocess
 import sys
 import tempfile
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 WS = Path(__file__).resolve().parents[1]
@@ -51,32 +69,51 @@ SCRATCH = (range(0x7E01C1, 0x7E01EB), range(0x7E01EE, 0x7E01F8),
 STEP_LIMIT = 3_000_000
 EXTERNAL_PCS = (0x070004,                  # $C7:0004 Audio_DriverCommand (the APU handshake)
                 0x009E29, 0x00A26B, 0x00A2CE,  # Party_Unk9E29/A26B/A2CE: the field's party routines
-                0x003154)                  # Evt_StartTargetFunc2: the touch start the field runs
+                0x003154,                  # Evt_StartTargetFunc2: the touch start the field runs
+                0x02834D)                  # $C2:834D Menu_Unk834D: Menu_RunCommand's party refresh
 OBJ_TABLES = (0x0C00, 0x0F00, 0x0F80, 0x1000, 0x1080, 0x1100, 0x1180, 0x1300, 0x1600, 0x1680, 0x1780,
               0x1800, 0x1880, 0x1900, 0x1980, 0x1A00, 0x1A80, 0x1B00, 0x1B80, 0x1C00, 0x1C80)
 TILE_OPS = (0x8B, 0x8C, 0x8D, 0x8E, 0x92, 0x96, 0x9C, 0xA0)
+ITEM_OPS = (0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7)
+PARTY_OPS = (0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6)
+MAP_OPS = (0xE4, 0xE5)
+PAL_OPS = (0x2E, 0x33, 0x88)
+SLOW_OPS = (0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83)   # sprite loads, unpacking
 
-# The last full `check` (2026-10-22, default --per-op 24 --states 2): per family the opcodes
-# modelled and verified, the operand sets the packs use, and the cases (agree, disagree).
-# $3B, $3C and $5D are modelled but no pack uses them. One $83 case (EvtPack_284 $08B6) is
-# unverifiable: the ROM handler runs past the interpreter's step limit. test_event_vm.py checks
+# The last full `check` (2026-10-23, default --per-op 24 --states 2, 8 jobs: 922 s): per family
+# the opcodes modelled and verified, the operand sets the packs use, and the cases (agree,
+# disagree). $3B, $3C and $5D are modelled but no pack uses them. Both $83 states of EvtPack_284
+# $08B6 are unverifiable: the ROM handler runs past the interpreter's step limit (one RNG draws
+# the states in opcode order, so opcodes added below $83 change them). test_event_vm.py checks
 # these against CTEventVM.families.
 EVIDENCE = {
     "animation": {"opcodes": 7, "verified": 7, "operandSets": 99, "cases": 336, "agree": 336, "disagree": 0},
     "calls": {"opcodes": 6, "verified": 6, "operandSets": 144, "cases": 288, "agree": 288, "disagree": 0},
-    "characters": {"opcodes": 11, "verified": 11, "operandSets": 69, "cases": 530, "agree": 529, "disagree": 0},
+    "characters": {"opcodes": 11, "verified": 11, "operandSets": 69, "cases": 530, "agree": 528, "disagree": 0},
     "conditions": {"opcodes": 26, "verified": 24, "operandSets": 233, "cases": 1161, "agree": 1161, "disagree": 0},
     "field": {"opcodes": 9, "verified": 9, "operandSets": 126, "cases": 432, "agree": 432, "disagree": 0},
     "flow": {"opcodes": 18, "verified": 18, "operandSets": 177, "cases": 864, "agree": 864, "disagree": 0},
+    "gather": {"opcodes": 2, "verified": 2, "operandSets": 25, "cases": 96, "agree": 96, "disagree": 0},
+    "items": {"opcodes": 8, "verified": 8, "operandSets": 129, "cases": 414, "agree": 414, "disagree": 0},
+    "maps": {"opcodes": 2, "verified": 2, "operandSets": 48, "cases": 96, "agree": 96, "disagree": 0},
+    "membership": {"opcodes": 7, "verified": 7, "operandSets": 70, "cases": 345, "agree": 345, "disagree": 0},
     "memory": {"opcodes": 47, "verified": 46, "operandSets": 730, "cases": 2331, "agree": 2331, "disagree": 0},
     "messages": {"opcodes": 7, "verified": 7, "operandSets": 151, "cases": 337, "agree": 337, "disagree": 0},
     "movement": {"opcodes": 11, "verified": 11, "operandSets": 161, "cases": 555, "agree": 555, "disagree": 0},
     "objects": {"opcodes": 22, "verified": 22, "operandSets": 218, "cases": 1083, "agree": 1083, "disagree": 0},
+    "palettes": {"opcodes": 3, "verified": 3, "operandSets": 56, "cases": 144, "agree": 144, "disagree": 0},
     "party": {"opcodes": 2, "verified": 2, "operandSets": 2, "cases": 96, "agree": 96, "disagree": 0},
+    "steps": {"opcodes": 9, "verified": 9, "operandSets": 75, "cases": 434, "agree": 434, "disagree": 0},
     "sound": {"opcodes": 4, "verified": 4, "operandSets": 96, "cases": 192, "agree": 192, "disagree": 0},
     "warps": {"opcodes": 5, "verified": 5, "operandSets": 61, "cases": 246, "agree": 246, "disagree": 0},
 }
-EVIDENCE_UNMODELLED = {"opcodes": 48, "instructions": 7684, "instructionsInPacks": 142702}
+EVIDENCE_UNMODELLED = {"opcodes": 17, "instructions": 2002, "instructionsInPacks": 142702}
+# The last `routines` (2026-10-23, default --cases 200): cases and agreements per routine.
+EVIDENCE_ROUTINES = {name: (200, 200) for name in (
+    "palAnimTick", "palClaim", "palRelease", "mapInitOriginX", "mapInitOriginY", "mapInitOrigin", "mapLeaderSteps",
+    "mapCameraSteps", "mapScrollAcc", "mapScroll1XInc", "mapScroll1XDec", "mapScroll1YInc", "mapScroll1YDec", "mapRecentre",
+    "mapHitsObj", "mapEntryTile")}
+EVIDENCE_ROUTINES.update({"mapLeaderProbes": (2000, 2000), "mapStepEffects": (2000, 2000)})
 
 
 def scratch(a):
@@ -96,7 +133,55 @@ def biased(rng):
     return rng.randrange(256)
 
 
-def state(rng, objects, op, e4):
+def inventory(rng, wanted):
+    """Battle_InvIds / Battle_InvCounts ($7E:2400, $2500): mostly empty, with the
+    item asked for at a random entry (sometimes twice, or with a count of 0) and
+    the gold ($7E:2C53, 24-bit) near the edges the services test."""
+    ids = bytearray(rng.choice((0, 0, 0, rng.randrange(1, 256))) for _ in range(256))
+    counts = bytearray(rng.choice((0, 1, 2, 98, 99, rng.randrange(256))) for _ in range(256))
+    if rng.random() < 0.7:
+        for _ in range(rng.choice((1, 1, 2))):
+            ids[rng.randrange(256)] = wanted
+    if rng.random() < 0.15:
+        ids = bytearray(rng.randrange(1, 256) for _ in range(256))     # no empty entry
+    hi = rng.choice((0, 0, 1, 0x97, 0x98, 0x99, rng.randrange(256)))
+    lo = rng.choice((0, 1, 0x9680, 0x967F, 0xFFFF, rng.randrange(0x10000)))
+    return [(0x7E2400, ids + counts), (0x7E2C53, bytes((lo & 0xFF, lo >> 8, hi)))]
+
+
+def party_order(rng, char, slots):
+    """Menu_PartyOrder ($7E:2980, 9 places and Menu_Unk29AF), the character
+    asked for listed or not, and the party's objects' Obj_Unk1101 (the
+    character each stands for) matching it now and then."""
+    order = bytearray(rng.choice((0, 1, 2, 3, 4, 5, 6, 7, 0x80, 0x80 | rng.randrange(8), rng.randrange(256)))
+                      for _ in range(9))
+    if rng.random() < 0.6:
+        order[rng.randrange(9)] = char
+    if rng.random() < 0.2:
+        order[rng.randrange(3)] = 0x80 | char
+    tail = bytearray(biased(rng) for _ in range(0x30 - 9))
+    unk1101 = [(0x7E1101 + s, bytes((char if rng.random() < 0.5 else rng.randrange(8),))) for s in slots]
+    return [(0x7E2980, order + tail), (0x7E21A0, bytearray(rng.randrange(256) for _ in range(0x60)))] + unk1101
+
+
+def palettes(rng):
+    """FieldAnimB ($0520, 12 records of 12 bytes: some of the 8 the handlers
+    search free), ObjX_PalAnimRec (a record offset or none), Obj_PalSrc (any
+    offset in bank $E4), Pal_Buf and Pal_CgramBuf."""
+    recs = bytearray(rng.randrange(256) for _ in range(0x90))
+    for k in range(12):
+        if rng.random() < 0.4:
+            recs[12 * k] = 0
+    links = bytearray()
+    for _ in range(16):
+        w = 0xFFFF if rng.random() < 0.4 else 12 * rng.randrange(8)
+        links += bytes((w & 0xFF, w >> 8))
+    src = bytearray(rng.randrange(256) for _ in range(0x20))
+    return [(0x7E0520, recs), (0x7F0B80, links), (0x7E1400, src),
+            (0x7E2000, bytearray(rng.randrange(256) for _ in range(0x400)))]
+
+
+def state(rng, objects, op, e4, operand=b"\0\0"):
     """[(address, bytes)]: one random WRAM state for a handler of `op`."""
     n = max(1, min(16, objects))
     slot = lambda: 2 * rng.randrange(n)  # noqa: E731
@@ -144,6 +229,23 @@ def state(rng, objects, op, e4):
     out.append((0x7F0980, bytearray(biased(rng) for _ in range(0x280))))  # ObjX_* $0980-$0BFF
     if op in TILE_OPS:
         out.append((0x7E7000, bytearray(rng.randrange(256) for _ in range(0x1000))))
+    if op in MAP_OPS:                                       # the map planes the copy reads and writes
+        out.append((0x7E3000, bytearray(rng.randrange(256) for _ in range(0x4000))))
+        out.append((0x7E7000, bytearray(rng.randrange(256) for _ in range(0x4000))))
+    if op in ITEM_OPS:
+        wanted = operand[0]
+        if op == 0xC7:                                      # the item is event word a's low byte
+            story = next(b for at, b in out if at == 0x7F0000)
+            wanted = story[0x200 + 2 * operand[0]] if rng.random() < 0.8 else wanted
+        out += inventory(rng, wanted)
+    if op in (0xD9, 0xDA):                                  # the arrival counters, around their end values
+        story = next(b for at, b in out if at == 0x7F0000)
+        story[0x3FC], story[0x3FE] = rng.choice((0, 0, 1, 2, 3, 4, 5)), rng.choice((0, 1, 2, 3, 3, 4))
+    if op in PAL_OPS:
+        out += palettes(rng)
+    if op in PARTY_OPS:
+        slots = [dp[0x97 + p] for p in (0, 2, 4) if dp[0x97 + p] < 0x80]
+        out += party_order(rng, operand[0], slots)
     return out
 
 
@@ -173,8 +275,10 @@ def operand_sets(loaded, wanted, per_op, rng):
 
 class Concrete:
     """absint.Machine with every WRAM byte known (zero unless given) and the
-    multiplier modelled; loops are not widened (a concrete state that comes
-    back is a loop with no end)."""
+    multiplier and divider modelled (whichever was started last answers at
+    $4216/$4217; the quotient at $4214/$4215, $FFFF for a divisor of 0);
+    loops are not widened (a concrete state that comes back is a loop with no
+    end)."""
 
     def __init__(self, interp, absint):
         machine = interp.machine
@@ -190,12 +294,16 @@ class Concrete:
                 bank, low = a >> 16, a & 0xFFFF
                 if bank in (0x7E, 0x7F):
                     return 0
-                if (bank < 0x40 or 0x80 <= bank < 0xC0) and low in (0x4216, 0x4217):
-                    f = [v for k, v in s.mem.items() if k & 0xFFFF in (0x4202, 0x4203) and (k >> 16) not in (0x7E, 0x7F)]
+                if (bank < 0x40 or 0x80 <= bank < 0xC0) and low in (0x4214, 0x4215, 0x4216, 0x4217):
                     m = {k & 0xFFFF: v for k, v in s.mem.items() if (k >> 16) not in (0x7E, 0x7F)}
-                    if len(f) >= 2 and None not in (m.get(0x4202), m.get(0x4203)) and 0x4206 not in m:
+                    if self.arith == "mul" and low >= 0x4216 and None not in (m.get(0x4202), m.get(0x4203)):
                         p = m[0x4202] * m[0x4203]
                         return p & 0xFF if low == 0x4216 else p >> 8
+                    if self.arith == "div" and None not in (m.get(0x4204), m.get(0x4205), m.get(0x4206)):
+                        n, d = m[0x4204] | m[0x4205] << 8, m[0x4206]
+                        q, r = (n // d, n % d) if d else (0xFFFF, n)
+                        v = q if low < 0x4216 else r
+                        return v & 0xFF if low in (0x4214, 0x4216) else v >> 8
                     return None
                 return base.read8(self, s, addr)
 
@@ -206,6 +314,8 @@ class Concrete:
                     if (bank < 0x40 or 0x80 <= bank < 0xC0) and 0x2180 <= low <= 0x2183:
                         self.wram_port(s, low, v)
                         return
+                    if (bank < 0x40 or 0x80 <= bank < 0xC0) and low in (0x4203, 0x4206):
+                        self.arith = "mul" if low == 0x4203 else "div"     # writing it starts the unit
                 self.writes += 1
                 base.write8(self, s, addr, v)
 
@@ -234,12 +344,12 @@ class Concrete:
         interp.machine = m
         self.interp, self.absint, self.machine = interp, absint, m
 
-    def execute(self, s, known):
+    def execute(self, s, known, ret="rts"):
         """Machine.run for one concrete state: no forks, and a loop is a branch
         reached again with the same registers and no write since (a halt)."""
         m, absint = self.machine, self.absint
         m.known, m.reads, m.control, m.opaque = known, set(), set(), set()
-        m.writes, m.wmadd = 0, 0
+        m.writes, m.wmadd, m.arith = 0, 0, None
         s.frames = []
         base, seen = len(s.sp), set()
         for steps in range(1, STEP_LIMIT + 1):
@@ -254,7 +364,7 @@ class Concrete:
                 continue
             if r[0] == "fork":
                 raise absint.Unresolved("the handler forks on an unknown (hardware) value")
-            if r[0] != "rts":
+            if r[0] != ret:
                 raise absint.Unresolved(f"the handler ends with {r[0]}")
             return s
         raise absint.Unresolved("too many steps")
@@ -288,6 +398,32 @@ class Concrete:
         return ("go", st.x, st.c, mem, known)
 
 
+    def run_routine(self, pc, short_xy, ret, regions, carry, dp=0x0100):
+        """A field routine from `pc` (M=1, DP=`dp`, DB=$00): ('go', None, carry, {addr: byte}, known)."""
+        absint = self.absint
+        s = absint.State()
+        s.pc, s.a, s.b, s.x, s.y = pc, 0, 0, 0, 0
+        s.d, s.db, s.m, s.xf = dp, 0x00, True, short_xy
+        s.z = s.n = s.v = None
+        s.c = carry
+        s.sp, s.spt, s.mem, s.memt = [], [], {}, {}
+        s.at = s.xt = s.yt = s.ft = absint.E
+        s.depth = 0
+        known = {}
+        for at, block in regions:
+            known.update((at + i, b) for i, b in enumerate(block))
+        try:
+            st = self.execute(s, known, ret)
+        except absint.Unresolved as e:
+            return ("unknown", f"interpreter: {e}")
+        if st is None:
+            return ("halted",)
+        mem = {a: v for a, v in st.mem.items() if a >> 16 in (0x7E, 0x7F)}
+        if any(v is None for v in mem.values()):
+            return ("unknown", "the routine writes an unknown (hardware) value")
+        return ("go", None, st.c, mem, known)
+
+
 def compare(rom_out, swift, known):
     """None when they agree, else a short reason (addresses, never bytes of the ROM)."""
     kind = swift["kind"]
@@ -311,6 +447,273 @@ def compare(rom_out, swift, known):
     return None
 
 
+ROUTINES = {                               # entry PC, 8-bit X/Y, how it returns[, DP]
+    "palAnimTick": (0xFDE39C, False, "rtl"),
+    "palClaim": (0xC07170, True, "rts"),
+    "palRelease": (0xC0734C, True, "rts"),
+    "mapInitOriginX": (0xC07506, False, "rts", 0x1D00),     # Map_InitOriginX
+    "mapInitOriginY": (0xC07553, False, "rts", 0x1D00),     # Map_InitOriginY
+    "mapInitOrigin": (0xC074A6, False, "rts", 0x1D00),      # Map_InitOrigin (Sub_C07F9A's outputs not compared)
+    "mapLeaderSteps": (0xC09175, False, "rts", 0x1D00),     # Map_Unk9175
+    "mapCameraSteps": (0xC099DE, False, "rts", 0x1D00),     # Map_Unk99DE
+    "mapScrollAcc": (0xC091AC, False, "rts", 0x1D00),       # Map_Unk91AC
+    "mapScroll1XInc": (0xC0944B, False, "rts", 0x1D00),
+    "mapScroll1XDec": (0xC0947D, False, "rts", 0x1D00),
+    "mapScroll1YInc": (0xC094AD, False, "rts", 0x1D00),
+    "mapScroll1YDec": (0xC094DF, False, "rts", 0x1D00),
+    "mapRecentre": (0xC0885A, False, "rts"),                 # Field_Unk885A (layer 1 only, see ROUTINE_IGNORE)
+    "mapLeaderProbes": (0xC08A6D, True, "rts", 0x1D00),     # Map_Unk8A6D
+    "mapHitsObj": (0xC09923, True, "rts", 0x1D00),          # Map_ProbeHitsObj (carry compared)
+    "mapStepEffects": (0xC09C5C, True, "rts", 0x1D00),      # Map_StepTileEffects
+    "mapEntryTile": (0xC09DC3, True, "rts"),                # Map_InitEntryTile
+}
+ROUTINE_CARRY = {"palClaim", "mapHitsObj"}                  # routines whose carry is compared
+PROBE_ROUTINES = {"mapLeaderProbes", "mapHitsObj", "mapStepEffects", "mapEntryTile"}
+# Routines whose branches turn on one tile edge or one exit row: ten times
+# the cases (2000 run in about 13 s).
+ROUTINE_CASE_SCALE = {"mapLeaderProbes": 10, "mapStepEffects": 10}
+ROUTINE_SCRATCH = range(0x7E050C, 0x7E051B)    # PalAnim_Save ... PalAnim_Dest (DP $0500)
+# Bytes a routine writes that the model leaves to code it does not run:
+# Sub_C07F9A's edge addresses and sizes and its Map_Span* scratch; for
+# Field_Unk885A also Map_Unk93E1's layers 2 and 3 (scroll words, fine
+# counters, half-rate layer 2's origin and bounds Map_Unk1D12-1D18,
+# Map_Unk1DFB's layer-3 wave phase), the edge and built flags,
+# the tilemap biases and the edge builders' row and column buffers.
+_EDGES = (range(0x7E1D52, 0x7E1D70), range(0x7E1D9F, 0x7E1DFB))
+ROUTINE_IGNORE = {"mapInitOrigin": _EDGES,
+                  "mapRecentre": _EDGES + (range(0x7E1D12, 0x7E1D1A), range(0x7E1D74, 0x7E1D7C), range(0x7E1D8B, 0x7E1D93),
+                                           range(0x7E1D94, 0x7E1D96), range(0x7E1D97, 0x7E1D9F), range(0x7E1DFB, 0x7E1DFC),
+                                           range(0x7EC800, 0x7EE000))}
+
+
+def tick_state(rng):
+    """12 FieldAnimB records of every kind, most due this frame (.Unk4 = .Unk5 - 1),
+    .Unk2 1-32 colours, .Unk6 mostly 0-7, and random Pal_Buf / Pal_CgramBuf."""
+    recs = bytearray()
+    for _ in range(12):
+        kind = rng.choice((0, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xF0))
+        kind = kind | rng.randrange(16) if kind else 0
+        period = rng.randrange(1, 256)
+        tick = (period - 1) if rng.random() < 0.75 else rng.randrange(256)
+        ptr = rng.randrange(0x10000)
+        channels = rng.randrange(8) if rng.random() < 0.7 else rng.randrange(256)     # .Unk6: kinds 4-7 pick by 0-7
+        recs += bytes((kind, rng.randrange(256), rng.randrange(1, 33), rng.randrange(256), tick, period,
+                       channels, biased(rng), biased(rng), ptr & 0xFF, ptr >> 8, rng.choice((0xFD, 0xF6, 0xC0))))
+    return [(0x7E0520, recs), (0x7E2000, bytearray(rng.randrange(256) for _ in range(0x400)))]
+
+
+def camera_state(rng):
+    """The map page ($1D00) with steps of every size and sign, fine counters
+    mostly 0-$0F, the tile origin near the limits (its bounds a screen on),
+    a scroll-to in each mode, and the leader's tile and screen position near
+    the limits and the screen's middle; the field page's shake, entry tile
+    and half-rate layer flag."""
+    page = bytearray(biased(rng) for _ in range(0x100))
+    left, top = rng.randrange(0, 0x30), rng.randrange(0, 0x30)
+    right, bottom = left + rng.randrange(0, 0x30), top + rng.randrange(0, 0x30)
+    page[0x1A], page[0x1B], page[0x1C], page[0x1D] = left, right & 0xFF, top, bottom & 0xFF
+    for at in (0x2E, 0x30, 0x2A, 0x2B):
+        page[at] = rng.choice((0, 0, 0x10, 0xF0, 0x20, 0xE0, 0x08, 0xF8, rng.randrange(256)))
+    ox = rng.choice((left, right - 0x10, rng.randrange(0x60))) * 2 + rng.randrange(-2, 3)
+    oy = rng.choice((top, bottom - 0x0E, rng.randrange(0x60))) * 2 + rng.randrange(-2, 3)
+    page[0x0A], page[0x0B] = ox & 0xFF, 0
+    page[0x0E], page[0x0F] = oy & 0xFF, 0
+    page[0x0C], page[0x0D] = (ox + 0x20) & 0xFF, 0
+    page[0x10], page[0x11] = (oy + 0x1C) & 0xFF, 0
+    page[0x00] = rng.choice((0, 0, 1, 2, rng.randrange(256)))
+    page[0x01] = rng.randrange(4)
+    page[0x02] = (ox + rng.choice((0, 0, 2, -2, rng.randrange(-8, 9)))) & 0xFF
+    page[0x03] = (oy + rng.choice((0, 0, 2, -2, rng.randrange(-8, 9)))) & 0xFF
+    for at in range(0x24, 0x2A):
+        page[at] = rng.choice((0, 0, 0x10, 0xF0, 0x04, rng.randrange(256)))
+    page[0x4D] = rng.choice((0, 0, 1, 2, rng.randrange(256)))
+    for at in range(0x3B, 0x41):
+        page[at] = rng.choice((0, rng.randrange(16), (rng.randrange(16) | 0xF0), rng.randrange(256)))
+    page[0x41:0x4D] = bytes(rng.randrange(4) for _ in range(12))
+    for at in (0x87, 0x89):
+        page[at], page[at + 1] = rng.randrange(256), rng.randrange(4)
+    for at in (0x93, 0x96):
+        page[at] = rng.choice((0, 0, 7, 8, 0x0F, rng.randrange(16), rng.randrange(256)))
+    page[0x36] = rng.randrange(8)
+    leader = rng.choice((0, 2, 4, 6, 0x80))
+    dp = bytearray(biased(rng) for _ in range(0xC0))
+    dp[0x97], dp[0x98] = leader, rng.choice((0, 0, 0, 1))
+    dp[0x02] = (rng.choice((left + 8, right - 8, rng.randrange(0x70))) + rng.randrange(-1, 2)) & 0xFF
+    dp[0x03] = (rng.choice((top + 8, bottom - 6, rng.randrange(0x70))) + rng.randrange(-1, 2)) & 0xFF
+    dp[0xBC] = rng.choice((0, 0, 1))
+    dp[0x38] = rng.choice((0, 1, 2, 3))
+    screen = bytearray(rng.choice((0x80, 0x88, 0x7F, 0x87, 0x89, 0x81, rng.randrange(256))) for _ in range(0x200))
+    tiles = bytearray(rng.randrange(256) for _ in range(0x200))
+    for s in range(0, 0x80, 2):                     # Obj_TileX/Y near the limits
+        tiles[s + 1] = rng.choice((left, right & 0xFF, top + 1, (bottom + 1) & 0xFF, rng.randrange(256))) & 0xFF
+        tiles[0x80 + s + 1] = rng.choice((top, top + 1, top + 2, bottom & 0xFF, (bottom + 1) & 0xFF, rng.randrange(256))) & 0xFF
+    misc = [(0x7E0400, bytearray((rng.randrange(8),))), (0x7E0BC9, bytearray((rng.choice((0, 0x80, rng.randrange(256))),)))]
+    return [(0x7E1D00, page), (0x7E0100, dp), (0x7E0A00, screen), (0x7E1800, tiles)] + misc
+
+
+# The leader's box offsets (X +-$70, Y -$40/-$70, slides of $10 and the
+# no-CLC $61): a low byte this far below a tile edge or the half-tile line
+# ($80) puts a probe on it.
+_PROBE_EDGES = (0x70, -0x70, 0x80, -0x80, 0x60, 0x61, -0x60, 0x10, -0x10, 0x40, 0x30, 0x20, -0x20)
+
+
+def _edge_byte(rng):
+    return (rng.choice((0x100, 0x80)) - rng.choice(_PROBE_EDGES) + rng.choice((-1, 0, 0, 1))) & 0xFF
+
+
+def probe_state(rng, exits=None):
+    """The leader's collision: a 16 x 16 (sometimes 32 x 32) map of tiles
+    with every shape, level and push, a few treasure and exit tiles (the
+    exits of a real location: `exits` maps Map_ExitRec0 to its records'
+    (column, row)), steps of every direction, the leader often a box offset
+    from a tile edge or on an exit's column near the $3F row limit, and
+    objects around the leader's box."""
+    exits = exits or {0: []}
+    page = bytearray(biased(rng) for _ in range(0x100))
+    mask = rng.choice((0x0F, 0x0F, 0x0F, 0x1F))
+    page[0x1E], page[0x1F] = mask, mask
+    rec0 = rng.choice(list(exits))
+    page[0x04:0x06] = rec0.to_bytes(2, "little")
+    aim = rng.randrange(len(exits[rec0])) if exits[rec0] and rng.random() < 0.3 else None
+    for at in (0x2E, 0x30):
+        page[at] = rng.choice((0, 0x10, 0xF0, 0x20, 0xE0, 0x10, 0xF0, rng.randrange(256)))
+    if page[0x2E] == page[0x30] == 0:
+        page[0x2E] = 0x10
+    rows = mask + 1
+    hi = bytearray(rows * 0x100)
+    attr = bytearray(rows * 0x100)
+    for r in range(rows):
+        for col in range(rows):
+            at = r * 0x100 + col
+            hi[0xC0 + at] = rng.choice((0, 0, 0, 1, rng.randrange(2, 0x18), rng.randrange(0x18, 0x20),
+                                        0x1E, rng.randrange(0x40))) << 2 | rng.randrange(4)
+            attr[at] = rng.choice((0, 0, 0, 0x10, rng.randrange(256)))                       # AttrA
+            attr[0x40 + at] = rng.choice((0x01, 0x02, 0x03, 0x09, 0x1B, 0x04, 0x20, 0, rng.randrange(256)))
+            attr[0x80 + at] = 0x80 if rng.random() < 0.93 else rng.randrange(4)                 # exit
+            if aim is not None and rng.random() < 0.5:
+                attr[0x80 + at] = aim
+            attr[0xC0 + at] = 0x80 if rng.random() < 0.95 else rng.randrange(0x80)             # treasure
+    dp = bytearray(biased(rng) for _ in range(0xC0))
+    leader = rng.choice((0, 2, 4, 6))
+    dp[0x97], dp[0x98] = leader, rng.choice((0, 0, 0, 1))
+    dp[0x99], dp[0x9B] = rng.choice((0x80, 2, 8)), rng.choice((0x80, 4, 10))
+    dp[0x55] = rng.randrange(4)
+    dp[0x17] = rng.choice((0, 0, 0x80, 0x10, rng.randrange(256)))
+    dp[0x02], dp[0x03] = rng.randrange(0x40), rng.randrange(0x40)
+    lx = rng.randrange(1, rows - 1) << 8 | rng.choice((0x00, 0x10, 0x70, 0x80, 0x8F, 0x90, 0xF0, rng.randrange(256),
+                                                       _edge_byte(rng), _edge_byte(rng)))
+    ly = rng.randrange(1, rows - 1) << 8 | rng.choice((0x00, 0x10, 0x70, 0x80, 0xFF, rng.randrange(256),
+                                                       _edge_byte(rng), _edge_byte(rng)))
+    if aim is not None:
+        col, row = exits[rec0][aim]
+        lx = col << 8 | lx & 0xFF
+        ly = (row + rng.choice((0, 0x3E, 0x3F, 0x40, -0x3E, -0x3F, -0x40))) % 0x100 << 8 | ly & 0xFF
+    pos = bytearray(rng.randrange(256) for _ in range(0x100))
+    flags = {0x0F00: bytearray(0x80), 0x1100: bytearray(0x80), 0x1B00: bytearray(0x80)}
+    for s in range(0, 0x20, 2):
+        x = lx + rng.randrange(-0x1A0, 0x1A0) if rng.random() < 0.6 else rng.randrange(0x10000)
+        y = ly + rng.randrange(-0x1A0, 0x1A0) if rng.random() < 0.6 else rng.randrange(0x10000)
+        pos[s:s + 2] = (x & 0xFFFF).to_bytes(2, "little")
+        pos[0x80 + s:0x82 + s] = (y & 0xFFFF).to_bytes(2, "little")
+        flags[0x0F00][s] = rng.choice((0, 1, 1))
+        flags[0x1100][s] = rng.choice((0, 0, 0x80))
+        flags[0x1B00][s + 1] = rng.randrange(4)
+    pos[leader:leader + 2] = lx.to_bytes(2, "little")
+    pos[0x80 + leader:0x82 + leader] = ly.to_bytes(2, "little")
+    regions = [(0x7E1D00, page), (0x7E0100, dp), (0x7E1800, pos), (0x7E3000, hi), (0x7E7000, attr),
+               (0x7F2000, bytearray((rng.randrange(17),)))]
+    regions += [(0x7E0000 + base, b) for base, b in flags.items()]
+    return regions
+
+
+def slot_state(rng):
+    """Obj_Cur and its kind, the 8 palette slots (free or owned), the chain
+    links, a few shared Obj_PalSrc values and the Obj_OamAttr palette bits."""
+    cur = 2 * rng.randrange(16)
+    dp = bytearray(biased(rng) for _ in range(0xC0))
+    dp[0x6D], dp[0x6E] = cur, 0
+    dp[0x54] = 0x80 if rng.random() < 0.15 else rng.randrange(0x80)       # Field_Unk54 bit 7: no slots
+    kinds = bytearray(biased(rng) for _ in range(32))
+    kinds[cur] = rng.choice(list(range(12)) + [0x80, 0x85])
+    owners = [2 * rng.randrange(16) for _ in range(4)] + [cur]
+    slots = bytearray(0x80 if rng.random() < 0.4 else rng.choice(owners) for _ in range(8))
+    links = bytearray(0x80 if rng.random() < 0.5 else 2 * rng.randrange(16) for _ in range(0x20))
+    srcs = bytearray()
+    for _ in range(16):
+        w = rng.choice((0x1000, 0x1018, 0x2430, rng.randrange(0x10000)))
+        srcs += bytes((w & 0xFF, w >> 8))
+    attr = bytearray(biased(rng) for _ in range(32))
+    for k in range(1, 32, 2):
+        attr[k] = rng.randrange(8) << 1 if rng.random() < 0.8 else rng.randrange(256)
+    return [(0x7E0100, dp), (0x7E1100, kinds), (0x7E0B80, slots), (0x7E0B00, links), (0x7E1400, srcs),
+            (0x7E0F80, attr)]
+
+
+_WORKER = {}
+
+
+def _worker_init(packs_by_label):
+    """A pool worker: its own ROM image, interpreter and concrete machine."""
+    rom = packs.read_rom()
+    interp, _ = packs.interpreter(rom)
+    import absint                       # on the path once the interpreter is set up
+    _WORKER.update(conc=Concrete(interp, absint), packs=packs_by_label)
+
+
+def _verdict(task):
+    """One case's ROM-handler runs (entry carry clear and set) against the model's
+    result: (case id, outcome, message or None)."""
+    cid, label, y, regions, swift = task
+    conc, data = _WORKER["conc"], _WORKER["packs"][label]
+    outs = [conc.run(data, y, regions, carry) for carry in (False, True)]
+    if outs[0][0] == "unknown":
+        return cid, "unverifiable", f"{label} ${y:04X}: {outs[0][1]}"
+    if outs[0][:4] != outs[1][:4]:
+        keeps = outs[0][0] == outs[1][0] == "go" and outs[0][1] == outs[1][1] and outs[0][3] == outs[1][3] \
+            and outs[0][2] is False and outs[1][2] is True
+        if not keeps:                       # anything but the entry carry handed back
+            return cid, "carry-dependent", None
+    why = compare(outs[0], swift, outs[0][4] if outs[0][0] == "go" else {})
+    if why is not None:
+        return cid, "disagree", f"{label} ${y:04X}: {why}"
+    return cid, "halts" if outs[0][0] == "halted" else "agree", None
+
+
+def _routine_verdict(task):
+    """One routine case: the ROM routine (entry carry clear and set) against the
+    model's writes, and its carry where the model claims a slot."""
+    cid, name, regions, swift = task
+    pc, short_xy, ret, *dp = ROUTINES[name]
+    conc = _WORKER["conc"]
+    outs = [conc.run_routine(pc, short_xy, ret, regions, carry, *dp) for carry in (False, True)]
+    if outs[0][0] != "go" or outs[1][0] != "go":
+        return cid, "unverifiable", f"{name} #{cid}: {outs[0][1:] if outs[0][0] != 'go' else outs[1][1:]}"
+    _, _, c0, mem, known = outs[0]
+    if mem != outs[1][3]:
+        return cid, "carry-dependent", None
+    if name in ROUTINE_CARRY and swift.get("reason") != "skipped" and not (c0 == outs[1][2] == swift["carry"]):
+        return cid, "disagree", f"{name} #{cid}: carry {c0}/{outs[1][2]} vs model {swift['carry']}"
+    smem = {int(k): v for k, v in swift["mem"].items()}
+    for a in sorted(set(mem) | set(smem)):
+        if scratch(a) or a in ROUTINE_SCRATCH or any(a in r for r in ROUTINE_IGNORE.get(name, ())):
+            continue
+        r, m = mem.get(a, known.get(a, 0)), smem.get(a, known.get(a, 0))
+        if r != m:
+            return cid, "disagree", f"{name} #{cid}: WRAM ${a:06X}: ROM {r:#04x} vs model {m:#04x}"
+    return cid, "agree", None
+
+
+def verdicts(tasks, by_label, jobs, fn=_verdict):
+    """{case id: (outcome, message)} for the tasks, over `jobs` processes (1: in this one)."""
+    if jobs <= 1:
+        _worker_init(by_label)
+        return {cid: (k, m) for cid, k, m in map(fn, tasks)}
+    used = {t[1] for t in tasks}
+    with ProcessPoolExecutor(max_workers=jobs, initializer=_worker_init,
+                             initargs=({k: v for k, v in by_label.items() if k in used},)) as pool:
+        return {cid: (k, m) for cid, k, m in pool.map(fn, tasks, chunksize=4)}
+
+
 def check(args):
     rom = packs.read_rom()
     table = json.loads(packs.TABLE.read_text())["opcodes"]
@@ -321,16 +724,13 @@ def check(args):
     wanted = set(range(256)) if not args.ops else {int(o, 16) for o in args.ops.split(",")}
     sites = operand_sets(loaded, wanted, args.per_op, rng)
     e4 = rom[0x24FFE0:0x24FFE8]                         # RomE4_PtrInit: Field_E4Ptr0-3 low words
-    interp, _ = packs.interpreter(rom)
-    import absint
-    conc = Concrete(interp, absint)
     cases, meta = [], {}
     for op in sorted(sites):
         states = max(args.states, -(-args.per_op * args.states // len(sites[op])))   # few operand sets: more states
         for label, y in sites[op]:
             for _ in range(states):
                 objects = by_label[label][0]
-                regions = state(rng, objects, op, e4)
+                regions = state(rng, objects, op, e4, by_label[label][2 + y:4 + y])
                 cid = len(cases)
                 cases.append({"id": cid, "pack": label, "y": y,
                               "regions": [[at, bytes(b).hex()] for at, b in regions]})
@@ -348,33 +748,30 @@ def check(args):
     family_of = {int(op): f for f, ops in families.items() for op in ops}
     per_op = defaultdict(Counter)
     failures = defaultdict(list)
+    tasks = []
     for cid, (op, label, y, regions) in meta.items():
         swift = results[cid]
         if op not in family_of:
             per_op[op]["unmodelled"] += 1
-            continue
-        if swift["kind"] == "unmodelled":
+        elif swift["kind"] == "unmodelled":
             per_op[op]["declined"] += 1                 # the model stops (e.g. a comparison past the table)
-            continue
-        data = by_label[label]
-        outs = [conc.run(data, y, regions, carry) for carry in (False, True)]
-        if outs[0][0] == "unknown":
-            per_op[op]["unverifiable"] += 1
-            failures[op].append(f"{label} ${y:04X}: {outs[0][1]}")
-            continue
-        if outs[0][:4] != outs[1][:4]:
-            per_op[op]["carry-dependent"] += 1
-            continue
-        why = compare(outs[0], swift, outs[0][4] if outs[0][0] == "go" else {})
-        if why is None:
+        else:
+            tasks.append((cid, label, y, regions, swift))
+    tasks.sort(key=lambda t: (meta[t[0]][0] not in SLOW_OPS, t[0]))     # the long handlers first
+    done = verdicts(tasks, by_label, args.jobs)
+    for cid, label, y, regions, swift in sorted(tasks):
+        op = meta[cid][0]
+        kind, msg = done[cid]
+        if kind in ("agree", "halts"):
             per_op[op]["agree"] += 1
             if str(0x7E0306) in swift["mem"]:
                 per_op[op]["unpacked"] += 1             # agreed through Decomp_ToWram
-            if outs[0][0] == "halted":
+            if kind == "halts":
                 per_op[op]["halts"] += 1
         else:
-            per_op[op]["disagree"] += 1
-            failures[op].append(f"{label} ${y:04X}: {why}")
+            per_op[op][kind] += 1
+        if msg:
+            failures[op].append(msg)
     report = {"families": {}, "unmodelled": {}, "failures": {f"{op:02X}": v[:5] for op, v in failures.items()}}
     for fam, ops in sorted(families.items()):
         rows = {f"{op:02X}": dict(per_op[op]) for op in ops if op in per_op}
@@ -404,6 +801,67 @@ def check(args):
     print(f"{t['agree']} of {t['cases']} cases agree; {t['opcodesVerified']} of {t['opcodes']} modelled opcodes verified; "
           f"{t['instructionsModelled']} of {t['instructionsInPacks']} pack instructions are modelled opcodes")
     return 1 if t["disagree"] else 0
+
+
+def routines(args):
+    rom = packs.read_rom()
+    table = json.loads(packs.TABLE.read_text())["opcodes"]
+    loaded, _ = load(rom, table)
+    label, data, _ = loaded[0]                           # any pack: the routines do not read it
+    rng = random.Random(SEED + 1)
+    exit_ofs = sorted({rom[0x250000 + 2 * k] | rom[0x250001 + 2 * k] << 8 for k in range(0x201)})
+    exits = {}                                           # Map_ExitRec0 -> its records' (column, row)
+    for ofs, end in zip(exit_ofs, exit_ofs[1:]):
+        at = 0x250000 + ofs
+        exits[ofs] = [(rom[at + 7 * i], rom[at + 7 * i + 1]) for i in range(min((end - ofs) // 7, 4))]
+    cases, meta = [], {}
+    for name in ROUTINES:
+        if args.only and name not in args.only.split(","):
+            continue
+        for _ in range(args.cases * ROUTINE_CASE_SCALE.get(name, 1)):
+            if name in PROBE_ROUTINES:
+                regions = probe_state(rng, exits)
+            elif name.startswith("map"):
+                regions = camera_state(rng)
+            else:
+                regions = tick_state(rng) if name == "palAnimTick" else slot_state(rng)
+            cid = len(cases)
+            cases.append({"id": cid, "pack": label, "y": 0, "routine": name,
+                          "regions": [[at, bytes(b).hex()] for at, b in regions]})
+            meta[cid] = (name, regions)
+    with tempfile.TemporaryDirectory(prefix="ct-event-vm-") as tmp:
+        cin, cout = Path(tmp) / "cases.json", Path(tmp) / "results.json"
+        cin.write_text(json.dumps({"packs": {label: data.hex()}, "cases": cases}))
+        r = subprocess.run([str(args.cli), "runtime", "vectors", str(packs.WS / "ct_clean.sfc"), str(cin), "--out", str(cout)],
+                           capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            raise SystemExit(f"runtime vectors failed: {r.stdout}{r.stderr}")
+        results = {r["id"]: r for r in json.loads(cout.read_text())["results"]}
+    tasks = [(cid, name, regions, results[cid]) for cid, (name, regions) in meta.items()]
+    done = verdicts([(t[0], label, t[1], t[2], t[3]) for t in tasks], {label: data}, args.jobs,
+                    fn=_routine_task)
+    report = {}
+    for cid, (name, _) in meta.items():
+        kind, msg = done[cid]
+        row = report.setdefault(name, {"cases": 0, "agree": 0, "disagree": 0, "failures": []})
+        row["cases"] += 1
+        row[kind] = row.get(kind, 0) + 1
+        if msg and len(row["failures"]) < 5:
+            row["failures"].append(msg)
+    if args.json:
+        Path(args.json).write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
+    for name, row in report.items():
+        print(f"{name:<15} {row['agree']:5d} of {row['cases']:5d} cases agree  {row['disagree']} disagree")
+        for m in row["failures"][:3]:
+            print(f"  {m}")
+    clean = sum(1 for row in report.values() if row["agree"] == row["cases"])
+    print(f"{clean} of {len(report)} routines agree with the ROM in every case")
+    return 1 if any(row["disagree"] for row in report.values()) else 0
+
+
+def _routine_task(task):
+    cid, _, name, regions, swift = task
+    return _routine_verdict((cid, name, regions, swift))
 
 
 def unmodelled(args):
@@ -436,10 +894,17 @@ def main():
     c.add_argument("--states", type=int, default=2)
     c.add_argument("--ops")
     c.add_argument("--json")
+    c.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     u = sub.add_parser("unmodelled")
     u.add_argument("--cli", default=str(CLI))
+    r = sub.add_parser("routines")
+    r.add_argument("--cli", default=str(CLI))
+    r.add_argument("--cases", type=int, default=200)
+    r.add_argument("--json")
+    r.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
+    r.add_argument("--only", help="comma-separated routine names")
     args = ap.parse_args()
-    return check(args) if args.cmd == "check" else unmodelled(args)
+    return {"check": check, "unmodelled": unmodelled, "routines": routines}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -141,6 +141,23 @@ final class CTFieldRuntimeTests: XCTestCase {
         XCTAssertEqual(field.vm.wram.word(WRAM.locReturnId), 74)
     }
 
+    func testTheLoadAsksForTheLocationsMusic() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 7)
+        try field.start()                                                   // LocLoad_AudioSetup: $81, then the music
+        let music = field.map.header.music
+        XCTAssertLessThan(music, 0x80)
+        XCTAssertEqual(field.audio.map { Int($0.command.id) }, [0x81, 0x10])
+        XCTAssertEqual(field.audio[0].command, CTEventVM.AudioCommand(id: 0x81, arg0: 0, arg1: 0xFF, arg2: 0xFF))
+        XCTAssertEqual(field.audio[1].command.arg0, UInt8(music))
+        XCTAssertEqual(field.music, music)
+        XCTAssertEqual(field.vm.wram[0x7E29AE], UInt8(music))              // Menu_Config1E keeps it
+        let again = try CTFieldRuntime(rom: try rom(), location: 7)
+        again.vm.wram[0x7F01ED] = 1; again.vm.wram[0x7E29AE] = 0x22        // Audio_Unk7F01ED: Menu_Config1E's track
+        try again.start()
+        XCTAssertEqual(again.audio.map { Int($0.command.id) }, [0x10])
+        XCTAssertEqual(again.music, 0x22)
+    }
+
     func testDebuggerLogsFlagChangesAndStopsOnBreakpoints() throws {
         let field = try CTFieldRuntime(rom: try rom(), location: 29)
         let dbg = CTFieldDebugger(field: field)
@@ -191,5 +208,49 @@ final class CTFieldRuntimeTests: XCTestCase {
         XCTAssertEqual(s.frames, 10)
         XCTAssertEqual(s.limitations, CTFieldRuntime.limitations)
         XCTAssertEqual(s.objects.count, field.vm.pack.objectCount)
+    }
+
+    func testARedrawCopyChangesTheMapsPicture() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 27)  // the courtroom: $E5 turns the jury
+        try field.start()
+        try run(field, "", frames: 40)
+        XCTAssertGreaterThan(field.mapRevision, 0)
+        let edited = try XCTUnwrap(field.mapEdits.first)
+        let live = field.liveMap(field.gameMap)
+        let layer = try XCTUnwrap(live.layers.firstIndex { $0.bg == edited.key })
+        XCTAssertNotEqual(live.layers[layer].metatiles, field.gameMap.layers[layer].metatiles)
+    }
+
+    func testThePaletteOpcodesChangeTheColours() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 85)  // $2E records on the telepods' colours
+        try field.start()
+        try run(field, "", frames: 40)
+        let written = field.vm.paletteWrites.filter { $0 < 128 }
+        XCTAssertFalse(written.isEmpty)
+        let picture = CTFieldPicture.frame(field, base: nil).picture
+        for c in written { XCTAssertEqual(picture.cgram[c], UInt16(field.vm.wram.word(WRAM.palCgramBuf + 2 * c))) }
+        XCTAssertTrue((0..<8).contains { field.vm.wram[WRAM.objPalSlot + $0] & 0x80 == 0 })   // claimed slots
+    }
+
+    func testTheCameraComesBackToTheLeaderAfterAScrollTo() throws {
+        let field = try CTFieldRuntime(rom: try rom(), location: 13)
+        field.runsScrollTo = true
+        try field.start()
+        XCTAssertEqual(field.camera.x, 96)
+        let leader = Int(field.vm.wram[WRAM.partyObjSlot])
+        field.vm.wram[WRAM.mapScrollToMode] = 1                          // as $E7 would: 4 columns right
+        field.vm.wram[WRAM.mapScrollToX] = field.vm.wram[WRAM.mapTileOriginX] + 4
+        field.vm.wram[WRAM.mapScrollToY] = field.vm.wram[WRAM.mapTileOriginY]
+        try run(field, "", frames: 60)
+        XCTAssertEqual(field.vm.wram[WRAM.mapScrollToMode], 2)
+        XCTAssertEqual(field.camera.x, 128)
+        field.vm.wram[WRAM.mapScrollToMode] = 0                          // $E7's last call
+        let rest = try CTFieldInput.parse("0-99 right")
+        for f in 0..<20 { try field.step(input: rest.held(at: f)) }
+        XCTAssertEqual(field.camera.x, 128)                              // the leader is still left of the middle
+        for f in 20..<40 { try field.step(input: rest.held(at: f)) }
+        let px = field.vm.wram.word(WRAM.objPosX + leader) >> 4
+        XCTAssertGreaterThan(field.camera.x, 128)
+        XCTAssertEqual(px - field.camera.x, 0x81)                        // following a pixel past the middle
     }
 }

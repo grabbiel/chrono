@@ -227,11 +227,13 @@ and up to `Field_Unk68` = 5 instructions a run, so:
   leaves the field waiting instead.
 - `$E7` ScrollTo runs as the ROM's `Map_Unk91AC` does (`runsScrollTo`): the
   camera's top-left moves 1 pixel a frame towards column × 16, row × 16 and
-  mode 2 marks arrival; the camera then stays there (the runtime's default
-  follows the leader).
+  mode 2 marks arrival. The camera then stays there until the leader walks
+  past the screen's middle (`Map_Unk99DE`); without `runsScrollTo`, the
+  runtime leaves `$E7` waiting.
 
-The run uses the ROM's animation loop count (`romAnimLoops`, see below);
-`--model-anim-loops` keeps the runtime's default.
+The run uses the ROM's animation loop count (`romAnimLoops`, see below), as
+the runtime does by default since 2026-10-23; `--model-anim-loops` replays
+the old one-a-row rule.
 
 ### Formations
 
@@ -293,14 +295,15 @@ tool.
 
 The animation evidence found that the ROM's `Obj_AnimTickAndQueue` takes 2
 off a loop count of 3 or more (`DEC`, `DEC`, `STA`) where `CTFieldRuntime`
-takes 1; `romAnimLoops` (on in `CTSceneRun`, off in the runtime) follows the
-ROM. With `--model-anim-loops` half of the animation cases disagree.
+took 1; `romAnimLoops` follows the ROM and is the runtime's default since
+2026-10-23. With `--model-anim-loops` (the old rule) half of the animation
+cases disagree.
 
 ### Limits
 
 - Battles are taken as won at once; what the battle changes is not run.
-- After a scroll-to the camera stays put (the ROM hands it back to the leader
-  through code not modelled).
+- After a scroll-to the camera stays put until the leader walks past the
+  screen's middle, as the ROM's `Map_Unk99DE` hands it back.
 - Direction paths on the Map are straight: a blocked tile turns the object at
   random (`Obj_SetVelocityChecked`), which only a run shows.
 - The formation is taken at the end of the `$D8` frame; `Obj_Unk72B4`'s
