@@ -46,7 +46,7 @@ All of them are in bank `$CC` except `PcTechAct`.
 | CharTechs | `$CC:276A` | 2 B per character | First single id, and how many. Read-only. |
 | ComboTechs | `$CC:2778` | 5 B per record, `$FF`-ended | Members' bits (`$80 >> id`), first id, count, and the bank-`$CC` address of 3 requirement bytes per tech. |
 | Modifiers | `$CC:2A05` | 3 B per record (57) | Read-only. |
-| AreaRecPtr | `$CC:2AB0` | 1 word per area (1–$0B) | Each record is a count byte, then 3-byte entries: shape, parameter set, size. Read-only. |
+| AreaRecPtr | `$CC:2AB0` | 1 word per area (1–$0B) | Each record is a count byte, then 3-byte entries: shape, parameter set, size. Pointers, topology and routing stay read-only; existing forwarded circle sizes are editable (see below). |
 | PcTechAct | `$CD:45A6` | 7 B per id | The animation: script, graphics, frames, palette, object, argument. |
 | Tech state | `$CC:0230` | 44 B | The eighth `MenuRom_CharRecordInit` record, copied to `$7E:2830` for a new game. |
 
