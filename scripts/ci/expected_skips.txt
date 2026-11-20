@@ -119,3 +119,4 @@ ChronoForgeCoreTests.CTProjectAuditionTests/testADrumPadAuditionPlaysTheProjectS
 ChronoForgeCoreTests.CTTreasureTests/testAGrownTreasureRomAndANewLocationBuild                  skip      # local ROM
 ChronoForgeCoreTests.CTTechCombosTests/testImportedDescriptionsAndUnchangedBuild                skip      # local ROM
 ChronoForgeCoreTests.CTTechCombosTests/testRepurposedRenamedAndDescribedBuild                   skip      # local ROM
+ChronoForgeCoreTests.CTTechsTests/testCircleAndRowPreviewMatchesTheROMSGrid  skip  # local ROM

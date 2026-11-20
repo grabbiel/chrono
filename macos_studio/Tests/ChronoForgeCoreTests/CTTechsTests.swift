@@ -231,10 +231,77 @@ final class CTTechsTests: XCTestCase {
         refuse({ $0.combos.append($0.combos[0]) }, "the most is 25")
         refuse({ $0.combos[3].mask = $0.combos[4].mask }, "same members")
         refuse({ $0.combos[16].mask = 0xC0; $0.combos[16].requirements = [[1, 1, 255]] }, "is a trio")
-        refuse({ $0.areas[1][0].size ^= 1 }, "areas are read-only")
+        refuse({ $0.areas[1][0].shape = ($0.areas[1][0].shape + 1) % 7 }, "only an existing circle")
+        refuse({ $0.areas[1][0].size = 256 }, "out of range")
+        refuse({ $0.areas[1].append($0.areas[1][0]) }, "exactly one entry")
         var renamed = system
         renamed.techs[1].name = "Renamed"
         XCTAssertNoThrow(try CTTechROM.check(renamed, against: system))      // names: CTTechText, with the codec
+    }
+
+    func testCircleRadiusWritesOnlyItsExistingByte() throws {
+        var rom = syntheticTechROM()
+        let at = 0x0C2B14
+        rom[at + 1] = 1; rom[at + 2] = 1; rom[at + 3] = 9
+        let base = try CTTechROM.decode(rom: rom, codec: nil)
+        var edited = base
+        edited.areas[1][0].size = 25
+        try CTTechROM.check(edited)
+        try CTTechROM.check(edited, against: base)
+        let unchanged = apply(base, to: rom)
+        let built = apply(edited, to: rom)
+        let changed = rom.indices.filter { unchanged[$0] != built[$0] }
+        XCTAssertEqual(changed, [at + 3])
+        XCTAssertEqual(try CTTechROM.decode(rom: built, codec: nil).areas[1][0].size, 25)
+        for size in [-1, 256] {
+            edited.areas[1][0].size = size
+            XCTAssertThrowsError(try CTTechROM.check(edited))
+        }
+        edited = base
+        edited.areas[1][0].size |= 0x80
+        XCTAssertThrowsError(try CTTechROM.check(edited, against: base))
+        edited = base
+        edited.areas[1][0].param = 0x81
+        XCTAssertThrowsError(try CTTechROM.check(edited, against: base))
+        XCTAssertFalse(TechSystemDef.Area(shape: 1, param: 2, size: 4).canEditRadius)
+        XCTAssertFalse(TechSystemDef.Area(shape: 1, param: 0x81, size: 4).canEditRadius)
+        XCTAssertFalse(TechSystemDef.Area(shape: 0, param: 1, size: 4).canEditRadius)
+    }
+
+    func testCircleAndRowPreviewMatchesTheROMSGrid() throws {
+        _ = try Repo.romData()
+        let interpreter = Repo.root.appendingPathComponent("re_workspace/refs/ChronoRET/tools/absint.py")
+        guard FileManager.default.fileExists(atPath: interpreter.path) else {
+            throw XCTSkip("local ChronoRET checkout not present (re_workspace/refs/ChronoRET)")
+        }
+        struct Query: Decodable {
+            let kind: String
+            let centre: Int
+            let size: Int
+            let party: Bool
+            let positions: [[Int]?]
+            let hits: [Int]
+        }
+        let process = Process(), pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", Repo.root.appendingPathComponent("re_workspace/tools/ct_tech_areas.py").path,
+                             "--rom", Repo.rom.path, "--json"]
+        process.standardOutput = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        let queries = try JSONDecoder().decode([Query].self, from: data)
+        XCTAssertEqual(queries.count, 116)
+        for q in queries {
+            let shape: CTTechTargets.Shape = q.kind == "circle" ? .circle(centre: q.centre, size: q.size) : .row(centre: q.centre)
+            let positions: [CTTechTargets.Point?] = q.positions.map { pair in
+                guard let pair else { return nil }
+                return CTTechTargets.Point(x: pair[0], y: pair[1])
+            }
+            let result = CTTechTargets.hits(.init(shape, scansParty: q.party), positions: positions)
+            XCTAssertEqual(result, q.hits, "\(q.kind) centre=\(q.centre) size=\(q.size) party=\(q.party)")
+        }
     }
 
     func testProjectModelAndValidator() throws {
@@ -390,7 +457,8 @@ final class CTTechsTests: XCTestCase {
         XCTAssertEqual(CTTechTargets.hits(.init(.circle(centre: 3, size: 4)), positions: at), [3, 6, 7])
         // The 8-bit sum wraps: 15 cells across and 7 down is $112 -> $12.
         var far = at
-        far[8] = P(x: 128 + 15 * 16, y: 100 + 7 * 16)
+        far[3] = P(x: 0, y: 0)
+        far[8] = P(x: 240, y: 112)       // valid byte coordinates, as the ROM stores them
         XCTAssertTrue(CTTechTargets.hits(.init(.circle(centre: 3, size: 0x19)), positions: far).contains(8))
         XCTAssertFalse(CTTechTargets.hits(.init(.circle(centre: 3, size: 0x11)), positions: far).contains(8))
         // Row: y within ±$20 of the centre's, inclusive.

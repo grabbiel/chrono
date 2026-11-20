@@ -355,9 +355,18 @@ projects) is repacked into the description table when one differs.
 A combination's `mask` may change by repurposing the record, together with
 its user set (see [techs](techs.md)); `rocks` (optional) are read-only.
 `kind`, the user sets of singles, `flags`, `attr`, the animation's graphics
-bytes, the records' `first` and row count, and `areas` are read-only: the
+bytes and the records' `first` and row count are read-only: the
 builder refuses values that differ from the base ROM's. `element`
 is absent for none. See [techs](techs.md) for each field's meaning and evidence.
+
+
+Tech area sizes: existing circle records (`shape` 1/2, `param` 0/1/4/5/6)
+permit editing `size` bits 0–6 as radius squared in 16-pixel cells. The high bit,
+shape, parameter routing, record topology and all other area bytes must match
+the base ROM. Each nonzero area remains a single entry; area 0 stays empty.
+These records are shared by every tech selecting that area. See `techs.md` for
+the ROM evidence and the distinction between menu and execution targeting.
+
 
 ## `items/<id>.json` and `item_tables.json`
 ```json
