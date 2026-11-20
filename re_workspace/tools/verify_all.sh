@@ -308,6 +308,11 @@ else
   note "swift package present" "FAIL"
 fi
 
+# Selected CT frame routines: captures stay local and are checked structurally.
+$PY re_workspace/tools/ct_ppu_frames.py check --run >/tmp/verify_ppu_frames.log 2>&1
+RC=$?
+note "CT PPU captures ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_ppu_frames.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+
 echo "----------------------------------------"
 if [ $FAILED -eq 0 ]; then echo "ALL GATES PASS"; else echo "GATES FAILED"; fi
 exit $FAILED

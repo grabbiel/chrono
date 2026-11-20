@@ -91,6 +91,19 @@ def test_memory_ports():
     assert p.oam[2:4] == [0x11, 0x22]
 
 
+def test_description_preserves_irq_hdma_channel_stops():
+    from types import SimpleNamespace
+    cap = pf.Capture()
+    cap.log = [(0x2100, 0x0F, "vblank"), (0x420C, 0, 211), (0x2100, 0x80, 211)]
+    start = pf.Registers()
+    start.write(0x2100, 0x0F)
+    bus = SimpleNamespace(cap=cap, vblank_regs=start)
+    d = pf.describe(bus, {}, {"vblankWrites": 1, "frame": "battle", "runs": []}, b"")
+    assert d["irq"] == [[211, 0x420C, 0], [211, 0x2100, 0x80]]
+    assert d["lines"][210]["inidisp"] == 0x0F
+    assert d["lines"][211]["inidisp"] == 0x80
+
+
 # --- HDMA ---------------------------------------------------------------------------------
 
 def capture_with(channels, log=()):

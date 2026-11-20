@@ -654,7 +654,10 @@ def describe(bus, mem, meta, rom):
     cap = bus.cap
     vblank = meta["vblankWrites"]
     hdma = hdma_writes(cap, mem, rom)
-    irq = [(line, port, v) for port, v, line in cap.log[vblank:] if line != "vblank" and port < 0x2134]
+    # Keep HDMAEN as evidence too: the Swift replay needs it to know which
+    # channels the IRQ stopped. Registers.write ignores non-PPU ports.
+    irq = [(line, port, v) for port, v, line in cap.log[vblank:]
+           if line != "vblank" and (port < 0x2134 or port == 0x420C)]
     cur = copy.deepcopy(bus.vblank_regs)
     lines = []
     i = j = 0

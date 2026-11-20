@@ -251,6 +251,50 @@ public struct CTPPUCapture: Sendable {
         return Write(line: nil, port: a[0], value: UInt8(a[1] & 0xFF))
     }
 
+    /// Captures can also be supplied with --capture. Check their shape before
+    /// indexing transfer units or replaying writes; malformed files must throw.
+    static func validate(_ f: FileJSON) throws {
+        guard (0...lineCount).contains(f.irqLine), f.start.registers.bg.count == 4,
+              f.lines.allSatisfy({ $0.bg.count == 4 }) else {
+            throw CaptureError.format("line or background register shape")
+        }
+        for (writes, hasLine) in [(f.vblank, false), (f.irq, true), (f.hdma, true)] {
+            var previousLine = -1
+            for w in writes {
+                let offset = hasLine ? 1 : 0
+                guard w.count == offset + 2 else { throw CaptureError.format("register write shape") }
+                guard (0...0xFFFF).contains(w[offset]), (0...255).contains(w[offset + 1]) else {
+                    throw CaptureError.format("register write value")
+                }
+                if hasLine {
+                    guard (0..<lineCount).contains(w[0]), w[0] >= previousLine else {
+                        throw CaptureError.format("register writes out of scanline order")
+                    }
+                    previousLine = w[0]
+                }
+            }
+        }
+        var seen: Set<Int> = []
+        for c in f.channels {
+            guard (0..<8).contains(c.channel), seen.insert(c.channel).inserted,
+                  (0...255).contains(c.dmap), (0x2100...0x21FF).contains(c.bbad) else {
+                throw CaptureError.format("HDMA channel")
+            }
+            let width = patterns[c.dmap & 7].count
+            for e in c.entries {
+                let count = e.count & 0x7F
+                let lines = count == 0 ? 128 : count
+                let repeats = e.count > 0x80
+                let units = repeats ? lines : 1
+                guard (1...255).contains(e.count), e.lines == lines, e.repeat == repeats,
+                      e.data.count == units,
+                      e.data.allSatisfy({ $0.count == width && $0.allSatisfy({ (0...255).contains($0) }) }) else {
+                    throw CaptureError.format("HDMA entry shape")
+                }
+            }
+        }
+    }
+
     static func words(_ base64: String, count: Int) throws -> [UInt16] {
         guard let d = Data(base64Encoded: base64), d.count == count * 2 else { throw CaptureError.format("memory size") }
         let b = [UInt8](d)
@@ -265,6 +309,7 @@ public struct CTPPUCapture: Sendable {
         guard f.format == format, f.version == 1 else { throw CaptureError.format("\(f.format) v\(f.version)") }
         guard let kind = Kind(rawValue: f.frame) else { throw CaptureError.format("frame \(f.frame)") }
         guard f.lines.count == lineCount else { throw CaptureError.format("\(f.lines.count) lines") }
+        try validate(f)
         guard let oamData = Data(base64Encoded: f.oam), oamData.count == PPUFrame.oamBytes else {
             throw CaptureError.format("OAM size")
         }
