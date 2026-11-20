@@ -113,7 +113,8 @@ final class CTTechsTests: XCTestCase {
         for i in 0..<56 { put(CTTechROM.tpCostPC + 2 * i, [g.next(256), g.next(256)]) }
         for s in 0..<CTTechROM.userSetCount { put(CTTechROM.userSetsPC + 3 * s, [g.next(7), g.next(7), 0xFF]) }
         let pairs = (0..<7).flatMap { a in ((a + 1)..<7).map { [a, $0] } }
-        let trios = (0..<7).flatMap { a in ((a + 1)..<7).flatMap { b in ((b + 1)..<7).map { [a, b, $0] } } }
+        var trios: [[Int]] = []
+        for a in 0..<7 { for b in (a + 1)..<7 { for c in (b + 1)..<7 { trios.append([a, b, c]) } } }
         var req = 0x27FA, rec = CTTechROM.combosPC
         for (i, who) in (Array(pairs.prefix(15)) + Array(trios.prefix(10))).enumerated() {
             let count = i < 15 ? 3 : 1, first = i < 15 ? 0x39 + 3 * i : 0x66 + i - 15
@@ -222,13 +223,18 @@ final class CTTechsTests: XCTestCase {
         refuse({ $0.techs[7].flags ^= 1 }, "read-only")
         refuse({ $0.techs[7].attr ^= 1 }, "read-only")
         refuse({ $0.techs[7].anim.gfxA ^= 1 }, "script and frames")
-        refuse({ $0.combos[2].mask ^= 0x01 }, "read-only")
-        refuse({ $0.combos[2].requirements.removeLast(); $0.learned.comboBits[2] &= 0xC0 }, "read-only")
-        refuse({ $0.userSets[0][0] = ($0.userSets[0][0] + 1) % 7 }, "user sets are read-only")
+        refuse({ $0.combos[2].mask ^= 0x01 }, "characters 0-6 only")
+        refuse({ $0.combos[2].requirements.removeLast(); $0.learned.comboBits[2] &= 0xC0 }, "menu MP indexes")
+        refuse({ $0.combos[2].requirements.removeLast(); $0.combos[2].menuCosts!.removeLast(); $0.learned.comboBits[2] &= 0xC0 },
+               "fixed by the state's bits")
+        refuse({ $0.userSets[0][0] = ($0.userSets[0][0] + 1) % 7 }, "user set 0 is read-only")
+        refuse({ $0.combos.append($0.combos[0]) }, "the most is 25")
+        refuse({ $0.combos[3].mask = $0.combos[4].mask }, "same members")
+        refuse({ $0.combos[16].mask = 0xC0; $0.combos[16].requirements = [[1, 1, 255]] }, "is a trio")
         refuse({ $0.areas[1][0].size ^= 1 }, "areas are read-only")
         var renamed = system
         renamed.techs[1].name = "Renamed"
-        XCTAssertNoThrow(try CTTechROM.check(renamed, against: system))      // names are never written
+        XCTAssertNoThrow(try CTTechROM.check(renamed, against: system))      // names: CTTechText, with the codec
     }
 
     func testProjectModelAndValidator() throws {
@@ -357,7 +363,11 @@ final class CTTechsTests: XCTestCase {
         }
         refuse({ $0.techSystem!.techs[1].targetMode = 0x21 }, "target mode")
         refuse({ $0.techSystem!.techs[1].userSet += 1 }, "read-only")
-        refuse({ $0.techSystem!.combos[0].mask ^= 0x01 }, "read-only")
+        refuse({ $0.techSystem!.combos[0].mask ^= 0x01 }, "characters 0-6 only")
+        refuse({ $0.techSystem!.combos.append($0.techSystem!.combos[24]) }, "no room")
+        refuse({ $0.techSystem!.combos[0].mask = 0x82 }, "user set")       // members changed without their sets
+        refuse({ $0.techSystem!.techs[1].name = "Twelve chars" }, "11 tiles")
+        refuse({ $0.techSystem!.userSets[2] = [3, 255, 255] }, "user set 2 is read-only")
         refuse({ $0.techSystem!.learned.counts[0] += 1 }, "top bits")
         refuse({ $0.techSystem = nil }, "needs tech_system.json")
     }

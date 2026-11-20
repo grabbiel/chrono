@@ -12,7 +12,7 @@ struct CharactersPane: View {
     @State private var pickBase = false
     @State private var buildResult = ""
     @State private var revision = 0          // re-seeds the editor after an import
-    @State private var tab = 0               // 0 records, 1 the Tech & Synergy Matrix, 2 enemies (EnemyEditorViews.swift)
+    @State private var tab = LaunchArguments.value("--tech") != nil ? 1 : 0   // 0 records, 1 the Tech & Synergy Matrix (--tech $id), 2 enemies (EnemyEditorViews.swift)
 
     var body: some View {
         VStack(spacing: 0) {

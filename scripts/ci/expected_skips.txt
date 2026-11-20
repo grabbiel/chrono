@@ -122,3 +122,5 @@ ChronoForgeCoreTests.CTFieldRuntimeTests/testThePaletteOpcodesChangeTheColours  
 ChronoForgeCoreTests.CTFieldRuntimeTests/testTheCameraComesBackToTheLeaderAfterAScrollTo      skip      # local ROM
 ChronoForgeCoreTests.CTFieldRuntimeTests/testTheLoadAsksForTheLocationsMusic      skip      # local ROM
 ChronoForgeCoreTests.CTNPCSpritesTests/testImportEveryNPC                                       skip      # local ROM
+ChronoForgeCoreTests.CTTechCombosTests/testImportedDescriptionsAndUnchangedBuild                skip      # local ROM
+ChronoForgeCoreTests.CTTechCombosTests/testRepurposedRenamedAndDescribedBuild                   skip      # local ROM
