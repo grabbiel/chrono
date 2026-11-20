@@ -146,6 +146,8 @@ if [ -f macos_studio/Package.swift ]; then
   $PY re_workspace/tools/ct_tech_combos.py check --run >/tmp/verify_tech_combos.log 2>&1
   RC=$?
   note "Tech combinations ($(grep -oE '[0-9]+ of [0-9]+' /tmp/verify_tech_combos.log | tail -1) claims)" "$([ $RC -eq 0 ] && echo PASS || echo FAIL)"
+  $PY re_workspace/tools/ct_tech_areas.py >/tmp/verify_tech_areas.log 2>&1
+  note "Tech circle/row target queries" "$([ $? -eq 0 ] && echo PASS || echo FAIL)"
   # Location tilesets: source, code and data claims, the ROM's decompressor, both
   # animation-list loaders and PalAnim_TickAll run; then a CLI import into a fixture
   # copy, checked by `tilesets verify` and by ct_tilesets.py.

@@ -46,7 +46,7 @@ All of them are in bank `$CC` except `PcTechAct`.
 | CharTechs | `$CC:276A` | 2 B per character | First single id, and how many. Read-only. |
 | ComboTechs | `$CC:2778` | 5 B per record, `$FF`-ended | Members' bits (`$80 >> id`), first id, count, and the bank-`$CC` address of 3 requirement bytes per tech. |
 | Modifiers | `$CC:2A05` | 3 B per record (57) | Read-only. |
-| AreaRecPtr | `$CC:2AB0` | 1 word per area (1–$0B) | Each record is a count byte, then 3-byte entries: shape, parameter set, size. Read-only. |
+| AreaRecPtr | `$CC:2AB0` | 1 word per area (1–$0B) | Each record is a count byte, then 3-byte entries: shape, parameter set, size. Pointers, topology and routing stay read-only; existing forwarded circle sizes are editable (see below). |
 | PcTechAct | `$CD:45A6` | 7 B per id | The animation: script, graphics, frames, palette, object, argument. |
 | Tech state | `$CC:0230` | 44 B | The eighth `MenuRom_CharRecordInit` record, copied to `$7E:2830` for a new game. |
 
@@ -350,7 +350,8 @@ ROM's tables:
 
 Slice 5 adds the names, the description table, and each combination's members
 with its field-menu copies and user set ([above](#combinations-end-to-end-slice-5)).
-Every other byte, including the other user sets, the rocks, areas, modifiers and
+Existing forwarded circle-size bytes are writable as described below.
+Every other byte, including the other user sets, the rocks, other area fields, modifiers and
 the word after TechTpCost, stays the base ROM's. So importing and building an
 unmodified ROM gives the clean ROM byte for byte, with no write. Each changed
 span is its own report write, for example `tech $02 target`, `part 1 MP`,
@@ -374,7 +375,7 @@ The builder (and `CTTechROM.check`) refuses:
   or a combination bit past its record's techs;
 - any read-only field that differs from the base ROM's: kind, user set, flags,
   attributes, the animation's other bytes, the combination records' first id
-  and count, the user sets of singles, the rocks or areas;
+  and count, the user sets of singles, the rocks, or unsupported area fields;
 - a combination edit that `CTTechCombos.check` refuses, a name that does not
   fit, or a description that does not compile or fit.
 
@@ -433,7 +434,7 @@ character's +$2D is not its next single's cost.
 
 - There is no emulator run. The evidence is the ROM's code, its data and its
   own routine executed, not a booted game.
-- Areas and modifier records are read-only. New techs and new combinations are
+- Area topology, routing and non-circle sizes, and modifier records, are read-only. New techs and new combinations are
   not supported (see the capacity); a record is repurposed instead. The rocks
   are read-only.
 - The effect bytes are edited raw. Only type, stat pair and power are decoded;
@@ -441,8 +442,51 @@ character's +$2D is not its next single's cost.
 - The line area's strip and box are inferred geometry. The Studio's preview uses
   sample positions.
 - The preview's scanned side follows the target, an approximation of the
-  side the target-mode handler sets. Its triangle is exact, where the routine
-  compares 8-bit angles, so an enemy on an edge may differ.
+  side the target-mode handler sets. Its triangle uses geometric cross products
+  rather than the ROM's quantized 8-bit angles; boundary results may differ.
 - The Studio pane is checked at window level only: `--module Characters
   --tech 63` opens the matrix on a tech's editor. Its logic (the codec, the
   checks, the rule and the zones) is in Core and tested there.
+
+
+## Circle radius editing and target evidence (2026-11-19)
+
+The matrix's **Radius squared** control edits the selected shared area's size
+in 16-pixel cells (0–127), preserving its variant bit. For example size 9 accepts
+cells whose squared offsets sum to at most 9; it is not a nine-cell radius.
+Every tech referencing that area sees the change. Menu targeting remains a
+separate rule, so changing an area does not rewrite the menu target mode.
+
+Only shapes 1/2 with parameter sets 0/1/4/5/6 support this edit: these parameter
+routines forward the size byte. Parameter 2 uses it as a battler slot; parameter
+3 does not forward it. Position-query records, shape/parameter fields, variant
+bits, pointer tables, record counts and other sizes stay read-only. The loader
+at `BattleSys_UnkC1DD` ($C1:C1DD, ChronoRET bankC1.asm) aliases its entry pointer
+and query flag and copies subsequent entries from the wrong index. The writer
+therefore preserves each original one-entry record and never grows the list.
+
+`ct_tech_areas.py` executes `BattleTgt_AreaCircle` ($C1:2701),
+`BattleTgt_AreaRow` ($C1:2332), and their list helpers in ChronoRET's 65816
+interpreter. The 116 deterministic queries cover coordinate/cell boundaries,
+centres near both screen edges, both scanned sides, anchor order and the circle's
+8-bit square-sum wrap. Circle/row previews are tested directly against these
+ROM-generated results in `CTTechsTests`; no ROM data is stored as a fixture.
+The model deliberately retains the distant hit at 15²+7² = $112 -> $12.
+The circle's filled preview now uses the same rule as its hit list, including
+that wrap, and row outlines use the clamped inclusive band.
+
+The tested inputs describe eligible battlers at byte coordinates with accumulator
+B=0, as the routines expect. KO/status filtering, proof that every caller clears
+B, and the area-parameter dispatcher are outside this evidence. Line and triangle
+previews remain geometric approximations; the UI labels them accordingly.
+
+`verify_tech_build.py` edits one real circle record, checks byte-for-byte write
+boundaries and independent report decoding, then feeds the edited size to 93
+circle queries executing the built ROM. It also damages that byte and requires
+the checker to reject the mismatch. This proves the edited value and target
+routine, not a full battle or booted-game execution. A separate mutation test
+changes the local ROM's square table and ensures the model comparison notices.
+
+The report labels a change `area N radius squared`. Public CI runs synthetic
+write/refusal and boundary tests; the two interpreter Python tests and Swift ROM
+comparison skip with explicit expected reasons without private ROM inputs.

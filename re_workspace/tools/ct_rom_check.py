@@ -671,6 +671,14 @@ def check_techs(clean, built, report):
             check(built[z.start:z.stop] == clean[z.start:z.stop], f"tech byte ${z.start:06X} changed but techs are not reported")
         return
     areas = ct.decode_areas(clean)
+    after_areas = ct.decode_areas(built)
+    expected_areas = [[[e["shape"], e["param"], e["size"]] for e in row] for row in system["areas"]]
+    check(after_areas == expected_areas, "area records are not the reported values")
+    for n, (before, after) in enumerate(zip(areas, after_areas)):
+        check(len(before) == len(after), f"area {n}: entry count is read-only")
+        for b, a in zip(before, after):
+            radius_edit = ct.editable_radius(b) and a[:2] == b[:2] and a[2] & 0x80 == b[2] & 0x80
+            check(a == b or radius_edit, f"area {n}: only an existing circle's radius squared is writable")
     check(len(system["techs"]) == ct.TECHS and len(system["parts"]) == ct.PARTS, "the reported tables' sizes")
     for t, want in enumerate(system["techs"]):
         before, v = ct.decode_tech(clean, t), ct.decode_tech(built, t)
