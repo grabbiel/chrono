@@ -125,3 +125,12 @@ ChronoForgeCoreTests.CTNPCSpritesTests/testImportEveryNPC                       
 ChronoForgeCoreTests.CTTechCombosTests/testImportedDescriptionsAndUnchangedBuild                skip      # local ROM
 ChronoForgeCoreTests.CTTechCombosTests/testRepurposedRenamedAndDescribedBuild                   skip      # local ROM
 ChronoForgeCoreTests.CTTechsTests/testCircleAndRowPreviewMatchesTheROMSGrid  skip  # local ROM
+ChronoForgeCoreTests.CTPPUFramesTests/testBattleChannels5And6SetTheirRegistersOnEveryLine skip # local ROM and ChronoRET
+ChronoForgeCoreTests.CTPPUFramesTests/testBattleLayersAndWindowsFollowChannels4And7 skip # local ROM and ChronoRET
+ChronoForgeCoreTests.CTPPUFramesTests/testTitleIsMode2WithItsOffsetTableAtBG3 skip # local ROM and ChronoRET
+ChronoForgeCoreTests.CTPPUFramesTests/testTitleOffsetsMoveBG1ColumnsFromTheSecond skip # local ROM and ChronoRET
+ChronoForgeCoreTests.CTPPUFramesTests/testLavosSetsInterlaceAndEXTBGWithAPerLineMatrix skip # local ROM and ChronoRET
+ChronoForgeCoreTests.CTPPUFramesTests/testLavosFieldsDrawTheSamePictureInMode7 skip # local ROM and ChronoRET
+ChronoForgeMetalTests.CTPPUFrameParityTests/testParityBattleFrame skip # local ROM and ChronoRET
+ChronoForgeMetalTests.CTPPUFrameParityTests/testParityTitleFrame skip # local ROM and ChronoRET
+ChronoForgeMetalTests.CTPPUFrameParityTests/testParityLavosFrameBothFields skip # local ROM and ChronoRET
