@@ -328,7 +328,7 @@ public struct CTPPUCapture: Sendable {
         }
         let start = PPURegisterPorts(registers: f.start.registers.registers, bgLatch: UInt8(f.start.bgLatch & 0xFF),
                                      m7Latch: UInt8(f.start.m7Latch & 0xFF), oamadd: UInt16(f.start.oamadd & 0xFFFF))
-        return CTPPUCapture(
+        let capture = CTPPUCapture(
             kind: kind, runs: f.runs, meta: meta, irqLine: f.irqLine,
             vblank: f.vblank.map { write($0, hasLine: false) },
             irq: f.irq.map { write($0, hasLine: true) },
@@ -339,6 +339,13 @@ public struct CTPPUCapture: Sendable {
             vram: try words(f.vram, count: PPUFrame.vramWords),
             cgram: try words(f.cgram, count: 256),
             oam: [UInt8](oamData))
+        guard expandHDMA(capture.channels, stops: capture.irqStops) == capture.hdma else {
+            throw CaptureError.format("HDMA writes disagree with channel tables")
+        }
+        guard capture.replayLines() == capture.lines else {
+            throw CaptureError.format("line registers disagree with replayed writes")
+        }
+        return capture
     }
 
     public static func load(from url: URL) throws -> CTPPUCapture {

@@ -202,6 +202,15 @@ final class CTPPUCaptureTests: XCTestCase {
         try assertMalformed { $0["hdma"] = [[1, 0x2100, 0], [0, 0x2100, 0]] }
     }
 
+    func testCapturedTablesWritesAndRegistersMustAgree() throws {
+        try assertMalformed { $0["hdma"] = [] }
+        try assertMalformed { object in
+            var lines = object["lines"] as! [[String: Any]]
+            lines[0]["bgmode"] = 4
+            object["lines"] = lines
+        }
+    }
+
     func testMalformedHDMAEntriesAreRefusedBeforeExpansion() throws {
         for values: [[String: Any]] in [
             [["count": 0x80, "lines": 128, "repeat": false, "address": 0, "data": []]],

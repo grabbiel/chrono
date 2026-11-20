@@ -134,7 +134,7 @@ final class CTPPUFramesTests: XCTestCase {
         var flat = f
         for w in 0x7020..<0x7040 { flat.vram[w] = 0 }
         let a = PPUReferenceRenderer.render(f), b = PPUReferenceRenderer.render(flat)
-        XCTAssertNotEqual(a, b, "the offsets change the picture")
+        XCTAssertTrue(a != b, "the offsets change the picture")
         for y in 0..<c.irqLine {
             for x in 0..<8 {
                 let p = (y * 256 + x) * 4

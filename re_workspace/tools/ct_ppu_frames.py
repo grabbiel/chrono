@@ -114,7 +114,10 @@ C3_MODULE_BYTES = 0x857F
 C3_ENTRY_ARG = 0x7E0384
 C3_IDLE_OPERAND = 0x7E3024       # C3Mod_Start's idle JSR operand (programs write over it)
 TITLE_PROGRAM, LAVOS_PROGRAM = 2, 6
-TITLE_AFTER = 96                 # module frames after BGMODE 2: the wave fills its 31 shifting words
+# C3Mod_Prog2Wave ($7E:5B51) waits 184 frames after mode 2 before
+# sliding BG1 into view for 104 frames. Capture during that slide, before
+# its white flash: at +96 the wave exists but BG1 is still off screen.
+TITLE_AFTER = 256
 LAVOS_FRAMES = 240               # module frames run for the lavos capture
 
 REG_NAMES = {
