@@ -444,6 +444,20 @@ private struct TechEditor: View {
                 }
                 .labelsHidden().frame(maxWidth: 300)
             }
+            if system.areas.indices.contains(system.techs[id].area),
+               let area = system.areas[system.techs[id].area].first, area.canEditRadius {
+                GridRow {
+                    Text("Radius squared").foregroundStyle(.secondary)
+                    let index = system.techs[id].area
+                    Stepper(value: Binding(
+                        get: { system.areas[index][0].size & 0x7F },
+                        set: { system.areas[index][0].size = (system.areas[index][0].size & 0x80) | $0 }
+                    ), in: 0...127) {
+                        Text("\(system.areas[index][0].size & 0x7F) (16-pixel cells)")
+                    }
+                    .help("Changes the shared area record for every tech using it. Menu targeting is a separate rule.")
+                }
+            }
             GridRow {
                 Text("Element").foregroundStyle(.secondary)
                 Picker("", selection: $system.techs[id].element) {
@@ -611,7 +625,7 @@ private struct TargetZonePreview: View {
             }
             Text("Takes in: " + (areaSlots.isEmpty ? menuSlots : areaSlots).map { $0 < 3 ? (party[$0].map(charName) ?? "–") : "E\($0)" }
                 .joined(separator: ", ")).font(.caption)
-            Text("Sample positions. Circles are the 16-pixel cells the routine accepts; the line's strip is its inferred geometry.")
+            Text("Eligible sample battlers. Circle/row tests match the ROM routines; line and triangle outlines are geometric approximations. Area side is inferred from the target.")
                 .font(.caption2).foregroundStyle(.secondary).frame(width: 300, alignment: .leading)
         }
     }
@@ -624,10 +638,10 @@ private struct TargetZonePreview: View {
             // The 16-pixel cells BattleTgt_AreaCircle accepts around the centre's cell.
             guard sampleLayout.indices.contains(centre), let c = sampleLayout[centre] else { return }
             var cells = Path()
-            for dy in -15...15 {
-                for dx in -15...15 where dx * dx + dy * dy <= size {
-                    let (x, y) = (c.x >> 4 + dx, c.y >> 4 + dy)
-                    guard (0..<16).contains(x), (0..<14).contains(y) else { continue }
+            for y in 0..<14 {
+                for x in 0..<16 {
+                    let point = CTTechTargets.Point(x: x * 16, y: y * 16)
+                    guard CTTechTargets.circleContains(point, centre: c, size: size) else { continue }
                     cells.addRect(CGRect(x: CGFloat(x * 16) * scale, y: CGFloat(y * 16) * scale,
                                          width: 16 * scale, height: 16 * scale))
                 }
@@ -635,8 +649,10 @@ private struct TargetZonePreview: View {
             path = cells
         case .row(let centre):
             guard sampleLayout.indices.contains(centre), sampleLayout[centre] != nil else { return }
-            let c = p(centre)
-            path = Path(CGRect(x: 0, y: c.y - 32 * scale, width: 256 * scale, height: 64 * scale))
+            let y = sampleLayout[centre]!.y
+            let top = max(0, y - 32), bottom = min(255, y + 32)
+            path = Path(CGRect(x: 0, y: CGFloat(top) * scale, width: 256 * scale,
+                               height: CGFloat(bottom - top + 1) * scale))
         case .partyTriangle:
             var t = Path()
             t.addLines([p(0), p(1), p(2)])

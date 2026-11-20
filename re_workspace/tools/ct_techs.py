@@ -223,6 +223,19 @@ def decode_areas(rom):
     return out
 
 
+def editable_radius(entry):
+    """AreaParam 0/1/4/5/6 forward size; only existing circle records are editable."""
+    return entry[0] in (1, 2) and entry[1] in (0, 1, 4, 5, 6)
+
+
+def area_size_zones(rom):
+    for number, entries in enumerate(decode_areas(rom)):
+        at = pc(0xCC, u(rom, AREA_PTRS_PC + 2 * number, 2))
+        for k, entry in enumerate(entries):
+            if editable_radius(entry):
+                yield range(at + 3 + 3 * k, at + 4 + 3 * k)
+
+
 def decode_state(rom):
     raw = rom[TECH_STATE_PC:TECH_STATE_PC + TECH_STATE_SIZE]
     return {"counts": list(raw[0:7]), "bits1": list(raw[7:14]), "combo_bits": list(raw[14:44])}
@@ -265,6 +278,7 @@ def write_zones(rom):
         spans.append(range(at, at + 3 * c["count"]))
     spans.append(range(TECH_STATE_PC, TECH_STATE_PC + TECH_STATE_SIZE))
     spans += [range(RECORDS_PC + RECORD_SIZE * c + 2, RECORDS_PC + RECORD_SIZE * c + 3) for c in range(CHARACTERS)]
+    spans += list(area_size_zones(rom))
     return spans
 
 

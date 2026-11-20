@@ -16,7 +16,7 @@ public struct TechSystemDef: Codable, Equatable, Sendable {
     public var combos: [Combo]                 // the ComboTechs records
     public var learned: Learned                // the new-game state
     public var userSets: [[Int]]               // 52 x 3 character ids, 255 = none; a combination's sets follow its members
-    public var areas: [[Area]]                 // read-only: area number -> its entries (0 = none)
+    public var areas: [[Area]]                 // area number -> entries; existing circle radii are editable
     /// Read-only: the rock triples $70-$74 (absent in projects imported before them).
     public var rocks: [Rock]? = nil
 
@@ -120,6 +120,11 @@ public struct TechSystemDef: Codable, Equatable, Sendable {
         public var shape: Int                  // BattleSys_AreaTable type 0-6
         public var param: Int                  // bit 7 = position query; bits 6-0 = AreaParamTable entry
         public var size: Int                   // bits 6-0 = size; bit 7 = variant
+        /// Only these parameter sets forward size to the circle routine.
+        /// Shape, parameter routing, variant and record count remain read-only.
+        public var canEditRadius: Bool {
+            (shape == 1 || shape == 2) && param & 0x80 == 0 && [0, 1, 4, 5, 6].contains(param)
+        }
     }
 
     /// The character ids that perform tech `id` (its user set).
@@ -256,6 +261,15 @@ public enum CTTechROM {
     /// sizes, the tables' sizes, and a new-game state the tech-point code reads.
     public static func check(_ s: TechSystemDef) throws {
         func need(_ ok: Bool, _ what: @autoclosure () -> String) throws { if !ok { throw CTROMBuildError("techs: \(what())") } }
+        try need(s.areas.count == areaCount && s.areas.first?.isEmpty == true,
+                 "areas need 0-$0B, with area 0 empty")
+        for (i, entries) in s.areas.enumerated() where i > 0 {
+            try need(entries.count == 1, "area \(i): exactly one entry is supported by the ROM loader")
+            for e in entries {
+                try need((0..<7).contains(e.shape) && (0...255).contains(e.param) && e.param & 0x7F < 7
+                         && (0...255).contains(e.size), "area \(i): shape, parameter or size out of range")
+            }
+        }
         try need(s.schema == "ct-techs/1", "schema \(s.schema) is not ct-techs/1")
         try need(s.techs.count == count && s.techs.enumerated().allSatisfy { $0.offset == $0.element.id },
                  "need techs 0-$74 in order")
@@ -317,7 +331,16 @@ public enum CTTechROM {
                      "\(name): only the animation's script and frames are writable")
         }
         try CTTechCombos.check(s, against: base)
-        try need(s.areas == base.areas, "areas are read-only")
+        try need(s.areas.count == base.areas.count, "area count is read-only")
+        for (i, pair) in zip(s.areas, base.areas).enumerated() {
+            let (entries, original) = pair
+            try need(entries.count == original.count, "area \(i): entry count is read-only")
+            for (e, b) in zip(entries, original) {
+                let radiusEdit = b.canEditRadius && e.shape == b.shape && e.param == b.param
+                    && (0...255).contains(e.size) && e.size & 0x80 == b.size & 0x80
+                try need(e == b || radiusEdit, "area \(i): only an existing circle's radius squared is writable")
+            }
+        }
     }
 
     // MARK: Writes
@@ -346,6 +369,12 @@ public enum CTTechROM {
             let req = 0x0C0000 + word(rom, combosPC + comboSize * i + 3)
             out.append((req, c.requirements.joined().map { UInt8($0) }, String(format: "combination $%02X requirements", c.first)))
         }
+        for a in 1..<s.areas.count {
+            let at = 0x0C0000 + word(rom, areaPtrsPC + 2 * a)
+            for (k, entry) in s.areas[a].enumerated() where entry.canEditRadius {
+                out.append((at + 3 + 3 * k, [UInt8(entry.size)], "area \(a) radius squared"))
+            }
+        }
         out += CTTechCombos.writes(s, rom: rom)
         let l = s.learned
         out.append((statePC, (l.counts + l.bits1 + l.comboBits).map { UInt8($0) }, "new-game tech state"))
@@ -359,7 +388,7 @@ public enum CTTechROM {
 
     /// Whether a report write's `what` is one of `writes`'.
     public static func isTechWrite(_ what: String) -> Bool {
-        ["tech $", "part ", "TechTpCost", "combination $", "new-game tech state", "user set ", "tech descriptions"]
+        ["tech $", "part ", "area ", "TechTpCost", "combination $", "new-game tech state", "user set ", "tech descriptions"]
             .contains { what.hasPrefix($0) }
             || what.hasPrefix("record ") && what.hasSuffix(" all-singles bit")
     }

@@ -93,10 +93,19 @@ public enum CTTechTargets {
         return Zone(shape, scansParty: scansParty)
     }
 
+    /// BattleTgt_AreaCircle ($C1:2701): byte coordinates become 16-pixel cells;
+    /// the 8-bit sum of squares wraps before its inclusive comparison.
+    public static func circleContains(_ point: Point, centre: Point, size: Int) -> Bool {
+        let dx = abs((point.x & 0xFF) >> 4 - (centre.x & 0xFF) >> 4)
+        let dy = abs((point.y & 0xFF) >> 4 - (centre.y & 0xFF) >> 4)
+        return (dx * dx + dy * dy) & 0xFF <= size
+    }
+
     /// The slots a zone takes in, given each slot's screen position (nil:
     /// absent). Circle and row are the routines' arithmetic; the line's strip
-    /// and box are their inferred geometry (BattleTgt_AreaLine); the triangle
-    /// is exact where the routine compares 8-bit angles from each corner.
+    /// and box are their inferred geometry (BattleTgt_AreaLine). The triangle
+    /// uses geometric cross products, not the ROM's quantized angle comparisons.
+    /// Positions describe eligible battlers; status/KO filtering is outside this preview.
     public static func hits(_ zone: Zone, positions: [Point?]) -> [Int] {
         let side = zone.scansParty ? Array(partySlots) : Array(enemySlots)
         let present = side.filter { positions.indices.contains($0) && positions[$0] != nil }
@@ -108,8 +117,7 @@ public enum CTTechTargets {
             guard let c = at(centre) else { return [] }
             let found = present.filter { slot in
                 guard slot != centre, let p = at(slot) else { return false }
-                let dx = abs(p.x >> 4 - c.x >> 4), dy = abs(p.y >> 4 - c.y >> 4)
-                return (dx * dx + dy * dy) & 0xFF <= size                // the 8-bit sum wraps (a quirk kept)
+                return circleContains(p, centre: c, size: size)
             }
             return withAnchor(centre, found)
         case .row(let centre):

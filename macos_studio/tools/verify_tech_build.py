@@ -39,6 +39,7 @@ import ct_event_packs as packs  # noqa: E402
 import ct_rom_layout as layout  # noqa: E402
 import ct_tech_combos as ctc  # noqa: E402
 import ct_techs as ct  # noqa: E402
+import ct_tech_areas as cta  # noqa: E402
 
 
 def run(*args):
@@ -152,6 +153,11 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-techs-') as directory:
     with_area = next(t for t in techs if t['area'])
     other_area = next(a for a in range(1, ct.AREAS) if a != with_area['area'] and s['areas'][a])
     with_area['area'] = other_area
+    circle_area = next(n for n, entries in enumerate(s['areas']) if entries and
+                       ct.editable_radius([entries[0]['shape'], entries[0]['param'], entries[0]['size']]))
+    e = s['areas'][circle_area][0]
+    e['size'] = (e['size'] & 0x80) | ((e['size'] + 1) & 0x7F)
+    circle_size_pc = ct.pc(0xCC, ct.u(clean, ct.AREA_PTRS_PC + 2 * circle_area, 2)) + 3
     plain = next(t for t in techs[1:ct.FIRST_DOUBLE] if t.get('element') is None)
     plain['element'] = 'fire'
     locked = next(t for t in techs[1:ct.FIRST_DOUBLE] if t['needsUnlock'])
@@ -173,11 +179,24 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-techs-') as directory:
                      f'tech ${plain["id"]:02X} element', f'tech ${locked["id"]:02X} unlock',
                      f'tech ${cyclone:02X} animation frames', f'part {part} MP', f'part {part} effect',
                      'TechTpCost', f'combination ${combo["first"]:02X} requirements', 'new-game tech state',
-                     'record 4 all-singles bit'])
+                     'record 4 all-singles bit', f'area {circle_area} radius squared'])
     if written != expect:
         fail(f'writes {written}')
     print(run(python, workspace / 'tools/ct_rom_check.py', out, report), end='')
     built = out.read_bytes()
+    area_size = ct.decode_areas(built)[circle_area][0][2] & 0x7F
+    if area_size != e['size'] & 0x7F:
+        fail('circle radius differs from the edited record')
+    area_runner = cta.RomAreas(built)
+    area_runs = 0
+    for case in cta.cases():
+        if case['kind'] != 'circle':
+            continue
+        case['size'] = area_size
+        if area_runner.hits(**case) != cta.model(**case):
+            fail('built-ROM circle radius query differs from the preview rule')
+        area_runs += 1
+    print(f'techs: built-ROM circle radius from its edited record matches {area_runs} queries')
     after = ct.decode_tech(built, slash)
     if after['target_mode'] != techs[slash]['targetMode'] or ct.decode_part(built, part)['mp'] != s['parts'][part]['mp']:
         fail('the built ROM does not decode to the edits')
@@ -222,7 +241,8 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-techs-') as directory:
     def claim_lightning(d):
         d['techs']['techs'][plain['id']]['element'] = 'lightning'
     # Each damaged byte but the second and third is inside a write the report names.
-    cases = ((dict(where=rec(locked['id'])), f'tech ${locked["id"]:02X}: user_set is read-only'),
+    cases = ((dict(where=circle_size_pc), 'area records are not the reported values'),
+             (dict(where=rec(locked['id'])), f'tech ${locked["id"]:02X}: user_set is read-only'),
              (dict(where=rec(5) + 2), 'not in a report write'),
              (dict(where=ct.CHAR_TECHS_PC + 1), 'not in a report write'),
              (dict(where=rec(plain['id']) + 3), f'tech ${plain["id"]:02X}: attr is read-only'),
