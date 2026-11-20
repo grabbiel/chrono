@@ -690,3 +690,68 @@ These pictures are checked on two kinds of data:
 - **The ROM.** Locations 1, 47, 109, 378 and 386 render as recognisable
   rooms, through the reference renderer with colour math (`chronoforge maps
   render`).
+
+## CT frames from register writes
+
+`re_workspace/tools/ct_ppu_frames.py` runs selected game routines in the local
+ChronoRET 65816 interpreter. It captures PPU writes, DMA/HDMA setup, channel
+tables, IRQ writes and memory uploads. `CTPPUCapture` reads that temporary JSON
+and builds a `PPUFrame`; `PPURegisterPorts` independently replays its writes.
+Captures, images and game bytes are local outputs, never test fixtures.
+
+| Capture | Executed routines and observation |
+| --- | --- |
+| `battle` | `FieldBtl_SavePpu` ($C0:066D), `BattleFx_Init` ($D1:F1B0), `BattleFx_Nmi` ($D1:E77C), `BattleFx_Irq` ($D1:FE97). NMI calls `BattleCD_NmiSetup` ($CD:09F1): channel 5 writes CGWSEL through SETINI, channel 6 BGMODE/MOSAIC, channel 4 screen enables and channel 7 window edges. |
+| `title` | `Decomp_ToWram` ($C3:0557) unpacks the module to $7E:3000; `C3Mod_Init` ($7E:3063), program 2 ($7E:5978), palette upload ($7E:388B), and module idle/NMI frames run until 256 frames after the mode-2 transition. BG3's map at VRAM word $7000 supplies BG1 vertical offsets; the moving words occupy the second row. |
+| `lavos` | The same module setup with program 6 ($7E:78DD), followed by 240 frames. SETINI enables interlace and EXTBG; channel 1 varies the mode-7 matrix per line, and channel 4 selects the mode-7 plane and mode-1 strip. Both renderer fields are checked. |
+
+The module frame entry is `C3_ModuleFrame` ($C3:08D0), and its IRQ entry is
+`C3_BootIrq` ($C3:0529). IRQ writes take effect from visible line 211. Captures
+retain the IRQ's HDMAEN write as well as its PPU writes: a reader needs the
+channel stop times to reconstruct the same HDMA stream. `check --run` checks
+routine labels and setup statements against matching assembly, then checks
+the captures' structural invariants. These are selected routine executions,
+not traces of a complete running SNES.
+
+The title snapshot is during BG1's entrance: `C3Mod_Prog2Wave` ($7E:5B51)
+waits 184 frames after changing mode, then scrolls BG1 for 104 frames before
+its white flash. A snapshot at +96 had valid offset-table data but left BG1
+offscreen, making its pixel-effect check vacuous. The +256 snapshot retains
+the wave and shows the moving layer; clearing the offset row must change pixels.
+
+From a source checkout with the user's ROM and local ChronoRET reference:
+
+```sh
+re_workspace/.venv/bin/python re_workspace/tools/ct_ppu_frames.py check --run
+macos_studio/.build/debug/chronoforge ppu frame title --rom re_workspace/ct_clean.sfc --gpu --listing --out /tmp/ct-title.png
+macos_studio/.build/debug/chronoforge ppu frame lavos --rom re_workspace/ct_clean.sfc --field 1 --gpu --out /tmp/ct-lavos.png
+```
+
+`--gpu` renders with both paths and fails if any pixel differs; no stored image
+is the oracle. `--capture FILE` can reuse a local capture. The loader rejects
+malformed write tuples, unordered scanlines and incomplete HDMA transfer units
+before replay. It also rejects HDMA writes that disagree with the channel tables
+or line registers that disagree with the replay. `--listing` displays the routines
+and channel/table structure.
+
+Tests cover synthetic register latches and HDMA patterns, JSON decoding and
+malformed-input rejection. ROM-gated tests compare each line to the captured
+tables, check that title offsets visibly move BG1 while leaving the first
+column unchanged, and compare CPU/Metal pixels for each capture. They require
+the ROM and ChronoRET locally; parity tests also require Metal.
+
+### Capture boundaries
+
+- **Battle graphics are not loaded.** The field setup seeds the saved registers
+  and HDMA state but does not transfer field tiles/maps into this capture's
+  VRAM. Its render is the backdrop, and the CLI says so. The battle tests prove
+  channel setup/replay and backdrop parity, not a complete battle picture or
+  enemy/party composition. Title and Lavos execute their graphics uploads.
+- The bus implements the hardware these routines use. VMAIN address remapping
+  raises an error; status reads toggle to release waits, the APU handshake is
+  simplified, and `Audio_DriverCommand` returns immediately. Timing is per
+  scanline, not cycle-accurate; mid-line changes and general hardware execution
+  are outside this tool's scope.
+- The Studio PPU Demos window still shows synthetic scenes. A ROM-gated capture
+  view, full battle graphics/OAM uploads and broader frame selection remain
+  follow-ups. The CLI and captured-frame tests are this slice's interface.
