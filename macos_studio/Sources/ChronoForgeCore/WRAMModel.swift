@@ -89,7 +89,7 @@ public enum WRAM {
     public static let fieldE4Ptr0 = dpField + 0xAF, fieldE4Ptr1 = dpField + 0xB2
     public static let fieldE4Ptr2 = dpField + 0xB5, fieldE4Ptr3 = dpField + 0xB8
     public static let evtSprRecOfs = dpField + 0xBF, evtOpSavedPos = dpField + 0xC7
-    public static let evtSprIdx = dpField + 0xD9, evtCharId = dpField + 0xD9
+    public static let evtSprIdx = dpField + 0xD9, evtCharId = dpField + 0xD9, evtCharObj = dpField + 0xDB
     public static let evtSprSlotArg = dpField + 0xE1, evtUnk0920Key = dpField + 0xE3
     public static let evtObjSlotEnd = dpField + 0xBD
     public static let fieldUnkBC = dpField + 0xBC
@@ -140,6 +140,16 @@ public enum WRAM {
     public static let objXUnk7F0B00 = 0x7F0B00, objXAnimLoops = 0x7F0B01, objXUnk7F0B80 = 0x7F0B80
     public static let evtObjCount = 0x7F2000, evtData = 0x7F2001
     public static let partyMembers = 0x7E2980
+    // The party order, the inventory and the gold (bank $7E; ram_menu.inc, ram_battle.inc)
+    /// Menu_PartyOrder: 9 character ids, positions 0-2 the active party (= Party_Members), bit 7 empty.
+    public static let menuPartyOrder = 0x7E2980, menuUnk29AF = 0x7E29AF
+    public static let invIds = 0x7E2400, invCounts = 0x7E2500
+    public static let gold = 0x7E2C53, goldHi = 0x7E2C55
+    public static let svcArg = 0x7EAEF7, svcSlot = 0x7EAEF9, svcSlotFound = 0x7EAEFB
+    public static let menuCmdChar = 0x7E04C0, menuCmdResult = 0x7E04C1, menuCmdLimit = 0x7E04C2
+    public static let menuItemSlot = 0x7E04C7, menuItemId = 0x7E04C9
+    /// Pal_Buf rows of sprite palette slots 5-7 (party kinds 0-2).
+    public static let palPartyRow0 = 0x7E21A0, palPartyRow1 = 0x7E21C0, palPartyRow2 = 0x7E21E0
     public static let evtPrioStride = 0x80
 
     /// Event word a ($7F:0200 + 2a).

@@ -1,4 +1,4 @@
-# Embedded runtime (Story Mode Orchestrator, slice 2)
+# Embedded runtime (Story Mode Orchestrator, slices 2 and 3)
 
 Play one ROM location in a native window: the location's event pack runs in
 `CTEventVM`, the field frame in `CTFieldRuntime`, and the picture on the PPU
@@ -8,7 +8,9 @@ Everything is read from your ROM; nothing from it is stored in the project.
 | Part | File |
 |---|---|
 | Event VM (Evt_RunObjScriptSteps, the opcode handlers) | `ChronoForgeCore/CTEventVM*.swift` |
-| Field frame (load, D-pad, probes, exits, A button, box, motion, warps) | `ChronoForgeCore/CTFieldRuntime.swift` |
+| Field frame (load, D-pad, A button, box, motion, warps, music commands) | `ChronoForgeCore/CTFieldRuntime.swift` |
+| The leader's collision (`Map_Unk8A6D` and its probes, `Map_StepTileEffects`) | `ChronoForgeCore/CTFieldProbes.swift` |
+| The camera (`Map_Unk9175`, `Map_Unk99DE`, `Map_Unk91AC`, layer 1 of `Map_Unk93E1`) | `ChronoForgeCore/CTFieldScroll.swift` |
 | Picture (objects' frames as OBJs, the dialogue box band) | `ChronoForgeCore/CTFieldPicture.swift` |
 | Flag log and breakpoints | `ChronoForgeCore/CTFieldDebugger.swift` |
 | Play window and inspector | `ChronoForgeStudioApp/RuntimeWindow.swift`, `Panes/RuntimeInspectorViews.swift`, `ProjectStore+Runtime.swift` |
@@ -45,14 +47,75 @@ as external calls (their code byte zeroed): `Audio_DriverCommand` (`$C7:0004`),
 the field's party routines `$C0:9E29`, `$C0:A26B`, `$C0:A2CE`, and
 `Evt_StartTargetFunc2` (`$C0:3154`); the model records the same requests.
 
-The last full run: 13 families, 175 opcodes modelled, 172 verified on 2,267
-operand sets, 8,450 of 8,451 cases agree and none disagree. `$3B`, `$3C` and
-`$5D` are modelled but no pack uses them; one `$83` case is unverifiable (the
-handler runs past the interpreter's step limit). The per-family counts are in
+The last full run: 19 families, 206 opcodes modelled, 203 verified on 2,670
+operand sets, 9,978 of 9,980 cases agree and none disagree. `$3B`, `$3C` and
+`$5D` are modelled but no pack uses them. Two `$83` cases (two states of the
+same instruction) are unverifiable: the handler runs past the interpreter's
+step limit. The per-family counts are in
 `EVIDENCE` at the top of `ct_event_vm.py`; `test_event_vm.py` checks them
-against the Swift family table. The modelled opcodes cover 135,018 of the
-packs' 142,702 instructions. `ct_event_vm.py unmodelled` lists the opcodes
-the packs use that are not modelled, with their use counts.
+against the Swift family table. The modelled opcodes cover 140,700 of the
+packs' 142,702 instructions. The cases run in a process pool (`--jobs`,
+default the CPU count). The full run took 922 s with 8 jobs on 2026-10-23,
+while other jobs loaded the machine. The serial run before slice 3 took about
+2 h.
+
+Slice 3 added these families:
+
+| Family | Opcodes |
+|---|---|
+| membership | `$D2` `$D3` `$D4` `$CF` `$D0` `$D1` `$D6` |
+| items | `$CA` `$CB` `$C9` `$C7` `$CC` `$CD` `$CE` `$D7` |
+| gather | `$D9` `$DA` |
+| maps (region copies) | `$E4` `$E5` |
+| palettes | `$88` `$2E` `$33` |
+| steps | `$7A` `$97` `$98` `$99` `$9A` `$9D` `$9E` `$9F` `$A1` |
+
+`ct_event_vm.py unmodelled` lists the opcodes the packs use that are not
+modelled, with their use counts. 17 remain, 2,002 of 142,702 instructions:
+
+| Opcode | Uses | Handler |
+|---|---|---|
+| `$32` | 342 | `Evt_Op32_CreditsLine` |
+| `$2F` | 318 | `Evt_Op2F_SetCreditsPos` |
+| `$FF` | 248 | `Evt_OpFF_Misc` |
+| `$2A` | 173 | `Evt_Op2A_Field54Bit2` |
+| `$FE` | 157 | `Evt_OpFE_WinQuad` |
+| `$DF` | 150 | `Evt_OpDF_WarpNowUnk1E` |
+| `$EE` | 113 | `Evt_OpEE_WaitApuio3` |
+| `$2B` | 111 | `Evt_Op2B_Field54Bit3` |
+| `$C8` | 110 | `Evt_OpC8_EnterBankC2` |
+| `$ED` | 79 | `Evt_OpED_WaitApuio1` |
+| `$29` | 68 | `Evt_Op29_StartCredits` |
+| `$2C` | 48 | `Evt_Op2C_SetLayer3Pos` |
+| `$E1` | 43 | `Evt_OpE1_WarpNow` |
+| `$F8` | 32 | `Evt_OpF8_BankC2Cmd06And07` |
+| `$D5` | 6 | `Evt_OpD5_BankC2Cmd0A` |
+| `$F9` | 2 | `Evt_OpF9_BankC2Cmd06` |
+| `$FA` | 2 | `Evt_OpFA_BankC2Cmd07` |
+
+### Field routines
+
+`ct_event_vm.py routines` compares the field's routines the same way: the ROM
+routine in the interpreter against `chronoforge runtime vectors` on seeded
+states of the map page (`$7E:1D00`), the direct page, the objects and the
+tile planes; X, the carry and every written byte must agree. The camera's
+states are biased toward the map's limits. The probes' states are biased
+toward a box offset from a tile edge, and toward exit records near the `$3F`
+row limit. The last run, 2026-10-23:
+
+| Routines | Cases each | Agree |
+|---|---|---|
+| `palAnimTick`, `palClaim`, `palRelease` | 200 | all |
+| `mapInitOrigin`, `mapInitOriginX`, `mapInitOriginY`, `mapLeaderSteps` (`Map_Unk9175`), `mapCameraSteps` (`Map_Unk99DE`), `mapScrollAcc` (`Map_Unk91AC`), `mapScroll1XInc`/`XDec`/`YInc`/`YDec`, `mapRecentre` (`Field_Unk885A`) | 200 | all |
+| `mapHitsObj` (`Map_ProbeHitsObj`), `mapEntryTile` (`Map_InitEntryTile`) | 200 | all |
+| `mapLeaderProbes` (`Map_Unk8A6D`), `mapStepEffects` (`Map_StepTileEffects`) | 2,000 | all |
+
+Single mutations of the camera and probe ports each make the comparison
+fail. Among the probe mutations:
+- the ADC without CLC in the corner slide;
+- the hit test's carry;
+- the 8-bit index after a pending warp;
+- the `$3F` exit row limit.
 
 ## Field frame
 
@@ -65,12 +128,23 @@ ROM's order. It names only what the routines show:
    seen in the next.
 2. **Field_FrameUpdate**: the push step, then the D-pad (gated by `Unk62`,
    `ControlEnabled` and `Field_Unk38`): `±$10` a frame, `±$20` with B. With
-   `Field_Unk20` set, `Map_Unk8A6D`'s probes: an object in the way
-   (`Map_ProbeHitsObj`, `$E0` near, solid with `Obj_Unk1B01` bit 0, which sets
-   `Field_UnkEB`), two tile probes on the leading edge
-   (`Map_ProbeTileLevel`'s halves, slopes from the ROM's tables, split shapes and
-   the stair shape), then `Map_StepTileEffects` at the foot: a blocked level stops
-   the step; exits (`Map_TileExitIdx`) set the warp. The limits come last.
+   `Field_Unk20` set, `Map_Unk8A6D` (`CTFieldProbes.swift`). The leader's box
+   is X ±`$70` and up to `$70` above the foot. It probes for an object in the
+   way (`Map_ProbeHitsObj`: `$E0` near, solid with `Obj_Unk1B01` bit 0, which
+   sets `Field_UnkEB`), then the tiles on the leading edge
+   (`Map_ProbeTileLevel`: the tile's halves, slopes from the ROM's tables,
+   split shapes and the stair shape). A blocked corner turns the step into a
+   `$10` slide along the edge, with the ROM's own carries. A diagonal probes
+   its leading corner and the two edges' other corners. `Map_StepTileEffects`
+   commits a kept step at the foot: a blocked level stops it, and an exit
+   (`Map_TileExitIdx`, the map's record) sets the warp. It also sets the
+   level, the priorities, the tile animation and the push. Then the camera:
+   `Map_Unk9175` limits the leader's steps at the map's edges,
+   `Map_Unk99DE` drops the camera's steps until the leader is past the
+   screen's middle, `Map_Unk91AC` runs the scroll-to (`$E7`), the shake and
+   the accumulators, and `Map_Unk93E1` moves layer 1. The camera is
+   `TileOriginX × 8 + fine`. A map redraw (`$E5`) first steps it to a
+   16-pixel boundary (`Field_Unk885A`).
 3. **Field_ActionButton**: a new A press starts the target's function 1
    (`Evt_StartTargetFunc1`) when the leader is touching an object, or else the
    object in front (`Field_FindObjInFront`, `$1C0` ahead and `$C0` aside).
@@ -84,8 +158,13 @@ ROM's order. It names only what the routines show:
 
 The party-control opcodes `$AF`/`$B0` ask the field to run the leader
 (`Party_LeaderAnim`'s rows and facing from the pad) and the touch check, as the
-ROM's routines they call do. The camera follows the leader inside the map's
-limits.
+ROM's routines they call do.
+
+The load runs `LocLoad_AudioSetup`. With `Audio_Unk7F01ED` clear it sends
+`$81` (0, `$FF`, `$FF`), then the location's music (`LocRom.Music`; bit 7 means
+no change), and keeps it in `Menu_Config1E`; with it set, it plays
+`Menu_Config1E` again. `$EA` sends `Audio_CmdPlayMusic` too. `music` is the
+last track asked for.
 
 ## Studio: Play
 
@@ -108,10 +187,17 @@ Scenes pane's ROM mode, and **Play** in the Story pane open the Play window
 - **Breakpoints**: on a flag (the pause button beside it; a whole byte or one
   bit) or on an instruction offset, in one object or any. A hit pauses the run
   at the end of its frame and says what hit.
+- **State**: the party (`Menu_PartyOrder`'s active and reserve places), gold,
+  the items, and the log of the opcodes' party, item and gold changes. It also
+  shows the palette animator's live records (kind, frame, tick, raw bytes),
+  swatches of every colour the palette opcodes wrote, and each stopped object
+  with why it stopped.
 - **Changes**: the log of every story-byte change.
-
-Music is not played: `AKAOAudioEngine` is not driven by the runtime's sound
-opcodes yet (they are recorded and listed by the CLI).
+- **Music**: the song the field last asked for (at load, or by `$EA`) plays
+  through the Studio's `AKAOAudioEngine` (`SPCStream.ctSong` from the ROM).
+  A new song replaces it; the same song asked for again keeps playing. The
+  **Music** button mutes it, and closing the window stops it.
+  `--play-music off` starts muted.
 
 ## CLI
 
@@ -137,24 +223,28 @@ layers from the project's tilesets when `--project` is given).
 
 `CTFieldRuntime` has opt-in switches that leave the default run unchanged:
 `packOverrides` (a location's pack replaced, e.g. an edited scene),
-`runsScrollTo` (`$E7` scrolls the camera as `Map_Unk91AC` does, 1 px a
-frame to the tile at the top-left, then holds it) and `romAnimLoops`. The
-last one exists because the duration evidence (`ct_scene_run.py durations`)
-found that the ROM's `Obj_AnimTickAndQueue` takes **2** off a loop count of
-3 or more (`DEC`, `DEC`, `STA`) where `animTick` takes 1: with it 24 of 24
-animation cases agree, without it 12 of 24. Making it the default is left
-for review.
+`runsScrollTo` (`$E7` scrolls the camera as `Map_Unk91AC` does; the camera
+holds there until the leader walks past the screen's middle, then follows).
+`romAnimLoops` is on by
+default: the duration evidence (`ct_scene_run.py durations`) found that the
+ROM's `Obj_AnimTickAndQueue` takes **2** off a loop count of 3 or more
+(`DEC`, `DEC`, `STA`) where `animTick` took 1 (24 of 24 animation cases
+agree with the ROM's rule, 12 of 24 with the old one). Turning it off only
+replays traces taken before 2026-10-23.
 
 ## Limitations
 
-- Leader probes: `Map_Unk8A6D`'s four straight cases without the corner slides;
-  a diagonal runs the X case then the Y case.
-- Camera: centred on the leader inside the limits, not `Map_Unk91AC`'s scroll.
+- Camera: layer 1 only. Layers 2 and 3's scroll, their own steps and the edge
+  builders are not run. The redraw's own frames after `Field_Unk885A`
+  (`Field_BuildC800Mode*`) are not counted.
 - `Evt_PushTarget` (pushing objects) and treasure opening are not run.
 - The box is `CTDialogueLayout`'s; the D-pad is held while it is open; a choice
   answers its first line.
 - The frame-build queue is drained every frame, so every object animates.
 - `Party_LeaderAnim` has no idle or stair rows; followers hold their place.
-- No battles, menus, fades, palettes or music; overworld destinations and
-  special warps stop the run with a reason.
+- No battles, menus or fades. The location's own palette animation records
+  (`FieldFD_LoadAnimSetB`) are not loaded. Overworld destinations and special
+  warps stop the run with a reason.
+- Music: only `Audio_CmdPlayMusic` is played. The other sound commands
+  (effects, `$81`, volume and fades) are logged, not played.
 - The opcodes `ct_event_vm.py unmodelled` lists stop their object.

@@ -4,8 +4,10 @@ opcode handlers.
 The helpers run on synthetic data: the random states stay inside the bounds
 the handlers index by, the comparison names the first difference and leaves
 the handlers' scratch bytes out. With the ROM, ChronoRET and a built
-`chronoforge`, a small sample of the party-control opcodes ($AF, $B0) runs both
-ways and must agree.
+`chronoforge`, small samples of the party-control opcodes ($AF, $B0), of
+the item, gold and party-membership opcodes, of the palette opcodes and of the
+palette routines (PalAnim_TickAll, the slot claim and release) run both ways
+and must agree.
 
 Run: re_workspace/.venv/bin/python -m pytest re_workspace/tests/test_event_vm.py -q
 """
@@ -54,6 +56,26 @@ def test_states_stay_in_the_handlers_bounds():
     assert all(t < 16 for t in tiles[0x7E1800][1::2])
 
 
+def test_item_and_party_states_plant_the_operand():
+    rng = random.Random(11)
+    e4 = bytes(range(8))
+    held = 0
+    for _ in range(60):
+        regions = dict(vm.state(rng, 4, 0xCA, e4, b"\x2a\x00"))
+        inv = regions[0x7E2400]
+        assert len(inv) == 0x200 and len(regions[0x7E2C53]) == 3   # ids, counts; the 24-bit gold
+        held += 0x2A in inv[:0x100]
+    assert held > 20                                             # the item is often held
+    listed = 0
+    for _ in range(60):
+        regions = dict(vm.state(rng, 4, 0xD4, e4, b"\x03\x00"))
+        order = regions[0x7E2980]
+        assert len(order) == 0x30 and len(regions[0x7E21A0]) == 0x60   # Menu_PartyOrder .. $29AF; palette rows 5-7
+        listed += 3 in order[:9]
+    assert listed > 20
+    assert 0x7E2400 not in dict(vm.state(rng, 4, 0xB0, e4))
+
+
 def test_compare_names_the_first_difference():
     known = {0x7E0200: 5}
     rom = ("go", 0x23, True, {0x7E0200: 6, 0x7E01C1: 9}, known)
@@ -78,10 +100,10 @@ def test_recorded_evidence_matches_the_swift_families():
         assert f["disagree"] == 0
         assert f["agree"] <= f["cases"]
     modelled = sum(f["opcodes"] for f in vm.EVIDENCE.values())
-    assert modelled == len({op for ops in families.values() for op in ops}) == 175
-    assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 172
-    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 8450
-    assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 8451
+    assert modelled == len({op for ops in families.values() for op in ops}) == 206
+    assert sum(f["verified"] for f in vm.EVIDENCE.values()) == 203
+    assert sum(f["agree"] for f in vm.EVIDENCE.values()) == 9978
+    assert sum(f["cases"] for f in vm.EVIDENCE.values()) == 9980
     assert vm.EVIDENCE_UNMODELLED["instructions"] < vm.EVIDENCE_UNMODELLED["instructionsInPacks"] // 10
 
 
@@ -97,3 +119,103 @@ def test_party_control_agrees_with_the_rom(rom_path, chronoret, require, tmp_pat
     assert party["opcodesVerified"] == 2
     assert party["disagree"] == 0
     assert party["agree"] >= 12
+
+
+def test_items_and_membership_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "check", "--cli", str(cli),
+                        "--ops", "C9,CA,CB,CD,CE,D7,D2,D3,D4,D6", "--per-op", "3", "--states", "2", "--jobs", "2",
+                        "--json", str(out)], capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    families = json.loads(out.read_text())["families"]
+    for name, verified in (("items", 6), ("membership", 4)):
+        assert families[name]["opcodesVerified"] == verified, name
+        assert families[name]["disagree"] == 0
+        assert families[name]["agree"] == families[name]["cases"]
+
+
+def test_steps_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "check", "--cli", str(cli),
+                        "--ops", "7A,97,98,99,9A,9D,9E,9F,A1", "--per-op", "3", "--states", "2", "--jobs", "2",
+                        "--json", str(out)], capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    steps = json.loads(out.read_text())["families"]["steps"]
+    assert steps["opcodesVerified"] == 9 and steps["disagree"] == 0 and steps["agree"] == steps["cases"]
+
+def test_routine_states_stay_in_the_routines_bounds():
+    rng = random.Random(3)
+    for _ in range(50):
+        (at, recs), (pal_at, pal) = vm.tick_state(rng)
+        assert (at, len(recs), pal_at, len(pal)) == (0x7E0520, 0x90, 0x7E2000, 0x400)
+        for k in range(12):
+            rec = recs[12 * k:12 * k + 12]
+            assert 1 <= rec[2] <= 32                                  # no 64 KiB loops
+            assert rec[0] == 0 or rec[0] >= 0x10
+        regions = dict(vm.slot_state(rng))
+        cur = regions[0x7E0100][0x6D]
+        assert cur % 2 == 0 and cur < 0x20
+        assert regions[0x7E1100][cur] < 12 or regions[0x7E1100][cur] >= 0x80   # a kind with a handler
+        cam = dict(vm.camera_state(rng))
+        page = cam[0x7E1D00]
+        assert len(page) == 0x100 and page[0x1A] <= page[0x1B] and page[0x1C] <= page[0x1D]
+        assert cam[0x7E0100][0x97] in (0, 2, 4, 6, 0x80)                # the leader's slot (or none)
+        assert cam[0x7E0100][0x98] in (0, 1)                            # Map_StepStop*'s 16-bit index stays in WRAM
+        probe = dict(vm.probe_state(rng, {0x0402: [(3, 5), (7, 0x3D)], 0x0410: []}))
+        page, dp, attr = probe[0x7E1D00], probe[0x7E0100], probe[0x7E7000]
+        assert page[0x1E] == page[0x1F] in (0x0F, 0x1F)                 # a 16 x 16 or 32 x 32 map
+        assert int.from_bytes(page[4:6], "little") in (0x0402, 0x0410)  # Map_ExitRec0: one of the locations
+        assert (page[0x2E], page[0x30]) != (0, 0)                       # a step to probe
+        assert dp[0x97] in (0, 2, 4, 6) and dp[0x98] in (0, 1)
+        rows = page[0x1E] + 1
+        assert all(attr[0x80 + r * 0x100 + c] in (0x80, 0, 1, 2, 3) for r in range(rows) for c in range(rows))
+    assert set(vm.EVIDENCE_ROUTINES) == set(vm.ROUTINES)
+    assert all(agree == cases for cases, agree in vm.EVIDENCE_ROUTINES.values())
+
+
+def test_palettes_and_their_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "check", "--cli", str(cli),
+                        "--ops", "2E,33,88", "--per-op", "4", "--states", "2", "--jobs", "2", "--json", str(out)],
+                       capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    palettes = json.loads(out.read_text())["families"]["palettes"]
+    assert palettes["opcodesVerified"] == 3 and palettes["agree"] == palettes["cases"]
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "routines", "--cli", str(cli),
+                        "--cases", "20", "--jobs", "2", "--only", "palAnimTick,palClaim,palRelease", "--json", str(out)],
+                       capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads(out.read_text())
+    assert len(report) == 3
+    for name, row in report.items():
+        assert row["agree"] == row["cases"] == 20, name
+
+
+def test_camera_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    names = [n for n in vm.ROUTINES if n.startswith("map") and n not in vm.PROBE_ROUTINES]
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "routines", "--cli", str(cli),
+                        "--cases", "20", "--jobs", "2", "--only", ",".join(names), "--json", str(out)],
+                       capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads(out.read_text())
+    assert sorted(report) == sorted(names) and len(names) == 11
+    for name, row in report.items():
+        assert row["agree"] == row["cases"] == 20, name
+
+
+def test_probe_routines_agree_with_the_rom(rom_path, chronoret, require, tmp_path):
+    cli = require(vm.CLI, "chronoforge build")
+    out = tmp_path / "report.json"
+    r = subprocess.run([sys.executable, str(WS / "tools" / "ct_event_vm.py"), "routines", "--cli", str(cli),
+                        "--cases", "20", "--jobs", "2", "--only", ",".join(sorted(vm.PROBE_ROUTINES)),
+                        "--json", str(out)], capture_output=True, text=True, timeout=1200)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads(out.read_text())
+    assert sorted(report) == sorted(vm.PROBE_ROUTINES)
+    for name, row in report.items():
+        assert row["agree"] == row["cases"] == 20 * vm.ROUTINE_CASE_SCALE.get(name, 1), name

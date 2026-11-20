@@ -117,3 +117,7 @@ ChronoForgeCoreTests.CTMIDIImportTests/testAnImportedSongPlaysOnTheDriver       
 ChronoForgeCoreTests.CTProjectAuditionTests/testTheRackAuditionDecodesTheProjectSample      skip      # local ROM
 ChronoForgeCoreTests.CTProjectAuditionTests/testADrumPadAuditionPlaysTheProjectSample       skip      # local ROM
 ChronoForgeCoreTests.CTTreasureTests/testAGrownTreasureRomAndANewLocationBuild                  skip      # local ROM
+ChronoForgeCoreTests.CTFieldRuntimeTests/testARedrawCopyChangesTheMapsPicture                  skip      # local ROM
+ChronoForgeCoreTests.CTFieldRuntimeTests/testThePaletteOpcodesChangeTheColours                skip      # local ROM
+ChronoForgeCoreTests.CTFieldRuntimeTests/testTheCameraComesBackToTheLeaderAfterAScrollTo      skip      # local ROM
+ChronoForgeCoreTests.CTFieldRuntimeTests/testTheLoadAsksForTheLocationsMusic      skip      # local ROM

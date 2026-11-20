@@ -3,7 +3,7 @@ import ChronoForgeCore
 
 private let runtimeUsage = """
 usage: chronoforge runtime run <rom.sfc> <location> [--frames N] [--input script] [--trace] [--trace-frames] [--json out.json]
-                              [--party 0,1,2] [--entry x,y[,facing]] [--flag addr=value ...]
+                              [--party 0,1,2] [--entry x,y[,facing]] [--flag addr=value ...] [--scroll-to]
                               [--png out.png [--project p.ctproj]]
        chronoforge runtime vectors <rom.sfc> <cases.json> --out <results.json>
 """
@@ -20,7 +20,7 @@ func cmdRuntime(_ args: [String]) -> Int32 {
     var positional: [String] = [], options: [String: String] = [:], flags: Set<String> = []
     var i = 1
     while i < args.count {
-        if args[i] == "--trace" || args[i] == "--trace-frames" {
+        if args[i] == "--trace" || args[i] == "--trace-frames" || args[i] == "--scroll-to" {
             flags.insert(args[i]); i += 1
         } else if args[i].hasPrefix("--") {
             guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
@@ -42,7 +42,7 @@ func cmdRuntime(_ args: [String]) -> Int32 {
         default:
             return try runtimeRun(rom: rom, location: positional[1], options: options,
                                   trace: flags.contains("--trace") || flags.contains("--trace-frames"),
-                                  frameNumbers: flags.contains("--trace-frames"))
+                                  frameNumbers: flags.contains("--trace-frames"), scrollTo: flags.contains("--scroll-to"))
         }
     } catch {
         print("error: \(error)")
@@ -64,7 +64,7 @@ private func runtimeInts(_ s: String) -> [Int]? {
 }
 
 private func runtimeRun(rom: [UInt8], location: String, options: [String: String], trace: Bool,
-                        frameNumbers: Bool = false) throws -> Int32 {
+                        frameNumbers: Bool = false, scrollTo: Bool = false) throws -> Int32 {
     guard let loc = runtimeLocation(location) else { print("bad location \(location)"); return 2 }
     let frames = Int(options["--frames"] ?? "120") ?? -1
     guard frames >= 0 else { print("bad --frames"); return 2 }
@@ -79,6 +79,7 @@ private func runtimeRun(rom: [UInt8], location: String, options: [String: String
         party = v.map { UInt8($0 & 0xFF) }
     }
     let field = try CTFieldRuntime(rom: rom, location: loc, party: party)
+    field.runsScrollTo = scrollTo
     if let e = options["--entry"] {
         guard let v = runtimeInts(e), (2...3).contains(v.count) else { print("bad --entry"); return 2 }
         field.setEntry(x: v[0], y: v[1], facing: v.count == 3 ? v[2] : 1)
@@ -126,8 +127,8 @@ private func runtimeRun(rom: [UInt8], location: String, options: [String: String
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         try encoder.encode(s).write(to: URL(fileURLWithPath: out), options: .atomic)
     }
-    print(String(format: "location %d (loc_%03d): %d frames, %d objects, leader level %d", s.location, s.location, s.frames,
-                 s.objects.count, s.level))
+    print(String(format: "location %d (loc_%03d): %d frames, %d objects, leader level %d, camera %d,%d", s.location, s.location,
+                 s.frames, s.objects.count, s.level, field.camera.x, field.camera.y))
     for o in s.objects {
         var line = String(format: "  obj %2d kind $%02X level %d at $%04X tile %3d,%3d", o.object, o.kind, o.level, o.scriptPos,
                           o.tileX, o.tileY)
@@ -140,5 +141,7 @@ private func runtimeRun(rom: [UInt8], location: String, options: [String: String
                      m.error.map { " error: \($0)" } ?? (m.closedAt.map { " closed at \($0)" } ?? " open")))
     }
     for w in s.warps { print("  warp at frame \(w.frame): \(w.from) -> \(w.to) tile \(w.x),\(w.y)") }
+    if let m = s.music { print(String(format: "  music: song $%02X", m)) }
+    for c in s.changes { print("  \(c)") }
     return 0
 }

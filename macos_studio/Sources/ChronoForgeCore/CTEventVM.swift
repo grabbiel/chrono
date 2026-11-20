@@ -30,6 +30,22 @@ public final class CTEventVM {
     public var audio: [AudioCommand] = []
     /// The field's party routines, called by `$B0`/`$AF` (nil: the handler alone).
     public var party: ((PartyRequest) -> Void)?
+    /// Party, inventory and gold changes the opcodes made, oldest first; the field drains them.
+    public var changes: [StateChange] = []
+    /// Menu_RunCommand runs that ended with Menu_Unk834D's refresh (not modelled).
+    public var menuRefreshes = 0
+    /// Colour numbers (0-255) the palette opcodes and their records wrote in Pal_CgramBuf.
+    public var paletteWrites: Set<Int> = []
+    /// Map region copies done (Field_UnkAF4E), oldest first; the field drains them.
+    public var mapCopies: [MapCopy] = []
+    /// The location's exit records (7 bytes each) Map_StepTileEffects reads
+    /// by a tile's exit index; nil reads the ROM's bank $E5 at Map_ExitRec0.
+    public var exitRecords: [[UInt8]]?
+
+    /// One Field_UnkAF4E copy: the layers whose tiles changed and the destination cells (row << 8 | column).
+    public struct MapCopy: Equatable, Sendable {
+        public var layers: Set<Int>, cells: [Int]
+    }
 
     /// Audio_CmdId and Audio_CmdArg0-2 as Audio_DriverCommand found them.
     public struct AudioCommand: Equatable, Sendable {
@@ -273,7 +289,13 @@ public final class CTEventVM {
         "characters": [0x57, 0x5C, 0x62, 0x68, 0x6A, 0x6C, 0x6D, 0x80, 0x81, 0x82, 0x83],
         "sound": [0xE8, 0xEA, 0xEB, 0xEC],
         "movement": [0x8F, 0x92, 0x94, 0x95, 0x96, 0x9C, 0xA0, 0xA8, 0xA9, 0xB5, 0xB6],
+        "steps": [0x7A, 0x97, 0x98, 0x99, 0x9A, 0x9D, 0x9E, 0x9F, 0xA1],
         "party": [0xAF, 0xB0],
+        "membership": [0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6],
+        "items": [0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7],
+        "gather": [0xD9, 0xDA],
+        "maps": [0xE4, 0xE5],
+        "palettes": [0x2E, 0x33, 0x88],
     ]
     public static let modelled: Set<UInt8> = Set(families.values.joined())
 
@@ -565,6 +587,25 @@ public final class CTEventVM {
         case 0x81: return initSprite(y)
         case 0x92, 0x9C: return walkDirection(y, animate: op == 0x92)
         case 0x96, 0xA0: return walkToTile(y, animate: op == 0x96)
+        case 0x97, 0xA1:
+            if wram[WRAM.objMoveFrames + objCur] != 0 { return .go(x: y, carry: false) }
+            return walkToTile(y, animate: op == 0x97, tile: (eventByte(data(y + 1)), eventByte(data(y + 2))))
+        case 0x9D: return moveDirectionVar(y)
+        case 0x9A: return walkTowardTile(y)
+        case 0x98, 0x99:
+            let c = objCur
+            if wram[WRAM.objUnk1A80 + c] != 0 {
+                if wram[WRAM.objMoveFrames + c] != 0 { return .go(x: y, carry: false) }
+                wram[WRAM.objUnk1A80 + c] = 0
+                return .go(x: y + 3, carry: true)
+            }
+            let t = op == 0x98 ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
+            return walkTowardObject(y, target: t)
+        case 0x9E, 0x9F:
+            if wram[WRAM.objMoveFrames + objCur] != 0 { return .go(x: y, carry: false) }
+            let t = op == 0x9E ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
+            return moveToObject(y, target: t)
+        case 0x7A: return arcToTile(y)
         case 0x94, 0x95:
             if wram[WRAM.objMoveFrames + objCur] != 0 { return .go(x: y, carry: false) }
             let t = op == 0x94 ? data(y + 1) : Int(wram[WRAM.partyObjSlot + data(y + 1)])
@@ -585,6 +626,14 @@ public final class CTEventVM {
         case 0x82: return initNpcSprite(y)
         case 0x83: return initEnemySprite(y)
         case 0xE8, 0xEA, 0xEB, 0xEC: return sound(op, y)
+        case 0xC7, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xD7: return inventoryOp(op, y)
+        case 0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD6: return membershipOp(op, y)
+        case 0xD9: return partyWalkToTiles(y)
+        case 0xDA: return partyGather(y)
+        case 0xE4, 0xE5: return mapCopyOp(op, y)
+        case 0x88: return objPalAnim(y)
+        case 0x2E: return palAnim(y)
+        case 0x33: return setPalette(y)
         case 0xE3: wram[WRAM.fieldControlEnabled] = UInt8(data(y + 1)); return .go(x: y + 2, carry: true)
         case 0xE6:
             let amount = dataWord(y + 1), layers = data(y + 3)

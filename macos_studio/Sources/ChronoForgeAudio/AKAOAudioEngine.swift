@@ -44,6 +44,8 @@ public final class AKAOAudioEngine {
     /// Bumped by every `play` and `stop`, so a slow load that was superseded
     /// is discarded instead of starting.
     @ObservationIgnored private var generation = 0
+    /// Identifies the client request during both loading and playback.
+    @ObservationIgnored private var requestOwner: UUID?
 
     public init() {}
 
@@ -51,8 +53,9 @@ public final class AKAOAudioEngine {
 
     /// Stop what is playing, build a source with `make` on a background task,
     /// prefill the ring and start the device.
-    public func play(_ title: String, _ make: @escaping @Sendable () throws -> SPCStream) async {
+    public func play(_ title: String, owner: UUID? = nil, _ make: @escaping @Sendable () throws -> SPCStream) async {
         stop()
+        requestOwner = owner
         generation += 1
         let mine = generation
         isLoading = true
@@ -69,6 +72,7 @@ public final class AKAOAudioEngine {
         guard generation == mine else { return }
         switch loaded {
         case .failure(let failure):
+            requestOwner = nil
             error = String(describing: failure)
         case .success(let producer):
             do {
@@ -96,9 +100,16 @@ public final class AKAOAudioEngine {
         }
     }
 
+    /// Cancel this request only if another client has not replaced it.
+    public func stop(ifOwnedBy owner: UUID) {
+        guard requestOwner == owner else { return }
+        stop()
+    }
+
     /// Stop playback and release the producer.
     public func stop() {
         generation += 1
+        requestOwner = nil
         monitor?.cancel()
         monitor = nil
         producer?.stop()

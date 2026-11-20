@@ -6,10 +6,13 @@
 // An object's frame comes from the tables its init opcode filled
 // (Obj_GfxBank/Ofs: the 4bpp tiles, in the ROM or unpacked to bank $7F;
 // Obj_FrameBank/Ofs: 40-byte frame records; Obj_AnimFrameTbl/FacingStride:
-// the frame ids in bank $E4; Obj_PalSrc: 12 colours in bank $E4) and the
-// animation state Obj_AnimTickAndQueue keeps. The game streams the cells
-// through SprBuf and Obj_DrawLink's OAM lists; here each object gets its own
-// OBJ tiles and the OAM is ordered by Y (lower on screen in front).
+// the frame ids in bank $E4) and the animation state Obj_AnimTickAndQueue
+// keeps; its palette is the sprite row its Obj_OamAttr names, with the colours
+// the runtime keeps in Pal_CgramBuf (the slot claims and the palette opcodes).
+// The game streams the cells through SprBuf and Obj_DrawLink's OAM lists; here
+// each object gets its own OBJ tiles and the OAM is ordered by Y (lower on
+// screen in front). Background colours the palette opcodes wrote are taken
+// from Pal_CgramBuf too.
 import Foundation
 
 public enum CTFieldPicture {
@@ -60,19 +63,15 @@ public enum CTFieldPicture {
             order.append((2 * o, w.word(WRAM.objPosY + 2 * o)))
         }
         order.sort { $0.y > $1.y }
-        var palettes: [Int: Int] = [:], nextOBJ = 0, nextBlock = blocks.lowerBound
+        for c in vm.paletteWrites where c < 128 { f.cgram[c] = cgramWord(vm, c) }
+        var rows: Set<Int> = [], nextOBJ = 0, nextBlock = blocks.lowerBound
         var sprites: [Sprite] = []
         for (s, _) in order {
             guard let id = frameID(vm, slot: s), nextBlock + 4 <= blocks.upperBound, nextOBJ + 4 <= 128 else { continue }
-            let palSrc = w.word(WRAM.objPalSrc + s)
-            let pal: Int
-            if let p = palettes[palSrc] { pal = p } else {
-                guard palettes.count < 8 else { continue }
-                pal = palettes.count
-                palettes[palSrc] = pal
-                for c in 0..<12 {
-                    let at = WRAM.animRom | ((palSrc + 2 * c) & 0xFFFF)
-                    f.cgram[128 + 16 * pal + 1 + c] = UInt16(vm.read(at)) | UInt16(vm.read(at + 1)) << 8
+            let pal = Int(w[WRAM.objOamAttr + s] >> 1 & 7)
+            if rows.insert(pal).inserted {
+                for c in 1..<16 where c <= 12 || vm.paletteWrites.contains(128 + 16 * pal + c) {
+                    f.cgram[128 + 16 * pal + c] = cgramWord(vm, 128 + 16 * pal + c)
                 }
             }
             let frames = Int(w[WRAM.objFrameBank + s]) << 16 | w.word(WRAM.objFrameOfs + s)
@@ -108,11 +107,14 @@ public enum CTFieldPicture {
         return (f, sprites)
     }
 
+    /// Colour `c` of Pal_CgramBuf.
+    static func cgramWord(_ vm: CTEventVM, _ c: Int) -> UInt16 { UInt16(vm.wram.word(WRAM.palCgramBuf + 2 * c)) }
+
     /// The location under the runtime's camera, when the project has its map.
     public static func base(_ field: CTFieldRuntime, map: GameMap?, assets: LocationScene.Assets?,
                             cgram: [UInt16]? = nil) -> PPUFrame? {
         guard let map, let assets else { return nil }
-        return LocationScene.frame(map, assets: assets, cgram: cgram ?? TilesetScene.cgram(assets.palette),
+        return LocationScene.frame(field.liveMap(map), assets: assets, cgram: cgram ?? TilesetScene.cgram(assets.palette),
                                    cameraX: field.camera.x, cameraY: field.camera.y)
     }
 

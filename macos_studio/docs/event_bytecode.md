@@ -3,8 +3,10 @@
 ChronoForge can read, edit and write the event packs Chrono Trigger US 1.0
 loads for each location, and can lower a subset of Studio scenes to that
 bytecode. This page covers the static tooling; the embedded runtime
-([runtime.md](runtime.md)) executes the packs: `CTEventVM` models 175 opcodes,
-each checked against the ROM's handler, and stops an object on any other.
+([runtime.md](runtime.md)) executes the packs: `CTEventVM` models 206 opcodes
+(203 checked against the ROM's handler; no pack uses the other 3), and stops
+an object on any other. 17 opcodes the packs use remain, 2,002 of their
+142,702 instructions.
 
 ## Pack format
 

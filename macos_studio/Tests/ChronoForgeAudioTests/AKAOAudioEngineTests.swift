@@ -44,4 +44,63 @@ final class AKAOAudioEngineTests: XCTestCase {
         engine.stop()
         XCTAssertEqual(engine.error, "no such song", "stop keeps the last error")
     }
+
+    @MainActor
+    func testOldOwnerCannotCancelAReplacementLoadWithTheSameTitle() async {
+        let engine = AKAOAudioEngine()
+        let firstOwner = UUID(), secondOwner = UUID()
+        let firstStarted = expectation(description: "first load started")
+        let secondStarted = expectation(description: "replacement load started")
+        let releaseFirst = DispatchSemaphore(value: 0), releaseSecond = DispatchSemaphore(value: 0)
+        defer { releaseFirst.signal(); releaseSecond.signal(); engine.stop() }
+        let first = Task {
+            await engine.play("same title", owner: firstOwner) {
+                firstStarted.fulfill()
+                _ = releaseFirst.wait(timeout: .now() + 10)
+                throw CTSongError("superseded load")
+            }
+        }
+        await fulfillment(of: [firstStarted], timeout: 5)
+        let second = Task {
+            await engine.play("same title", owner: secondOwner) {
+                secondStarted.fulfill()
+                _ = releaseSecond.wait(timeout: .now() + 10)
+                throw CTSongError("replacement load")
+            }
+        }
+        await fulfillment(of: [secondStarted], timeout: 5)
+        engine.stop(ifOwnedBy: firstOwner)
+        XCTAssertTrue(engine.isLoading, "closing the old client must leave the new load alone")
+        releaseFirst.signal()
+        await first.value
+        XCTAssertTrue(engine.isLoading, "completion of the old load must leave the new load alone")
+        XCTAssertNil(engine.error)
+        releaseSecond.signal()
+        await second.value
+        XCTAssertEqual(engine.error, "replacement load", "the replacement must reach completion")
+        XCTAssertFalse(engine.isLoading)
+    }
+
+    @MainActor
+    func testOwnerCanCancelItsPendingLoad() async {
+        let engine = AKAOAudioEngine(), owner = UUID()
+        let started = expectation(description: "owned load started")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal(); engine.stop() }
+        let load = Task {
+            await engine.play("pending", owner: owner) {
+                started.fulfill()
+                _ = release.wait(timeout: .now() + 10)
+                throw CTSongError("cancelled load must be discarded")
+            }
+        }
+        await fulfillment(of: [started], timeout: 5)
+        XCTAssertTrue(engine.isLoading)
+        engine.stop(ifOwnedBy: owner)
+        XCTAssertFalse(engine.isLoading)
+        release.signal()
+        await load.value
+        XCTAssertNil(engine.error)
+        XCTAssertFalse(engine.isPlaying)
+    }
 }

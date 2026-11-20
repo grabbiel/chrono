@@ -80,7 +80,7 @@ final class CTSceneRunTests: XCTestCase {
     }
 
     func testAnUnmodelledOpcodeEndsTheLaneWithTheReason() throws {
-        let p = try pack([0xAD, 0x01, 0xD2] + Array(repeating: 0, count: 8))
+        let p = try pack([0xAD, 0x01, 0x32] + Array(repeating: 0, count: 8))
         let (lanes, _) = CTSceneRun.derive(steps(p, frames: 20), pack: p)
         let lane = try XCTUnwrap(lanes.first)
         XCTAssertNotNil(lane.stopped)
@@ -178,7 +178,7 @@ final class CTSceneRunTests: XCTestCase {
         let rom = try rom()
         for location in [29, 7, 71] {
             var o = CTSceneRun.Options()
-            o.frames = 240; o.scrollTo = false; o.skipBattles = false; o.romAnimLoops = false
+            o.frames = 240; o.scrollTo = false; o.skipBattles = false
             let r = try CTSceneRun.run(rom: rom, location: location, options: o)
             XCTAssertNil(r.error)
             // The same location in a plain field, its trace kept by frame.
