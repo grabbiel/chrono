@@ -273,7 +273,7 @@ default:
       chronoforge rom <build|info|locations> ...                 (.sfc builder)
       chronoforge characters <import|show|curve> ...             (playable-character records)
       chronoforge enemies <import|show|verify> ...               (enemy stats, rewards, names, AI scripts)
-      chronoforge sprites <import|show> ...                      (playable-character sprites)
+      chronoforge sprites <import|show> ...                      (character, enemy and NPC sprites)
       chronoforge tilesets <import|show|verify> ...              (location tilesets and palettes)
       chronoforge maps <import|show|render|verify|chest|new-location|rom-list> ... (location maps, chests, new locations)
       chronoforge items <import|show> ...                        (item, gear and consumable tables)

@@ -29,6 +29,12 @@ public enum CTSpriteROM {
     public static let priority = 2
     public static let endMarker = 0xFF                 // a frame id that ends the row (field)
     public static let facings = ["up", "down", "left", "right"]
+    // The battle's palettes (docs/sprites.md, "Battle palettes and weapons").
+    public static let partyPalettes = [5, 6, 7]         // Battle_PcPalette0 $0A (+2 each); ObjPal_SlotKind0-2
+    public static let recordWeapon = 0x29               // PcStatBlk.Unk29 = the character record's weapon
+    public static let weaponColourIdx = 0xCD6CEC        // 1 B per weapon id: its colour record
+    public static let weaponColours = 0xD14B00          // 6 B (3 colours) per record
+    public static let weaponColourFirst = 13            // colours 13-15
 
     /// HiROM file offset of a 24-bit address.
     public static func pc(_ long: Int) -> Int { (long >> 16 & 0x3F) << 16 | long & 0xFFFF }
@@ -148,7 +154,7 @@ public enum CTSpriteROM {
     }
 
     /// The 16-entry OBJ palette of an import: 0, the 12 ROM colours, then 3
-    /// zeros (the battle loads the weapon's colours there; not imported).
+    /// zeros (the battle loads the weapon's colours there: `pcBattle`).
     public static func objPalette(_ d: DecodedSet) -> [UInt16] { [0] + d.palette + [0, 0, 0] }
 
     /// A project sprite of the set: the sheet holds its tiles 16 per row,
@@ -167,6 +173,17 @@ public enum CTSpriteROM {
         return SpriteDef(id: id, sheet: "sprites/\(id).png", bpp: 4, frames: frames, animations: d.animations,
                          palettes: [objPalette(d).map { BGR555(word: $0).hex }],
                          stream: .init(columns: columns, rows: rows, baseTile: slotTile), rom: source)
+    }
+
+    /// The battle's additions to set `c`: party palettes, the new-game
+    /// weapon's colours (BattleRom_WeaponColourIdx -> BattleRom_WeaponColours)
+    /// and the box Battle_InitScene gives every PC.
+    public static func pcBattle(_ rom: [UInt8], set c: Int) -> SpriteDef.PCBattle {
+        let weapon = Int(rom[CTCharacterROM.recordPC(c) + recordWeapon])
+        let k = u8(rom, weaponColourIdx + weapon)
+        let colours = (0..<3).map { BGR555(word: UInt16(u16(rom, weaponColours + 6 * k + 2 * $0))).hex }
+        return .init(partyPalettes: partyPalettes, weapon: weapon, weaponColourRecord: k, weaponColours: colours,
+                     screenOffsetX: 0, screenOffsetY: -16, halfWidth: 8, height: 8)
     }
 
     /// The set's tiles as an indexed PNG, 16 per row.
@@ -193,6 +210,7 @@ public enum CTSpriteROM {
             let d = decode(rom: rom, set: c)
             let id = project.sprites.first { $0.value.rom?.family == "ct-pc" && $0.value.rom?.set == c }?.key ?? names[c]
             var s = spriteDef(d, id: id)
+            s.pcBattle = pcBattle(rom, set: c)
             if let old = project.sprites[id] {
                 for i in s.frames.indices where i < old.frames.count {
                     s.frames[i].hitbox = old.frames[i].hitbox
@@ -266,7 +284,23 @@ public enum SpriteScene {
         public var backdrop: UInt16 = 0x2108
         public var onionFrame: Int?                    // drawn behind, dimmed, in OBJ palette 7
         public var height = 224
+        public var battle: BattleView?                 // ct-pc: drawn as the battle draws party member 0
         public init() {}
+    }
+
+    /// A playable character in battle: palette 0's colours in OBJ palette
+    /// `palette`, with the weapon's 3 colours over colours 13-15.
+    public struct BattleView: Equatable, Sendable {
+        public var palette: Int
+        public var weaponColours: [UInt16]
+        public init(palette: Int, weaponColours: [UInt16]) { self.palette = palette; self.weaponColours = weaponColours }
+    }
+
+    /// The battle view of a ct-pc sprite with `pcBattle`, as party member `member` (0-2).
+    public static func battleView(_ s: SpriteDef, member: Int = 0) -> BattleView? {
+        guard let b = s.pcBattle, b.partyPalettes.indices.contains(member) else { return nil }
+        let colours = b.weaponColours.map { BGR555(hex: $0)?.word ?? 0 }
+        return BattleView(palette: b.partyPalettes[member] & 7, weaponColours: colours)
     }
 
     /// The 8 OBJ palettes (16 words each): `palettes`, else the sheet's PLTE as palette 0.
@@ -324,6 +358,12 @@ public enum SpriteScene {
         p.cgram[0] = o.backdrop
         let pals = palettes(s, sheetPalette: sheetPalette)
         for k in 0..<8 { for i in 0..<16 { p.cgram[128 + 16 * k + i] = pals[k][i] } }
+        if let b = o.battle {
+            for i in 0..<16 { p.cgram[128 + 16 * b.palette + i] = pals[0][i] }
+            for (j, c) in b.weaponColours.prefix(3).enumerated() {
+                p.cgram[128 + 16 * b.palette + CTSpriteROM.weaponColourFirst + j] = c
+            }
+        }
         var next = 0
         func place(_ index: Int, slot: Int?, palette: Int?) {
             guard s.frames.indices.contains(index) else { return }
@@ -337,10 +377,12 @@ public enum SpriteScene {
                 next += 1
             }
         }
-        place(f, slot: nil, palette: nil)
+        place(f, slot: nil, palette: o.battle?.palette)
         if let onion = o.onionFrame, onion != f {
-            let source = s.frames.indices.contains(f) ? s.frames[f].tiles.first?.pal ?? 0 : 0
-            for i in 1..<16 { p.cgram[128 + 16 * 7 + i] = dim(pals[source][i], toward: o.backdrop) }
+            let first = s.frames.indices.contains(f) ? s.frames[f].tiles.first?.pal ?? 0 : 0
+            let source = o.battle?.palette ?? first
+            let shown = (0..<16).map { p.cgram[128 + 16 * source + $0] }
+            for i in 1..<16 { p.cgram[128 + 16 * 7 + i] = dim(shown[i], toward: o.backdrop) }
             place(onion, slot: onionSlot(s), palette: 7)
         }
         return p

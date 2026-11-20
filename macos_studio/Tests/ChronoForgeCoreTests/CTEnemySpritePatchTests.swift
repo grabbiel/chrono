@@ -251,10 +251,11 @@ final class CTEnemySpritePatchTests: XCTestCase {
         try FileManager.default.copyItem(at: fixtureURL(), to: dir)
         var project = try CTProject.load(from: dir)
         let pcs = try CTSpriteROM.importSprites(rom: rom, into: &project)
-        let (ids, _) = try CTEnemySpriteROM.importSprites(rom: rom, into: &project)
+        let (ids, fieldOnly) = try CTEnemySpriteROM.importSprites(rom: rom, into: &project)
         try project.save()
         var loaded = try CTProject.load(from: dir)
-        loaded.project.rom = Project.ROMBuild(sprites: pcs + ids)
+        let large = Set(fieldOnly.map(CTEnemySpriteROM.id))      // layout 3: read-only
+        loaded.project.rom = Project.ROMBuild(sprites: pcs + ids.filter { !large.contains($0) })
         let (out, report) = try CTROMBuilder.build(base: raw, project: loaded)
         XCTAssertEqual(out, raw)
         XCTAssertTrue(report.writes.isEmpty)

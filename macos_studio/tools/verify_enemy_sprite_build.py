@@ -93,9 +93,12 @@ with tempfile.TemporaryDirectory(prefix='chronoforge-enemy-sprites-') as directo
         return d
 
     every = sorted(p.name[:-len('.sprite.json')] for p in (project / 'sprites').glob('*.sprite.json'))
+    # Layout 3 comes in as the field shows it, read-only: the build refuses it.
+    large = [n for n in every if n.startswith('enemy_') and load(n)['rom'].get('layout') == 3]
+    every = [n for n in every if n not in large]
     enemies = [n for n in every if n.startswith('enemy_')]
-    if len(enemies) != 252:
-        fail(f'{len(enemies)} enemy sprites imported')
+    if len(enemies) != 252 or large != ['enemy_111', 'enemy_147', 'enemy_215']:
+        fail(f'{len(enemies)} enemy sprites imported, layout 3: {large}')
 
     # Unmodified import: the clean ROM, no writes.
     set_sprites(every)

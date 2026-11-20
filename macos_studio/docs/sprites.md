@@ -161,6 +161,65 @@ the editor has three parts.
 Every preview is a `PPUFrame` drawn by `SNESPPUView`, so it shows what the
 hardware would: OBJ order, 16×16 tile wrap, per-line limits and palettes.
 
+## Battle palettes and weapons
+
+Party member k (0–2) draws in OBJ palette 5 + k, in the field and in battle.
+The battle adds its weapon's colours over colours 13–15. Nothing else about a
+playable character's sprite changes in battle.
+
+- **Field.** An object's palette handler is chosen by its kind (`Obj_Unk1100`, the
+  party position). Kinds 0–2 are `Obj_PalSlotKind0`–`2`, which give
+  `Obj_PalSlotFixed` slots 5, 6 and 7 (`ObjPal_SlotKind0`–`2`). That routine
+  sets the OAM attribute to slot × 2 (`ObjPal_AttrMask` `$0E`). It copies the
+  set's 12 colours (`ObjPal_CopyCount` `$17`, 24 B) to colours 1–12 of row
+  `Pal_SpriteRows` + slot × `$20`, and again into `Pal_CgramBuf`.
+- **Battle.** `Battle_PaletteSavedLo` and `Battle_PaletteSaved` (`$2000`, `$2100`)
+  are the field's `Pal_Buf` and `Pal_SpriteRows` (`$7E:2000`, `$7E:2100`), so
+  the rows carry over. `Battle_InitScene` does three things:
+  - it copies all `$200` bytes to `Battle_PaletteLiveLo` and `Battle_PaletteLive`;
+  - it sets the PCs' `Battler_Palette` to `$0A`, `$0C` and `$0E`
+    (`Battle_PcPalette0`; attribute bits 1–3, so palettes 5–7);
+  - for each party member k, it copies 6 bytes (3 colours) to
+    `Battle_PaletteLive` + `$BA` + `$20`k.
+- **Which 3 colours.** They are record `BattleRom_WeaponColourIdx[w]` of
+  `BattleRom_WeaponColours` (`$D1:4B00`, 32 records), where w is member k's
+  `Battle_Unk1C48` + 5k byte. `BattleFD_UnkAEF2` fills that byte from the stat
+  block's +`$29`, which is the character record's weapon (`docs/characters.md`).
+  Weapon ids 0–89 (`Menu_ItemCategoryBounds`) all index records 0–31.
+- **Where they land.** `BattleCF_VblankUploads` DMAs the `$200` bytes from
+  `Battle_PaletteLiveLo` to CGDATA from CGADD 0. So `Battle_PaletteLive` is CGRAM 128
+  (OBJ palette 0), and +`$BA` is colour 13 of palette 5.
+
+**No per-frame hitbox or weapon data.** The weapon is drawn in the frames'
+pixels; only its colours vary. `Battle_InitScene` gives every PC the same box in
+code: screen offsets 0 and `$F0` (−16; `Battle_PcOffsetYInit`), half width 8
+and height 8. An enemy's box comes from its record (+5 to +8). No hitbox,
+attachment or weapon-sprite table appears in the PC paths. The frame
+records hold only cells and OBJ offsets
+([Frames](#frames)).
+
+`sprites import` writes this as the read-only `pcBattle` of each `ct-pc`
+sprite:
+- `partyPalettes` [5, 6, 7];
+- the new-game record's `weapon`;
+- its `weaponColourRecord`;
+- the 3 `weaponColours`;
+- the box (`screenOffsetX` 0, `screenOffsetY` −16, `halfWidth` 8, `height` 8).
+
+The Studio's **Battle palette** toggle draws the frame as party member 0:
+- in OBJ palette 5;
+- with colours 1–12 from palette 0;
+- with the weapon's colours at 13–15.
+
+The sheet's PLTE, `palettes` and the OBJs' palette 0 are unchanged, and the
+write-back ignores `pcBattle`.
+
+The evidence is the `BATTLE_*` claims of `ct_sprites.py check`:
+- ChronoRET's lines;
+- the code bytes at `$CC:E2E4`, `$CF:E300` and `$FD:AEF2`;
+- the table data;
+- `verify-import` against the CLI import.
+
 ## Tile layout fix
 
 `TileDecoder` read plane p of row r at byte p × 8 + r, a plane-after-plane
@@ -210,11 +269,14 @@ Impact:
 ## Limitations
 
 - The playable characters' and the enemies' sets (layouts 0–2) are decoded and
-  written back ([Enemy sprites](#enemy-sprites)); NPC sets are not decoded.
-- The weapon colours (13–15) are not imported, and the import uses OBJ palette 0
-  where the battle uses 5–7.
-- `hitbox` and `weapon` are Studio metadata. They are not decoded from the game
-  and not written to it.
+  written back ([Enemy sprites](#enemy-sprites)), and so are the field NPCs' ([NPC sprites](#npc-sprites)).
+- The weapon colours (13–15) and the party palettes (5–7) are imported read-only
+  as `pcBattle`. Only the Studio preview uses them: the sheet and the OBJs keep
+  palette 0. The colours are those of the new-game weapon; equipping another
+  weapon changes them in the game ([Battle palettes and weapons](#battle-palettes-and-weapons)).
+- `hitbox` and `weapon` are Studio metadata. The game has no per-frame hitbox
+  or weapon data to decode: the PCs' box is set in code, and the weapon is
+  drawn in the frames.
 - The write-back keeps each set's size and shape: no new tiles, frames or
   animation rows, and no shorter or longer lists.
 - OBJ priority is per object, not per frame. The field gives an OBJ whose y
@@ -325,8 +387,59 @@ run along row pairs. This comes from the battle's DMA tables and OBJ records
 (`BattleRom_SprTileListPtr`: slot s's OBJs start at `Battle_SprRec` record 4s;
 layout 2 in slot 3 uses the fixed DMA words of `Battle_InitSceneGfx`, elsewhere
 the row order of layout 5) and holds for layout 0 in all 8 enemy slots, layout 1
-in slots 3, 5, 7 and 9 and layout 2 in slots 3 and 6. No slot gives layout 3 an
-assembly, so those three records are not imported.
+in slots 3, 5, 7 and 9 and layout 2 in slots 3 and 6. No battle slot gives
+layout 3 an assembly; the field does ([Layout 3](#layout-3-the-fields-large-objects)).
+
+### Layout 3: the field's large objects
+
+The battle has no assembly for layout 3, but the field draws it. Opcode `$83`
+(`Evt_Op83_InitEnemySprite`) calls `Spr_LoadLargeObj` (`$C0:E12A`) when the size
+class is 3 (`ObjSpr_SizeLarge`). That routine does three things:
+
+1. It copies the 96 tile words of the record's **first** frame record
+   (`SprBuf_Tiles`), in order, into the `$7F:3800` buffer (`SprBuf_Base`),
+   mirroring where bit 14 is set.
+2. It DMAs the `$0C00` bytes to VRAM word `$0400` (`SprBuf_VramWord`). So cell k
+   is OBJ tile `$40` + k: a grid of 16 × 6 cells, 16 per VRAM row.
+3. It fills 24 `SprTile` records:
+   - the (x, y) pairs after the words (`LargeObj_LayoutOfs` `$C0`), x
+     sign-extended and y added in 8 bits;
+   - tiles `$40` + 32p + 2q (`LargeObj_TileRow0`–`2`; p = n / 8, q = n % 8), so
+     three rows of eight 16×16 OBJs;
+   - the fixed attribute `$22` (`LargeObj_Attr`: priority 2, palette 1), which
+     `Spr_AppendToOam` copies as it is.
+
+That one frame is all the object ever shows:
+- `Obj_BuildSpriteFrameStep` returns without a builder for size 3;
+- `Spr_PrepareTiles` only re-places it (`Spr_Place24`).
+
+Records 111 and 215 are the same record. Records 111, 147 and 215 are loaded by
+4, 2 and 3 event packs.
+
+`sprites import` writes each as a `ct-enemy` sprite with `rom.layout` 3, and
+the Studio shows it in the Enemy filter. The sprite has:
+- one frame: the 96 cells, with `stream` 16 × 6 at OBJ tile `$40`;
+- 24 OBJs at tiles 32p + 2q, each in palette 1 with priority 2;
+- `palettes` 0 and 1, both the record's colours;
+- no animations;
+- `battle`, as for any record.
+
+The write-back refuses it: "only frame layouts 0–2…". The Validator says the
+same when it is listed. A part that a layout-3 record shares therefore stays
+frozen.
+
+Tile 0 of both graphics is blank. The Studio draws cell word 0 blank, and the
+field copies tile 0, so the two agree.
+
+**Evidence.** The `LARGE_*` claims of `ct_sprites.py check`:
+- ChronoRET's lines and constants;
+- the code bytes at `$C0:46DF`, `$C0:E12A` and `$C0:CAD9`;
+- the records' data.
+
+`check --run` also runs opcode `$83` for each of the three records in ChronoRET's
+interpreter. The `$7F:3800` buffer, the 24 `SprTile` records and the VRAM DMA
+registers equal `decode_large`. `verify-import` checks the CLI import against
+the decode.
 
 ### Evidence
 
@@ -347,8 +460,10 @@ equals the decode. The run does not cover `Battle_InitScene` itself.
 ### Import
 
 `chronoforge sprites import` (and the Studio's **Import Sprites from ROM…**)
-writes `sprites/enemy_NNN.sprite.json` and `.png` for the 252 records of
-layouts 0–2 (`--enemy N` for some only; `--set` alone imports no enemies):
+writes `sprites/enemy_NNN.sprite.json` and `.png` for all 255 records
+(`--enemy N` for some only; `--set` alone imports no enemies). The 252 of
+layouts 0–2 are imported as the battle shows them, and the 3 of layout 3 as the
+field does ([Layout 3](#layout-3-the-fields-large-objects)):
 
 - `rom.family` is `ct-enemy`, `rom.set` the enemy id, `rom.layout` the frame
   layout and `rom.packed` whether the tiles were unpacked.
@@ -402,10 +517,11 @@ count, cells, OBJs at 32p + 2q, palette, animations, sheet tile 0) and then:
    rewritten as `$C0:0000 | pc`.
 
    A relocation is refused if it would change the measured end of any raw tile
-   block: the PC sets 0–6, the graphics of records `$F8` and up, and the
-   graphics of every non-empty NPC record (`$E4:F000` 7–255). A raw block's size
-   is the distance to the next pointer in its bank. The old span is not
-   reclaimed.
+   block: the PC sets 0–6 and the graphics of records `$F8` and up. A raw
+   block's size is the distance to the next pointer in its bank. NPC records'
+   graphics are not raw blocks: opcode `$82` always unpacks them, and the event
+   packs use `$81` (raw tiles) only for records 0–6
+   ([NPC sprites](#npc-sprites)). The old span is not reclaimed.
 
 Cells past the graphics or with bits 11–13 are refused, unless the base ROM's
 cell holds the same word: records 117 and 253 have such cells, and the build
@@ -430,10 +546,11 @@ agrees:
   playable set c" or "differ from sprite X's as built".
 - For any other part, every enemy record naming it (0–254, all-zero records
   included, since each id is an enemy the battle can show) must be listed with
-  identical content, or the build refuses and names the sharers. An NPC record
-  naming it blocks the edit. So do the layout-3 records (111, 147 and 215),
-  which cannot be listed: their parts, such as palette 208, which records 110
-  and 216 also use, stay frozen.
+  identical content, or the build refuses and names the sharers. So must every
+  non-empty NPC record naming it (`$E4:F000` 7–255), listed as a `ct-npc`
+  sprite ([NPC write-back](#npc-write-back)). The layout-3 records (111, 147
+  and 215) cannot be listed: their parts, such as palette 208, which records
+  110 and 216 also use, stay frozen.
 
 A PC write-back still changes the parts `$F8`–`$FE` show. The build does not
 update those enemies' project files. Instead it lists each unlisted enemy
@@ -507,7 +624,7 @@ checked by decoding the built bytes and by the reader ranges above.
 - for an enemy, the battle record's fields: steppers, and toggles for the
   `$04`, `$08`, `$20` and `$80` flags.
 
-The sprite list has an All / PC / Enemy / Other filter. `--select <id>` and
+The sprite list has an All / PC / Enemy / NPC / Other filter. `--select <id>` and
 `--family <name>` choose them at launch.
 
 ### Limitations
@@ -516,13 +633,16 @@ The sprite list has an All / PC / Enemy / Other filter. `--select <id>` and
   animation counts, layout and parts (no re-pointing a record to another pack
   or palette). Packs may grow into free space; frame sets may not.
 - An edit to a shared part needs every sharer listed with the same edit
-  ([Write-back](#write-back)). Parts that NPC records or layout-3 records show
-  cannot change.
+  ([Write-back](#write-back)). NPC records are listed as `ct-npc` sprites
+  ([NPC write-back](#npc-write-back)); parts that layout-3 records show cannot
+  change.
 - An imported enemy sprite is a snapshot of the clean ROM. A PC write-back
   warns about records `$F8`–`$FE` (`spriteWarnings`) but does not update their
   project files.
-- Layout 3 (records 111, 147 and 215) is not imported or written. No slot's DMA
-  and OBJ tables give it an assembly.
+- Layout 3 (records 111, 147 and 215) is imported read-only, as the field shows
+  it: one frame and no animations. The build refuses it, because the battle's
+  DMA and OBJ tables give it no assembly. Its second frame record
+  (the end rule counts 2) is not shown by any code traced.
 - Records 117 and 253 have cells past their graphics. They show as blank in the
   Studio. In the game they read past the pack. Records 26, 27 and 254 have
   animations naming frames past the frame set; the import leaves those
@@ -532,3 +652,181 @@ The sprite list has an All / PC / Enemy / Other filter. `--select <id>` and
 - A relocated pack's old span is not reclaimed.
 - No emulator run: the evidence is the ROM's code, data and its own unpacker and
   frame decoder executed.
+
+## NPC sprites
+
+A field NPC is a sprite record of `RomE4_NpcSprRec` (`$E4:F000`, 5 bytes per
+record, the same table the PCs use from record 0). Event opcode `$82`
+(`Evt_Op82_InitWramSprite`, `$C0:4590`) loads record 7 + n
+(`SprRec_FirstNpc` = 7). `$81` loads records 0–6 with the PC graphics read from
+the ROM, and the event packs use it only for those seven. `$83` loads the
+enemy records ([Enemy sprites](#enemy-sprites)).
+
+| Byte | Field | What `$82` does with it |
+|---|---|---|
+| +0 | graphics: `$E4:2000` pointer index | `Evt_FindOrAddUnk0920` looks the index up among the packs unpacked so far. A new one is unpacked by `Decomp_ToWramVec` (`JSL $C30002`) to `$7F:ObjQ_Unk71` (from `$8000`), and objects with the same index share it |
+| +1 | frame set (`$E4:2300`) | `Obj_FrameOfs` / `Obj_FrameBank` |
+| +2 | palette (`$E4:0000` + 24 × p, 12 colours) | `Obj_PalSrc` |
+| +3 | animation set (`$E4:2600/2800`) | `Obj_AnimFrameTbl`, `Obj_AnimTimeTbl`, and the facing stride `(AnimFrames[a+1] − AnimFrames[a]) / 4` |
+| +4 | size class (bits 0–1) | `Obj_SprSize`: every reader masks it with `AND #3` |
+
+**The field's frame assembly.** Size class 0 is built by `Obj_BuildFrame4`
+(40-byte records: 8 × 2 cell words, then 4 (x, y) pairs). Class 1 is built by
+`Obj_BuildFrame8` (80-byte records: 16 × 2 cells and 8 pairs), in two passes
+(`$C0:D28A` and `$C0:D30D`). The cells go to a `$200`-byte SprBuf chunk
+(`$7F:3800` + `$200` × chunk), and the VRAM queue sends the chunk's two rows to
+tiles T and T + 16, where T is the object's tile slot. OBJ n is a 16×16 at tile
+T + 2n, with the attribute `Obj_OamAttr | VramTileHi | priority`.
+`Obj_TileSlotAllocKind` (`$C0:6FBA`) hands class 0 the first free slot from
+`$19` down, and classes 1–3 an even/odd pair from `$0C`. Slot n is OBJ tile
+`(n & $FE) × 16 + (n & 1) × 8`. On an empty field that is `$188` for class 0
+and `$C0` for class 1. That is where the import streams the cells.
+
+**Palettes.** NPC objects (kinds 3 and 4) take an OBJ palette of 0–4 from
+`Obj_PalSlotAny` (`$C0:721C`). An object whose `Obj_PalSrc` is already in a
+slot shares that slot. The 12 colours go to colours 1–12. The party's objects
+(kinds 0–2) use the fixed palettes 5–7.
+
+**Timing.** `Obj_AnimTickAndQueue` (`$C0:C98A`) counts the timer down once a
+frame. At 0 the column steps on and the new entry's duration becomes the timer.
+A zero duration restarts the row at column 0 with the first entry's duration.
+In mode 2 (counted loops), from 3 up the count drops by 2 and the row restarts.
+At 2 the count drops to 1 and at 1 the last frame holds. `Obj_AnimFrameLookup`
+(`$C0:CB3A`) shows the row's first frame for a `$FF` entry and sets the column
+to `$FF`, so the next step is column 0. A load starts at column 0 with the
+timer at 0, so the first tick already steps on. Animation sets 74 and 76 (NPC
+records only) have facing strides of 5 and 11 entries rather than 4 × rows.
+The import reads every set with the field's stride.
+
+### Evidence
+
+`re_workspace/tools/ct_npc_sprites.py check` holds 40 claims:
+
+- **ChronoRET's source, line by line:** `Evt_Op82_InitWramSprite`,
+  `Evt_InitWramSprite`, `Evt_LoadSpriteRec`, `Obj_TileSlotAllocKind`,
+  `Obj_BuildFrame8Pass0/1`, `Spr_PrepareTiles`, `Obj_PalSlotAny`,
+  `Obj_AnimTickAndQueue` and `Obj_AnimFrameLookup`, plus 11 constants.
+- **The ROM's code bytes:** at `$C0:4590`, `$C0:4476`, `$C0:6FBA`,
+  `$C0:D28A–$D4F6` and `$C0:721C`.
+- **Data claims:**
+  - `$81` loads records 0–6 only.
+  - `$82` loads 191 records (7–238) from 351 event packs (1190 record–pack
+    pairs).
+  - Those records are of size classes 0 and 1 only (183 and 8). Record 213's
+    size byte is 5, and bit 2 has no reader.
+  - Their 139 graphics packs unpack to whole 4bpp tiles, and none is a PC set.
+    Tile 0 is not blank in packs 134, 200 and 223.
+  - Every record has frames, and its cells name tiles of its graphics.
+  - Records 10, 120, 171, 195, 202, 214 and 238 have animations naming frames
+    past the frame set. The import leaves those animations out.
+  - Strides of sets 74 and 76.
+  - Every one of the 191 records is loaded by a location's pack
+    (`LocRom` .Events).
+  - The 58 other nonzero records decode the same way.
+
+A frame set's count follows the PC rule: records up to the next frame block in
+the bank. A bank's last block has no next pointer, so it ends at its first
+record that is not a frame of the graphics. Record 218's set is such a block.
+
+`check --run` runs the field's own routines in ChronoRET's 65816 interpreter
+and compares each with the model (44 claims):
+
+- **Loader:** `$C0:4590` for all 191 records. The object's fields and the
+  graphics unpacked to `$7F:8000` equal the decode.
+- **Frame builders:** `Obj_BuildFrame4` / `Obj_BuildFrame8` on 2497 frames,
+  plus the two-pass build of 8 class-1 animations. The SprBuf chunk, the VRAM
+  queue and the OBJ records equal the model.
+- **Lookup:** `Obj_AnimFrameLookup` at 7061 list steps.
+- **Tick:** `Obj_AnimTickAndQueue` over 764 lists, plain and with counted
+  loops, against the `Clock` model, which `CTNPCSpriteROM.FieldClock` twins
+  (Swift vectors `npc_sprite_vectors.json`, synthetic).
+
+`ct_npc_sprites.py usage` lists each record's packs and locations, and
+`sharing` lists, for each part, the NPC, enemy and PC records that name the
+same graphics, frame set, palette or animation set.
+
+### Import
+
+`chronoforge sprites import <rom> --project <p> --family npc` (or `--npc N` for
+some records; the Studio's **Import Sprites from ROM…** imports them with the
+PCs and enemies) writes `sprites/npc_NNN.sprite.json` and `.png` for the 191
+records:
+
+- `rom.family` is `ct-npc`, `rom.set` the record, `rom.layout` the size class,
+  `rom.packed` true and `rom.packedBytes` the pack's stream length. `rom.stride`
+  is set only where the facing stride is not 4 × rows (sets 74 and 76).
+- `stream` is 8 × 2 at OBJ tile `$188` (class 0) or 16 × 2 at `$C0` (class 1).
+  OBJ n is a 16×16 at tile 2n, palette 0, priority 2.
+- The palette is colour 0, the 12 ROM colours, then three zeros. The sheet holds
+  the pack's tiles, 16 per row.
+- `field` holds the size byte, the event packs (`Evt_PackPtrs` entries) that
+  load the record and the locations whose `LocRom` .Events names one of them.
+- An animation ended by `$FF` keeps that entry's duration as
+  `markerDuration`. No list the event packs load uses one.
+
+`ct_npc_sprites.py verify-import <project>` checks an import against the decode
+(7 checks over the 191 records).
+
+**Studio.** The sprite list's filter has an **NPC** entry (`--family NPC` at
+launch). The header shows the size class and how many packs and locations
+load the record. An NPC sprite's animations play with the field's clock
+(`CTNPCSpriteROM.fieldStep`): the first tick steps on, a `$FF` marker shows
+step 0 again for its duration, and the list repeats. Other sprites keep
+`SpriteEditing.step`.
+
+### NPC write-back
+
+`rom.sprites` accepts `ct-npc` sprites (`CTNPCSpritePatch`). They go through
+the enemy write-back (`CTEnemySpritePatch.applyAll`) in the same pass as the
+`ct-enemy` sprites, so one sharer rule covers both families:
+
+- **Kept as they are:** the record's size and shape. The frame count, the
+  cells per frame (8 × 2 or 16 × 2), the OBJs (16×16 at tile 2n, palette 0)
+  and the stream (at `$188` or `$C0`) stay. So does the animation set's facing
+  stride: a list may not run past its facing's entries. The record itself
+  (`$E4:F000` + 5r) is never written.
+- **Written in place:** frames, animation rows (entry e of facing f at
+  frameIds + f × stride + e, the durations shared) and colours 1–12.
+- **Tiles:** the pack is re-encoded with `LZSS.compress` in its own mode. It
+  goes in place when it fits its old stream, otherwise into confirmed free
+  space with its `$E4:2000` pointer rewritten. Tile 0 must stay as imported:
+  the Studio draws cell word 0 blank, although the field copies tile 0 as it
+  is.
+- **Sharing:** a changed part needs every record that names it listed with
+  the same edit. That means every non-empty NPC record (7–255, including the
+  58 that no pack loads; `--npc N` imports any of them) and every enemy record.
+  A part of a PC set (tiles, frames and animations 0–6, and the palettes the
+  PC records name: NPCs use palettes 0, 1, 3, 5 and 6) needs that set's sprite
+  in `rom.sprites` with the same result. The refusal names the sharers.
+- **Decoded back:** every listed record is decoded from a scratch image of the
+  result before anything is written. Only changes are written, so an unedited
+  import rebuilds the base ROM byte for byte.
+- **Report:** `report.npcSprites`. A PC write-back that changes a part an
+  imported but unlisted NPC sprite shows adds a `spriteWarnings` line naming
+  the record.
+
+`ct_rom_check.py` checks the reported records against the built ROM, through
+its zones (frames, palette, frame-id and duration rows, pack, relocated
+pointer) and its decode. Unreported NPC records must decode as before, unless
+they show a part of a reported PC set.
+
+`macos_studio/tools/verify_npc_sprite_build.py`:
+
+1. Imports every PC, enemy and NPC sprite and checks that the unedited
+   build of all 450 is byte-identical to the clean ROM.
+2. Builds edits together:
+   - record 12 edited in place;
+   - record 23's pack moved to free space;
+   - one pixel painted into the pack that records 14 and 18 share;
+   - one pixel painted into the pack that record 9 shares with enemy 244;
+   - a colour of Ayla's palette, which records 13 and 101 show (two
+     warnings).
+3. Checks the result with `ct_rom_check.py` and decodes it back against
+   the edited project.
+4. Runs `Evt_Op82_InitWramSprite`, the frame builders, the lookup and the
+   tick on the built ROM in ChronoRET's interpreter.
+5. Makes the checker reject 7 damaged copies, and the CLI refuse 15 edits.
+
+The Studio's ROM panel shows an NPC sprite's pack budget and sharers, as for
+an enemy. The Validator applies the `ct-npc` format rules to `rom.sprites`
+entries and warns about unlisted sharers.

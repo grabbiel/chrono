@@ -363,9 +363,10 @@ public enum Validator {
             }
             // Chests and new locations (docs/maps.md, "Chests" and "New locations").
             for (path, msg) in mapChestProblems(p, listed: Set(spec.maps)) { err(4, path, msg) }
-            // Sprites: ids exist, one per set or enemy record, the family's format (the build adds the
-            // base ROM's checks); ct-enemy: the pack budget and the sharers (docs/sprites.md).
+            // Sprites: ids exist, one per set, enemy or NPC record, the family's format (the build adds the
+            // base ROM's checks); ct-enemy and ct-npc: the pack budget and the sharers (docs/sprites.md).
             var spriteSets: [Int: String] = [:], enemyRecords: [Int: String] = [:]
+            var npcRecords: [Int: String] = [:]
             let listedSprites = Set(spec.sprites)
             for id in Set(spec.sprites).sorted() {
                 let path = "project.json rom sprite \(id)"
@@ -393,13 +394,35 @@ public enum Validator {
                     }
                     continue
                 }
+                if s.rom?.family == CTNPCSpritePatch.family {
+                    // ct-npc: as ct-enemy, one sprite per $E4:F000 record (CTNPCSpritePatch).
+                    if let r = s.rom?.set, let other = npcRecords.updateValue(id, forKey: r) {
+                        err(4, file, "NPC record \(r) is also sprites/\(other).sprite.json")
+                    }
+                    let problems = CTNPCSpritePatch.validate(s)
+                    for problem in problems { err(4, file, problem) }
+                    guard problems.isEmpty, let src = s.rom else { continue }
+                    let png = try? PNG.readIndexed(url: p.fileURL(relative: s.sheet))
+                    let sheet = png.map(SpriteSheet.tiles) ?? []
+                    if sheet.count < src.tileCount { err(4, file, "the sheet has \(sheet.count) tiles; the record has \(src.tileCount)") }
+                    let past = s.frames.contains { ($0.cells ?? []).contains { $0 & CTSpriteROM.tileMask >= src.tileCount || $0 & 0x3800 != 0 } }
+                    if past { warn(4, file, "cells past the graphics or with bits 11-13: the build keeps only those the base ROM has") }
+                    if let b = CTEnemySpritePatch.packBudget(s, sheet: sheet), b.packed > b.budget {
+                        warn(4, file, "the tiles pack to \(b.packed) bytes, over the \(b.budget)-byte span: the build moves the pack into free space")
+                    }
+                    for sharer in CTEnemySpritePatch.sharers(of: s, in: p.sprites) where !listedSprites.contains(sharer.id) {
+                        warn(4, file, "shares its \(sharer.parts.joined(separator: ", ")) with sprites/\(sharer.id): an edit to a shared " +
+                             "part needs that sprite listed with the same edit")
+                    }
+                    continue
+                }
                 if let set = s.rom?.set, s.rom?.family == CTSpritePatch.family, let other = spriteSets.updateValue(id, forKey: set) {
                     err(4, file, "set \(set) is also sprites/\(other).sprite.json")
                 }
                 for problem in CTSpritePatch.validate(s) { err(4, file, problem) }
                 if s.rom?.family == CTSpritePatch.family {
                     for sharer in CTEnemySpritePatch.sharers(of: s, in: p.sprites)
-                        where p.sprites[sharer.id]?.rom?.family == CTEnemySpritePatch.family && !listedSprites.contains(sharer.id) {
+                        where !listedSprites.contains(sharer.id) && Validator.showsPCParts(p.sprites[sharer.id]) {
                         warn(4, file, "sprites/\(sharer.id) shows its \(sharer.parts.joined(separator: ", ")): a write-back that changes " +
                              "them leaves that file stale (list it too, or re-import it)")
                     }
@@ -514,6 +537,12 @@ public enum Validator {
 
     public static func isValid(_ issues: [ValidationIssue]) -> Bool {
         !issues.contains { $0.severity == .error }
+    }
+
+    /// Whether a sprite another family's write-back can leave stale: an enemy's or an NPC's.
+    static func showsPCParts(_ s: SpriteDef?) -> Bool {
+        let family = s?.rom?.family
+        return family == CTEnemySpritePatch.family || family == CTNPCSpritePatch.family
     }
 }
 

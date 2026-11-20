@@ -24,6 +24,7 @@ struct SpriteEditor: View {
     @State private var selectedOBJ: Int?
     @State private var snap = false
     @State private var onion = false
+    @State private var battleColours = CommandLine.arguments.contains("--battle-palette")   // e.g. --select crono --battle-palette
     @State private var animationID: String?
     @State private var stepIndex = 0
     @State private var playStart: Date?
@@ -31,7 +32,11 @@ struct SpriteEditor: View {
     @State private var colour = 1
     @State private var selectedCell: Int?
 
-    private var options: SpriteScene.Options { SpriteScene.Options() }
+    private var options: SpriteScene.Options {
+        var o = SpriteScene.Options()
+        if battleColours { o.battle = SpriteScene.battleView(sprite) }
+        return o
+    }
     private var sheetPalette: [BGR555] { sheet?.palette ?? [] }
     private var palette: [UInt16] { SpriteScene.palettes(sprite, sheetPalette: sheetPalette)[0] }
     private var animation: SpriteDef.Animation? { sprite.animations.first { $0.id == animationID } }
@@ -74,6 +79,10 @@ struct SpriteEditor: View {
                     in: 0...max(0, sprite.frames.count - 1))
                 .disabled(playStart != nil)
             Toggle("Onion skin", isOn: $onion)
+            if sprite.pcBattle != nil {
+                Toggle("Battle palette", isOn: $battleColours)
+                    .help("Draw as the battle does: OBJ palette 5 with the new-game weapon's colours at 13-15")
+            }
             Picker("", selection: $mode) {
                 ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -86,6 +95,13 @@ struct SpriteEditor: View {
         var parts = ["\(sprite.frames.count) frames", "\(sprite.animations.count) animations", sprite.sheet]
         if let st = sprite.stream { parts.append("streams \(st.columns)x\(st.rows) cells at OBJ tile \(st.baseTile)") }
         if let r = sprite.rom { parts.append("set \(r.set) from \(r.frames)") }
+        if let f = sprite.field {
+            parts.append("field size \(f.size & 3), loaded by \(f.packs.count) event packs at \(f.locations.count) locations")
+        }
+        if let b = sprite.pcBattle {
+            let palettes: String = b.partyPalettes.map { (n: Int) -> String in String(n) }.joined(separator: "/")
+            parts.append("battle palettes \(palettes), weapon \(b.weapon) colours 13-15 from record \(b.weaponColourRecord)")
+        }
         if sheetDirty { parts.append("sheet modified") }
         return parts.joined(separator: " · ")
     }
@@ -97,8 +113,14 @@ struct SpriteEditor: View {
     /// rom.sprites, the pack budget, the sharers and (enemies) the record's battle fields.
     private var romPanel: some View {
         VStack(alignment: .leading, spacing: 4) {
+            let fieldOnly = sprite.rom?.family == CTEnemySpriteROM.family && sprite.rom?.layout == CTEnemySpriteROM.large
             Toggle("Write to the ROM (rom.sprites)", isOn: Binding(get: { listed },
                                                                    set: { _ = store.setROMSprite(sprite.id, listed: $0) }))
+                .disabled(fieldOnly && !listed)
+            if fieldOnly {
+                Text("layout 3: the field's view (Spr_LoadLargeObj), read-only; the battle has no assembly to write")
+                    .foregroundStyle(.secondary)
+            }
             if let b = CTEnemySpritePatch.packBudget(sprite, sheet: sheetTiles) {
                 Text(b.packed <= b.budget ? "pack \(b.packed) of \(b.budget) bytes: written in place"
                                           : "pack \(b.packed) bytes, over its \(b.budget)-byte span: moved into free space")
@@ -179,7 +201,7 @@ struct SpriteEditor: View {
         }
         let step: Int
         if let start = playStart {
-            step = SpriteEditing.step(a, at: Int(date.timeIntervalSince(start) * 60))
+            step = CTNPCSpriteROM.playStep(sprite, a, at: Int(date.timeIntervalSince(start) * 60))
         } else if mode == .timeline {
             step = min(stepIndex, a.frames.count - 1)
         } else {
@@ -488,7 +510,7 @@ struct SpriteEditor: View {
         HStack {
             Button(playStart == nil ? "Play" : "Pause") {
                 if let start = playStart {
-                    stepIndex = SpriteEditing.step(a, at: Int(Date().timeIntervalSince(start) * 60))
+                    stepIndex = CTNPCSpriteROM.playStep(sprite, a, at: Int(Date().timeIntervalSince(start) * 60))
                     playStart = nil
                 } else {
                     playStart = Date()
@@ -525,6 +547,11 @@ struct SpriteEditor: View {
         var text = "\(a.frames.count) steps, \(total) ticks (\(String(format: "%.2f", Double(total) / 60)) s at 60 Hz)"
         if let row = a.row { text += " · row \(row)" }
         if let f = a.facing, (0..<4).contains(f) { text += " · facing \(CTSpriteROM.facings[f])" }
+        if sprite.rom?.family == CTNPCSpriteROM.family {
+            // Obj_AnimTickAndQueue: the first tick steps on; the $FF marker shows step 0 again for its duration.
+            let marker = a.markerDuration ?? 0
+            text += marker > 0 ? " · field clock, $FF marker \(marker) ticks" : " · field clock"
+        }
         return text
     }
 

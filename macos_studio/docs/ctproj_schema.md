@@ -93,7 +93,10 @@ omitted when empty.
 `ct-pc` (written in place, [sprites](sprites.md#writing-back)) or `ct-enemy`
 (frames, animations, palette, record fields and tiles; a pack that outgrows its
 span moves to free space; an edited shared part needs every sharer listed,
-[enemy write-back](sprites.md#write-back)). The list is omitted when empty.
+[enemy write-back](sprites.md#write-back)) or `ct-npc` (frames, animations,
+palette and tiles, as for an enemy, with the record itself kept; NPC and enemy
+records share one sharer rule, [NPC write-back](sprites.md#npc-write-back)).
+The list is omitted when empty.
 `samples` lists `audio/samples/<id>.brr` files to write into the sample tables
 ([SFX Lab](sfx_lab.md#a-project-sample-in-the-game-romsamples)). Each entry has:
 
@@ -187,16 +190,37 @@ original fields; files with only those still load and save unchanged.
   frames.
 - `hitbox` and `weapon` are Studio fields about the origin; they are not
   written to the ROM.
+- `pcBattle` (`ct-pc`, read-only) is what the battle adds to the set in code:
+  - `partyPalettes`: the OBJ palettes of party members 0–2;
+  - `weapon`: the new-game character record's weapon;
+  - `weaponColourRecord`;
+  - `weaponColours`: 3 hex BGR555, for colours 13–15;
+  - the box every PC gets: `screenOffsetX`, `screenOffsetY` (signed),
+    `halfWidth` and `height`.
+
+  It is optional, and the write-back ignores it
+  ([Battle palettes](sprites.md#battle-palettes-and-weapons)).
 - `rom` records where the import read the set (see [Sprites](sprites.md)).
   An enemy's battle sprite (`sprites/enemy_NNN.*`) has `rom.family` `ct-enemy`,
   `rom.set` the enemy id, `rom.layout` its frame layout (0–2) and `rom.packed`
   (tiles unpacked from a pack); its `stream` is 8 × 2, 16 × 2 or 8 × 6 at
-  baseTile 64. `rom.packedBytes` is a packed record's stream length (its
+  baseTile 64. A layout-3 record (`rom.layout` 3) is the field's view and is
+  read-only: one frame of 16 × 6 cells at baseTile 64, with OBJs in palette 1.
+  Listing it in `rom.sprites` is refused. `rom.packedBytes` is a packed record's stream length (its
   in-place budget). `battle` holds the record's fields: `flags` (byte +4,
   bits 2–7), `screenOffsetX`, `screenOffsetY`, `halfWidth`, `height` (0–255),
   `moveSpeed` (0–7) and `moveDelay` (0–15); absent, the record is kept. Both
   are optional, and older files load unchanged.
   ([Enemy sprites](sprites.md#enemy-sprites)).
+- A field NPC's sprite (`sprites/npc_NNN.*`) has `rom.family` `ct-npc`,
+  `rom.set` the sprite record (7–255), `rom.layout` the size class (0 or 1),
+  `rom.packed` true and `rom.packedBytes`; its `stream` is 8 × 2 at baseTile
+  392 or 16 × 2 at 192. `rom.stride` is the facing stride in frame ids where
+  it is not 4 × `rows`. `field` holds `size` (the record's size byte), `packs`
+  (the `Evt_PackPtrs` entries that load it with opcode `$82`) and `locations`
+  (the locations whose events are one of those packs). An animation's
+  `markerDuration` is the duration of a `$FF` entry that ends it. All three are
+  optional ([NPC sprites](sprites.md#npc-sprites)).
 
 ## `tilesets/<id>.tileset.json`
 ```json
@@ -444,11 +468,11 @@ written by the SFX Lab for preview; it can be regenerated. See
    record twice, in the game's ranges (equipment with `party.json`); `rom.techs`
    needs `tech_system.json` in the game's ranges (read-only fields are checked
    against the base ROM by `rom build`); `rom.sprites` rows name sprite files of
-   family `ct-pc` or `ct-enemy`, one per set or record, in the format the set can
-   carry (the build adds the base ROM's addresses, counts, sharers and the
-   re-decode). Warnings cover an enemy pack over its in-place budget, unlisted
-   project sprites sharing an enemy's parts, and enemy sprites showing a listed
-   PC set's parts.
+   family `ct-pc`, `ct-enemy` or `ct-npc`, one per set or record, in the format
+   the set can carry (the build adds the base ROM's addresses, counts, sharers and
+   the re-decode). Warnings cover an enemy or NPC pack over its in-place budget,
+   unlisted project sprites sharing an enemy's or NPC's parts, and enemy or NPC
+   sprites showing a listed PC set's parts.
 5. With a ROM text profile, every string compiles to a terminated CT message whose
    decode re-encodes byte-exactly; otherwise the placeholder codec round-trip (warning).
 6. BRR encode → decode ≈ source WAV within SNES BRR error envelope; loop points

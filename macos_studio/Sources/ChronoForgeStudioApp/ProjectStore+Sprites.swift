@@ -3,18 +3,20 @@ import Foundation
 import ChronoForgeCore
 
 extension ProjectStore {
-    /// The ROM's seven playable-character sprite sets and the enemies'
-    /// battle sprites into the project (CTSpriteROM / CTEnemySpriteROM
-    /// importSprites): sheets now, sprite JSON on save.
+    /// The ROM's seven playable-character sprite sets, the enemies' battle
+    /// sprites and the field NPCs the event packs load into the project
+    /// (CTSpriteROM / CTEnemySpriteROM / CTNPCSpriteROM importSprites):
+    /// sheets now, sprite JSON on save.
     public func importSprites(_ url: URL) {
         guard var candidate = project else { return }
         do {
             let rom = [UInt8](try Data(contentsOf: url))
             let ids = try CTSpriteROM.importSprites(rom: rom, into: &candidate)
             let foes = try CTEnemySpriteROM.importSprites(rom: rom, into: &candidate)
+            let npcs = try CTNPCSpriteROM.importSprites(rom: rom, into: &candidate)
             try candidate.save()
             project = candidate
-            statusMessage = "imported \(ids.count) character and \(foes.ids.count) enemy sprites from the ROM"
+            statusMessage = "imported \(ids.count) character, \(foes.ids.count) enemy and \(npcs.count) NPC sprites from the ROM"
             statusIsError = false
         } catch {
             statusMessage = "sprite import failed: \(error)"

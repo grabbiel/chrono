@@ -314,6 +314,10 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
     public var rom: ROMSource?
     /// ct-enemy: the record's battle fields ($E4:F600 +4 to +9; absent: not written).
     public var battle: Battle? = nil
+    /// ct-npc: the record's size byte and the event packs and locations that load it (read-only).
+    public var field: Field? = nil
+    /// ct-pc: what the battle adds to the set in code (read-only; docs/sprites.md, "Battle palettes and weapons").
+    public var pcBattle: PCBattle? = nil
 
     public init(id: String, sheet: String, bpp: Int = 4, frames: [Frame] = [], animations: [Animation] = [],
                 palettes: [[String]]? = nil, stream: Stream? = nil, rom: ROMSource? = nil) {
@@ -360,11 +364,15 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         public var loop: Bool
         public var row: Int?           // the game's animation row
         public var facing: Int?        // 0 up, 1 down, 2 left, 3 right
+        /// The list ends with the field's $FF marker, whose entry has this
+        /// duration: the field shows the first frame that long again before
+        /// the restart (absent: a zero duration ends it). Read-only.
+        public var markerDuration: Int? = nil
 
         public init(id: String, frames: [Int] = [], durations: [Int] = [], loop: Bool = true,
-                    row: Int? = nil, facing: Int? = nil) {
+                    row: Int? = nil, facing: Int? = nil, markerDuration: Int? = nil) {
             self.id = id; self.frames = frames; self.durations = durations; self.loop = loop
-            self.row = row; self.facing = facing
+            self.row = row; self.facing = facing; self.markerDuration = markerDuration
         }
     }
     /// A VRAM slot the frame's cells are copied into: cell (r, c) becomes
@@ -378,8 +386,8 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         }
     }
     public struct ROMSource: Codable, Equatable, Sendable {
-        public var family: String      // "ct-pc": a playable character's set; "ct-enemy": an enemy record
-        public var set: Int            // the set (ct-pc) or the enemy record (ct-enemy)
+        public var family: String      // "ct-pc": a playable character's set; "ct-enemy": an enemy record; "ct-npc": a $E4:F000 record 7-255
+        public var set: Int            // the set (ct-pc), the enemy record (ct-enemy) or the sprite record (ct-npc)
         public var tiles: String       // "$D2:72C0"
         public var tileCount: Int
         public var frames: String
@@ -388,9 +396,36 @@ public struct SpriteDef: Codable, Equatable, Sendable, Identifiable {
         public var frameIds: String
         public var durations: String
         public var rows: Int
-        public var layout: Int? = nil  // ct-enemy: the frame layout (size class 0-2; absent = 0)
-        public var packed: Bool? = nil // ct-enemy: the graphics are unpacked from `tiles` (absent = raw)
-        public var packedBytes: Int? = nil // ct-enemy, packed: the pack's size in the base ROM (its in-place budget)
+        public var layout: Int? = nil  // ct-enemy, ct-npc: the frame layout (size class 0-2; absent = 0)
+        public var packed: Bool? = nil // ct-enemy, ct-npc: the graphics are unpacked from `tiles` (absent = raw)
+        public var packedBytes: Int? = nil // packed: the pack's size in the base ROM (its in-place budget)
+        public var stride: Int? = nil  // ct-npc: frame ids per facing (absent: 4 x rows; sets 74 and 76 differ)
+    }
+    /// An NPC record's field data (docs/sprites.md, "NPC sprites").
+    public struct Field: Codable, Equatable, Sendable {
+        public var size: Int           // $E4:F000 +4: bits 0-1 the size class (the field reads only those)
+        public var packs: [Int]        // Evt_PackPtrs entries whose scripts load it (opcode $82)
+        public var locations: [Int]    // locations whose LocRom .Events is one of those packs
+        public init(size: Int, packs: [Int], locations: [Int]) {
+            self.size = size; self.packs = packs; self.locations = locations
+        }
+    }
+    /// A playable character's battle palette and box, set by Battle_InitScene's code.
+    public struct PCBattle: Codable, Equatable, Sendable {
+        public var partyPalettes: [Int]     // OBJ palettes of party members 0-2 (field and battle)
+        public var weapon: Int              // the new-game character record's weapon (+$29)
+        public var weaponColourRecord: Int  // BattleRom_WeaponColourIdx[weapon]
+        public var weaponColours: [String]  // its 3 hex BGR555 colours, put at colours 13-15
+        public var screenOffsetX: Int       // the box every PC gets: offsets, half width, height
+        public var screenOffsetY: Int
+        public var halfWidth: Int
+        public var height: Int
+        public init(partyPalettes: [Int], weapon: Int, weaponColourRecord: Int, weaponColours: [String],
+                    screenOffsetX: Int, screenOffsetY: Int, halfWidth: Int, height: Int) {
+            self.partyPalettes = partyPalettes; self.weapon = weapon; self.weaponColourRecord = weaponColourRecord
+            self.weaponColours = weaponColours; self.screenOffsetX = screenOffsetX; self.screenOffsetY = screenOffsetY
+            self.halfWidth = halfWidth; self.height = height
+        }
     }
     /// An enemy record's battle fields, as Battle_InitScene reads them
     /// (docs/sprites.md, "Enemy write-back").
